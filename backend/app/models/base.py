@@ -7,12 +7,16 @@ Modèle de base contenant les champs communs à toutes les tables :
 - updated_at : Date de dernière modification
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, DateTime
 from sqlalchemy.ext.declarative import declared_attr
 
 from app.core.database import Base
 
+
+def utc_now():
+    """Retourne un datetime UTC timezone-aware."""
+    return datetime.now(timezone.utc)
 
 class BaseModel(Base):
     """
@@ -34,16 +38,16 @@ class BaseModel(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
 
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
         comment="Date de création de l'enregistrement"
     )
 
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
         comment="Date de dernière modification"
     )

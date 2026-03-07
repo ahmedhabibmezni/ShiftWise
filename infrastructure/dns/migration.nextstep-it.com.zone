@@ -1,0 +1,38 @@
+# /var/named/migration.nextstep-it.com.zone
+$TTL 1D
+@       IN SOA  bastion.migration.nextstep-it.com. admin.migration.nextstep-it.com. (
+                    2026020503  ; Serial (INCRÉMENTÉ)
+                    1D          ; Refresh
+                    1H          ; Retry
+                    1W          ; Expire
+                    3H )        ; Minimum TTL
+
+        IN NS   bastion.migration.nextstep-it.com.
+
+; Bastion
+bastion         IN A    10.9.21.150
+
+; Bootstrap Node (temporaire)
+bootstrap       IN A    10.9.21.156
+
+; Control Plane Nodes (3-node compact)
+node01          IN A    10.9.21.151
+node02          IN A    10.9.21.152
+node03          IN A    10.9.21.153
+
+; etcd cluster (pour les control planes)
+etcd-0          IN A    10.9.21.151
+etcd-1          IN A    10.9.21.152
+etcd-2          IN A    10.9.21.153
+
+; SRV records pour etcd discovery
+_etcd-server-ssl._tcp    IN SRV  0 10 2380 etcd-0.migration.nextstep-it.com.
+_etcd-server-ssl._tcp    IN SRV  0 10 2380 etcd-1.migration.nextstep-it.com.
+_etcd-server-ssl._tcp    IN SRV  0 10 2380 etcd-2.migration.nextstep-it.com.
+
+; OpenShift API (Load Balanced par HAProxy sur bastion)
+api             IN A    10.9.21.150
+api-int         IN A    10.9.21.150
+
+; OpenShift Ingress - Wildcard pour les applications
+*.apps          IN A    10.9.21.150

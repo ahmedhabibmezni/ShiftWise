@@ -12,7 +12,7 @@ Inclut :
 
 from typing import Optional, List, Dict
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, validator, field_validator
 import re
 
 from app.schemas.role import RoleRead
@@ -65,7 +65,7 @@ class UserBase(BaseModel):
         description="Indique si le compte est actif"
     )
 
-    @validator('username')
+    @field_validator('username')
     def validate_username(cls, v: str) -> str:
         """
         Valide le nom d'utilisateur.
@@ -81,7 +81,7 @@ class UserBase(BaseModel):
             )
         return v.lower()
 
-    @validator('tenant_id')
+    @field_validator('tenant_id')
     def validate_tenant_id(cls, v: str) -> str:
         """Valide le tenant_id (format slug)"""
         if not re.match(r'^[a-z0-9-]+$', v.lower()):
@@ -113,7 +113,7 @@ class UserCreate(UserBase):
         example=[1, 2]
     )
 
-    @validator('password')
+    @field_validator('password')
     def validate_password(cls, v: str) -> str:
         """
         Valide la robustesse du mot de passe.
@@ -191,7 +191,7 @@ class UserUpdate(BaseModel):
         description="Mise à jour des rôles"
     )
 
-    @validator('username')
+    @field_validator('username')
     def validate_username(cls, v: Optional[str]) -> Optional[str]:
         """Valide le username si fourni"""
         if v is not None:
@@ -200,7 +200,7 @@ class UserUpdate(BaseModel):
             return v.lower()
         return v
 
-    @validator('password')
+    @field_validator('password')
     def validate_password(cls, v: Optional[str]) -> Optional[str]:
         """Valide le mot de passe si fourni"""
         if v is not None:
@@ -245,8 +245,8 @@ class UserRead(BaseModel):
     id: int
     email: EmailStr
     username: str
-    first_name: Optional[str]
-    last_name: Optional[str]
+    first_name: Optional[str]= None
+    last_name: Optional[str]= None
     full_name: str  # Calculé automatiquement par le modèle
     tenant_id: str
     is_active: bool

@@ -11,7 +11,7 @@ Routes pour la gestion CRUD des rôles :
 Les rôles système (super_admin, admin, user, viewer) ne peuvent pas être modifiés.
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
@@ -33,12 +33,15 @@ from app.models.user import User
 
 router = APIRouter()
 
+# S1192 — Constante pour éviter la duplication du littéral
+ROLE_NOT_FOUND = "Rôle non trouvé"
+
 
 @router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
 def create_role(
         role_data: RoleCreate,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "create"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "create"))]
 ):
     """
     Crée un nouveau rôle personnalisé.
@@ -84,12 +87,12 @@ def create_role(
 
 @router.get("", response_model=list[RoleRead])
 def list_roles(
-        skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
-        limit: int = Query(100, ge=1, le=1000, description="Nombre d'éléments à retourner"),
-        is_active: Optional[bool] = Query(None, description="Filtrer par statut actif"),
-        search: Optional[str] = Query(None, description="Rechercher dans nom et description"),
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "read"))
+        skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à sauter")] = 0,
+        limit: Annotated[int, Query(ge=1, le=1000, description="Nombre d'éléments à retourner")] = 100,
+        is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
+        search: Annotated[Optional[str], Query(description="Rechercher dans nom et description")] = None,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))] = None
 ):
     """
     Liste tous les rôles avec pagination et filtres.
@@ -138,10 +141,10 @@ def list_roles(
 
 @router.get("/count")
 def count_roles(
-        is_active: Optional[bool] = Query(None, description="Filtrer par statut actif"),
-        search: Optional[str] = Query(None, description="Rechercher"),
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "read"))
+        is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
+        search: Annotated[Optional[str], Query(description="Rechercher")] = None,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))] = None
 ):
     """
     Compte le nombre total de rôles.
@@ -179,8 +182,8 @@ def count_roles(
 @router.get("/{role_id}", response_model=RoleWithUsers)
 def get_role(
         role_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "read"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
 ):
     """
     Récupère un rôle par son ID avec le nombre d'utilisateurs.
@@ -212,7 +215,7 @@ def get_role(
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Rôle non trouvé"
+            detail=ROLE_NOT_FOUND
         )
 
     # Compter les utilisateurs
@@ -229,8 +232,8 @@ def get_role(
 def update_role(
         role_id: int,
         role_update: RoleUpdate,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "update"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "update"))]
 ):
     """
     Met à jour un rôle personnalisé.
@@ -268,7 +271,7 @@ def update_role(
     if not updated_role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Rôle non trouvé"
+            detail=ROLE_NOT_FOUND
         )
 
     return updated_role
@@ -277,8 +280,8 @@ def update_role(
 @router.delete("/{role_id}", response_model=MessageResponse)
 def delete_role(
         role_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "delete"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "delete"))]
 ):
     """
     Supprime un rôle personnalisé.
@@ -307,7 +310,7 @@ def delete_role(
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Rôle non trouvé"
+            detail=ROLE_NOT_FOUND
         )
 
     try:
@@ -316,7 +319,7 @@ def delete_role(
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Rôle non trouvé"
+                detail=ROLE_NOT_FOUND
             )
 
         return MessageResponse(
@@ -334,8 +337,8 @@ def delete_role(
 @router.get("/{role_id}/users/count")
 def get_role_user_count(
         role_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "read"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
 ):
     """
     Compte le nombre d'utilisateurs ayant un rôle donné.
@@ -361,7 +364,7 @@ def get_role_user_count(
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Rôle non trouvé"
+            detail=ROLE_NOT_FOUND
         )
 
     count = crud_role.get_role_users_count(db, role_id)
@@ -376,8 +379,8 @@ def get_role_user_count(
 @router.get("/name/{role_name}", response_model=RoleRead)
 def get_role_by_name(
         role_name: str,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("roles", "read"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
 ):
     """
     Récupère un rôle par son nom.
@@ -402,8 +405,8 @@ def get_role_by_name(
 
 @router.post("/init-system-roles", response_model=MessageResponse)
 def initialize_system_roles(
-        db: Session = Depends(get_db),
-        current_user: User = Depends(get_current_superuser)
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(get_current_superuser)]
 ):
     """
     Initialise les rôles système prédéfinis.
@@ -443,7 +446,7 @@ def initialize_system_roles(
 
 @router.get("/permissions/resources")
 def list_available_resources(
-        current_user: User = Depends(check_permission("roles", "read"))
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
 ):
     """
     Liste les ressources disponibles pour les permissions.

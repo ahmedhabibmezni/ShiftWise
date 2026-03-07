@@ -11,7 +11,7 @@ Les schémas définissent :
 
 from typing import Optional, Dict, List
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RoleBase(BaseModel):
@@ -49,7 +49,7 @@ class RoleBase(BaseModel):
         description="Indique si le rôle est actif"
     )
 
-    @validator('name')
+    @field_validator('name')
     def validate_name(cls, v: str) -> str:
         """
         Valide le nom du rôle.
@@ -61,7 +61,7 @@ class RoleBase(BaseModel):
             raise ValueError("Le nom du rôle ne peut contenir que des lettres, chiffres et underscores")
         return v.lower()
 
-    @validator('permissions')
+    @field_validator('permissions')
     def validate_permissions(cls, v: Dict[str, List[str]]) -> Dict[str, List[str]]:
         """
         Valide la structure des permissions.
@@ -123,7 +123,7 @@ class RoleUpdate(BaseModel):
         description="Statut actif/inactif"
     )
 
-    @validator('name')
+    @field_validator('name')
     def validate_name(cls, v: Optional[str]) -> Optional[str]:
         """Valide le nom si fourni"""
         if v is not None:

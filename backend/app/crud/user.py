@@ -242,6 +242,34 @@ def create_user(db: Session, user: UserCreate) -> User:
     return db_user
 
 
+def _handle_email_update(db: Session, db_user: User, update_data: dict) -> None:
+    """Gère la mise à jour de l'email avec vérification d'unicité."""
+    new_email = update_data["email"].lower()
+    if new_email != db_user.email:
+        if get_user_by_email(db, new_email):
+            raise ValueError(f"L'email '{new_email}' est déjà utilisé")
+        update_data["email"] = new_email
+
+
+def _handle_username_update(db: Session, db_user: User, update_data: dict) -> None:
+    """Gère la mise à jour de 'username' avec vérification d'unicité."""
+    new_username = update_data["username"].lower()
+    if new_username != db_user.username:
+        if get_user_by_username(db, new_username):
+            raise ValueError(f"Le nom d'utilisateur '{new_username}' est déjà utilisé")
+        update_data["username"] = new_username
+
+
+def _handle_roles_update(db: Session, db_user: User, update_data: dict) -> None:
+    """Gère la mise à jour des rôles avec vérification d'existence."""
+    role_ids = update_data.pop("role_ids")
+    roles = db.query(Role).filter(Role.id.in_(role_ids)).all()
+    if len(roles) != len(role_ids):
+        missing_ids = set(role_ids) - {r.id for r in roles}
+        raise ValueError(f"Rôles introuvables : {missing_ids}")
+    db_user.roles = roles
+
+
 def update_user(
         db: Session,
         user_id: int,
@@ -249,72 +277,42 @@ def update_user(
 ) -> Optional[User]:
     """
     Met à jour un utilisateur existant.
-
     Args:
         db: Session de base de données
         user_id: ID de l'utilisateur à mettre à jour
         user_update: Données à mettre à jour (UserUpdate schema)
-
     Returns:
         User mis à jour si trouvé, None sinon
-
     Raises:
         ValueError: Si le nouvel email/username existe déjà
         ValueError: Si un role_id n'existe pas
-
     Example:
         >>> update_data = UserUpdate(first_name="Ahmed Habib")
         >>> updated_user = update_user(db, 1, update_data)
     """
     db_user = get_user(db, user_id)
-
     if not db_user:
         return None
 
-    # Extraire les données à mettre à jour
     update_data = user_update.model_dump(exclude_unset=True)
 
-    # Gérer le changement d'email
     if "email" in update_data:
-        new_email = update_data["email"].lower()
-        if new_email != db_user.email:
-            existing = get_user_by_email(db, new_email)
-            if existing:
-                raise ValueError(f"L'email '{new_email}' est déjà utilisé")
-            update_data["email"] = new_email
+        _handle_email_update(db, db_user, update_data)
 
-    # Gérer le changement de username
     if "username" in update_data:
-        new_username = update_data["username"].lower()
-        if new_username != db_user.username:
-            existing = get_user_by_username(db, new_username)
-            if existing:
-                raise ValueError(f"Le nom d'utilisateur '{new_username}' est déjà utilisé")
-            update_data["username"] = new_username
+        _handle_username_update(db, db_user, update_data)
 
-    # Gérer le changement de mot de passe
     if "password" in update_data:
         update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
 
-    # Gérer le changement de rôles
     if "role_ids" in update_data:
-        role_ids = update_data.pop("role_ids")
-        roles = db.query(Role).filter(Role.id.in_(role_ids)).all()
+        _handle_roles_update(db, db_user, update_data)
 
-        if len(roles) != len(role_ids):
-            found_ids = {r.id for r in roles}
-            missing_ids = set(role_ids) - found_ids
-            raise ValueError(f"Rôles introuvables : {missing_ids}")
-
-        db_user.roles = roles
-
-    # Appliquer les autres mises à jour
     for field, value in update_data.items():
         setattr(db_user, field, value)
 
     db.commit()
     db.refresh(db_user)
-
     return db_user
 
 

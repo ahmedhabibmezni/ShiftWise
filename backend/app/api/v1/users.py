@@ -11,7 +11,9 @@ Routes pour la gestion CRUD des utilisateurs :
 Toutes les routes respectent le RBAC et le multi-tenancy.
 """
 
-from typing import Optional
+import math
+from typing import Annotated, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
@@ -33,16 +35,19 @@ from app.api.deps import (
     get_current_user_tenant
 )
 from app.models.user import User
-import math
 
 router = APIRouter()
+
+# S1192 — Constantes pour éviter la duplication de littéraux
+USER_NOT_FOUND = "Utilisateur non trouvé"
+USER_ACCESS_DENIED = "Accès non autorisé à cet utilisateur"
 
 
 @router.post("", response_model=UserReadWithRoles, status_code=status.HTTP_201_CREATED)
 def create_user(
         user_data: UserCreate,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "create"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "create"))]
 ):
     """
     Crée un nouvel utilisateur.
@@ -95,14 +100,14 @@ def create_user(
 
 @router.get("", response_model=UserList)
 def list_users(
-        skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
-        limit: int = Query(100, ge=1, le=1000, description="Nombre d'éléments à retourner"),
-        search: Optional[str] = Query(None, description="Rechercher dans email, username, nom"),
-        is_active: Optional[bool] = Query(None, description="Filtrer par statut actif"),
-        is_superuser: Optional[bool] = Query(None, description="Filtrer par superuser"),
-        tenant_id: Optional[str] = Query(None, description="Filtrer par tenant (superuser uniquement)"),
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "read"))
+        skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à sauter")] = 0,
+        limit: Annotated[int, Query(ge=1, le=1000, description="Nombre d'éléments à retourner")] = 100,
+        search: Annotated[Optional[str], Query(description="Rechercher dans email, username, nom")] = None,
+        is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
+        is_superuser: Annotated[Optional[bool], Query(description="Filtrer par superuser")] = None,
+        tenant_id: Annotated[Optional[str], Query(description="Filtrer par tenant (superuser uniquement)")] = None,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("users", "read"))] = None
 ):
     """
     Liste les utilisateurs avec pagination et filtres.
@@ -180,8 +185,8 @@ def list_users(
 @router.get("/{user_id}", response_model=UserReadWithRoles)
 def get_user(
         user_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "read"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "read"))]
 ):
     """
     Récupère un utilisateur par son ID.
@@ -202,7 +207,7 @@ def get_user(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            detail=USER_NOT_FOUND
         )
 
     # Vérification multi-tenancy
@@ -210,7 +215,7 @@ def get_user(
         if user.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à cet utilisateur"
+                detail=USER_ACCESS_DENIED
             )
 
     return user
@@ -220,8 +225,8 @@ def get_user(
 def update_user(
         user_id: int,
         user_update: UserUpdate,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "update"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "update"))]
 ):
     """
     Met à jour un utilisateur.
@@ -253,7 +258,7 @@ def update_user(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            detail=USER_NOT_FOUND
         )
 
     # Vérification multi-tenancy
@@ -263,7 +268,7 @@ def update_user(
         if user.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à cet utilisateur"
+                detail=USER_ACCESS_DENIED
             )
 
     # Mettre à jour
@@ -281,8 +286,8 @@ def update_user(
 @router.delete("/{user_id}", response_model=MessageResponse)
 def delete_user(
         user_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "delete"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "delete"))]
 ):
     """
     Supprime un utilisateur.
@@ -313,7 +318,7 @@ def delete_user(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            detail=USER_NOT_FOUND
         )
 
     # Vérification multi-tenancy
@@ -321,7 +326,7 @@ def delete_user(
         if user.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à cet utilisateur"
+                detail=USER_ACCESS_DENIED
             )
 
     # Supprimer
@@ -337,8 +342,8 @@ def delete_user(
 def add_role_to_user(
         user_id: int,
         role_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "update"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "update"))]
 ):
     """
     Ajoute un rôle à un utilisateur.
@@ -359,7 +364,7 @@ def add_role_to_user(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            detail=USER_NOT_FOUND
         )
 
     # Vérification multi-tenancy
@@ -367,7 +372,7 @@ def add_role_to_user(
         if user.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à cet utilisateur"
+                detail=USER_ACCESS_DENIED
             )
 
     # Vérifier que le rôle existe
@@ -388,8 +393,8 @@ def add_role_to_user(
 def remove_role_from_user(
         user_id: int,
         role_id: int,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "update"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "update"))]
 ):
     """
     Retire un rôle d'un utilisateur.
@@ -410,7 +415,7 @@ def remove_role_from_user(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            detail=USER_NOT_FOUND
         )
 
     # Vérification multi-tenancy
@@ -418,7 +423,7 @@ def remove_role_from_user(
         if user.tenant_id != current_user.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à cet utilisateur"
+                detail=USER_ACCESS_DENIED
             )
 
     # Retirer le rôle
@@ -430,8 +435,8 @@ def remove_role_from_user(
 @router.get("/tenant/{tenant_id}/count")
 def count_users_by_tenant(
         tenant_id: str,
-        db: Session = Depends(get_db),
-        current_user: User = Depends(check_permission("users", "read"))
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "read"))]
 ):
     """
     Compte le nombre d'utilisateurs dans un tenant.

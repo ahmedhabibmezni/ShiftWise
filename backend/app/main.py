@@ -83,7 +83,8 @@ async def startup_event():
     init_db()
     print("✅ Base de données initialisée")
 
-    print(f"📖 Documentation disponible sur : http://localhost:8000/docs")
+    # S3457 — Pas de champs de remplacement : f-string inutile, remplacée par str normale
+    print("📖 Documentation disponible sur : http://localhost:8000/docs")
     print(f"🔐 Mode debug : {settings.DEBUG}")
 
 
@@ -200,9 +201,13 @@ async def global_exception_handler(request, exc):
 if __name__ == "__main__":
     import uvicorn
 
+    # S8392 — Éviter de lier l'application à toutes les interfaces réseau (0.0.0.0).
+    # En production, utiliser une interface spécifique définie dans la configuration.
+    # "0.0.0.0" expose le serveur sur toutes les interfaces, ce qui est un risque
+    # de sécurité en dehors d'un environnement containerisé contrôlé.
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
+        host=settings.SERVER_HOST,
         port=8000,
         reload=settings.DEBUG,  # Auto-reload en mode debug
         log_level="info"

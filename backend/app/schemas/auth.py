@@ -49,7 +49,7 @@ class TokenResponse(BaseModel):
     refresh_token: str = Field(
         ...,
         description="Token JWT de refresh (longue durée)",
-        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.."
     )
 
     token_type: str = Field(

@@ -11,6 +11,8 @@ Toutes les routes retournent des réponses JSON standardisées.
 """
 
 from datetime import timedelta
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -42,7 +44,7 @@ router = APIRouter()
 @router.post("/login", response_model=TokenResponse)
 def login(
         login_data: LoginRequest,
-        db: Session = Depends(get_db)
+        db: Annotated[Session, Depends(get_db)]
 ):
     """
     Authentifie un utilisateur et retourne les tokens JWT.
@@ -116,7 +118,7 @@ def login(
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_token(
         refresh_data: RefreshTokenRequest,
-        db: Session = Depends(get_db)
+        db: Annotated[Session, Depends(get_db)]
 ):
     """
     Renouvelle l'access_token en utilisant le refresh_token.
@@ -206,8 +208,8 @@ def refresh_token(
 
 @router.get("/me", response_model=UserReadWithPermissions)
 def get_current_user_info(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[Session, Depends(get_db)]
 ):
     """
     Récupère les informations de l'utilisateur connecté.
@@ -258,8 +260,8 @@ def get_current_user_info(
 @router.post("/change-password", response_model=MessageResponse)
 def change_password(
         password_data: ChangePasswordRequest,
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[Session, Depends(get_db)]
 ):
     """
     Change le mot de passe de l'utilisateur connecté.
@@ -311,7 +313,7 @@ def change_password(
 
 @router.post("/logout", response_model=MessageResponse)
 def logout(
-        current_user: User = Depends(get_current_user)
+        current_user: Annotated[User, Depends(get_current_user)]
 ):
     """
     Déconnexion de l'utilisateur.
@@ -339,7 +341,7 @@ def logout(
 
 @router.get("/verify", response_model=MessageResponse)
 def verify_token(
-        current_user: User = Depends(get_current_user)
+        current_user: Annotated[User, Depends(get_current_user)]
 ):
     """
     Vérifie la validité du token JWT.
