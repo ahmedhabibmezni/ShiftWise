@@ -66,3 +66,6 @@ alembic/versions/*.pyc
 uploads/
 temp/
 data/
+
+# Test files
+test_user_management.py

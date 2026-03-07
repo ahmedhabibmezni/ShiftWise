@@ -165,6 +165,7 @@ class RoleWithUsers(RoleRead):
     Utilisé pour les endpoints nécessitant ces informations.
     """
     user_count: int = Field(
+        default=0,
         description="Nombre d'utilisateurs ayant ce rôle"
     )
 

@@ -182,6 +182,60 @@ def list_users(
     )
 
 
+@router.get("/tenant/{tenant_id}/count")
+def count_users_by_tenant(
+        tenant_id: str,
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("users", "read"))]
+):
+    """
+    Compte le nombre d'utilisateurs dans un tenant.
+
+    **Permissions requises :** `users:read`
+
+    **Multi-tenancy :**
+    - Les admins peuvent seulement compter dans leur propre tenant
+    - Les superusers peuvent compter dans n'importe quel tenant
+
+    **Example :**
+    ```
+    GET /api/v1/users/tenant/nextstep/count
+    ```
+
+    **Response :**
+    ```json
+    {
+        "tenant_id": "nextstep",
+        "total_users": 25,
+        "active_users": 23,
+        "inactive_users": 2
+    }
+    ```
+    """
+    # Vérification multi-tenancy
+    if not current_user.is_superuser:
+        if tenant_id != current_user.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Accès non autorisé à ce tenant"
+            )
+
+    # Compter
+    total = crud_user.get_users_count(db, tenant_id=tenant_id)
+    active = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=True)
+    inactive = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=False)
+
+    return {
+        "tenant_id": tenant_id,
+        "total_users": total,
+        "active_users": active,
+        "inactive_users": inactive
+    }
+
+
+# ─── Dynamic routes (/{user_id}) — must be declared AFTER all static routes ───
+
+
 @router.get("/{user_id}", response_model=UserReadWithRoles)
 def get_user(
         user_id: int,
@@ -430,54 +484,3 @@ def remove_role_from_user(
     updated_user = crud_user.remove_role_from_user(db, user_id, role_id)
 
     return updated_user
-
-
-@router.get("/tenant/{tenant_id}/count")
-def count_users_by_tenant(
-        tenant_id: str,
-        db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "read"))]
-):
-    """
-    Compte le nombre d'utilisateurs dans un tenant.
-
-    **Permissions requises :** `users:read`
-
-    **Multi-tenancy :**
-    - Les admins peuvent seulement compter dans leur propre tenant
-    - Les superusers peuvent compter dans n'importe quel tenant
-
-    **Example :**
-    ```
-    GET /api/v1/users/tenant/nextstep/count
-    ```
-
-    **Response :**
-    ```json
-    {
-        "tenant_id": "nextstep",
-        "total_users": 25,
-        "active_users": 23,
-        "inactive_users": 2
-    }
-    ```
-    """
-    # Vérification multi-tenancy
-    if not current_user.is_superuser:
-        if tenant_id != current_user.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Accès non autorisé à ce tenant"
-            )
-
-    # Compter
-    total = crud_user.get_users_count(db, tenant_id=tenant_id)
-    active = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=True)
-    inactive = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=False)
-
-    return {
-        "tenant_id": tenant_id,
-        "total_users": total,
-        "active_users": active,
-        "inactive_users": inactive
-    }

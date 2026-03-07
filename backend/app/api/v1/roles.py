@@ -179,6 +179,146 @@ def count_roles(
     }
 
 
+
+@router.get("/name/{role_name}", response_model=RoleRead)
+def get_role_by_name(
+        role_name: str,
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+):
+    """
+    Récupère un rôle par son nom.
+
+    **Permissions requises :** `roles:read`
+
+    **Example :**
+    ```
+    GET /api/v1/roles/name/admin
+    ```
+    """
+    role = crud_role.get_role_by_name(db, role_name)
+
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Rôle '{role_name}' non trouvé"
+        )
+
+    return role
+
+
+@router.post("/init-system-roles", response_model=MessageResponse)
+def initialize_system_roles(
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(get_current_superuser)]
+):
+    """
+    Initialise les rôles système prédéfinis.
+
+    **Permissions requises :** Superuser uniquement
+
+    Crée les rôles système s'ils n'existent pas :
+    - super_admin : Accès complet au système
+    - admin : Gestion complète du tenant
+    - user : Accès aux ressources assignées
+    - viewer : Lecture seule
+
+    **Note :** Cette route doit être appelée une seule fois lors de
+    l'initialisation de l'application. Elle est idempotente (peut être
+    appelée plusieurs fois sans effet secondaire).
+
+    **Example :**
+    ```
+    POST /api/v1/roles/init-system-roles
+    ```
+
+    **Response :**
+    ```json
+    {
+        "message": "4 rôles système initialisés avec succès",
+        "success": true
+    }
+    ```
+    """
+    created_roles = crud_role.create_system_roles(db)
+
+    return MessageResponse(
+        message=f"{len(created_roles)} rôles système initialisés avec succès",
+        success=True
+    )
+
+
+@router.get("/permissions/resources")
+def list_available_resources(
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+):
+    """
+    Liste les ressources disponibles pour les permissions.
+
+    **Permissions requises :** `roles:read`
+
+    Retourne la liste des ressources qui peuvent être utilisées
+    dans les permissions des rôles.
+
+    **Example :**
+    ```
+    GET /api/v1/roles/permissions/resources
+    ```
+
+    **Response :**
+    ```json
+    {
+        "resources": [
+            "vms",
+            "hypervisors",
+            "migrations",
+            "reports",
+            "users",
+            "roles",
+            "settings"
+        ],
+        "actions": [
+            "create",
+            "read",
+            "update",
+            "delete",
+            "*"
+        ]
+    }
+    ```
+    """
+    return {
+        "resources": [
+            "vms",
+            "hypervisors",
+            "migrations",
+            "reports",
+            "users",
+            "roles",
+            "settings"
+        ],
+        "actions": [
+            "create",
+            "read",
+            "update",
+            "delete",
+            "*"
+        ],
+        "description": {
+            "vms": "Machines virtuelles",
+            "hypervisors": "Hyperviseurs sources",
+            "migrations": "Opérations de migration",
+            "reports": "Rapports et journaux",
+            "users": "Gestion des utilisateurs",
+            "roles": "Gestion des rôles",
+            "settings": "Paramètres système"
+        }
+    }
+
+
+# ─── Dynamic routes (/{role_id}) — must be declared AFTER all static routes ───
+
+
 @router.get("/{role_id}", response_model=RoleWithUsers)
 def get_role(
         role_id: int,
@@ -373,140 +513,4 @@ def get_role_user_count(
         "role_id": role_id,
         "role_name": role.name,
         "user_count": count
-    }
-
-
-@router.get("/name/{role_name}", response_model=RoleRead)
-def get_role_by_name(
-        role_name: str,
-        db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
-):
-    """
-    Récupère un rôle par son nom.
-
-    **Permissions requises :** `roles:read`
-
-    **Example :**
-    ```
-    GET /api/v1/roles/name/admin
-    ```
-    """
-    role = crud_role.get_role_by_name(db, role_name)
-
-    if not role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Rôle '{role_name}' non trouvé"
-        )
-
-    return role
-
-
-@router.post("/init-system-roles", response_model=MessageResponse)
-def initialize_system_roles(
-        db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(get_current_superuser)]
-):
-    """
-    Initialise les rôles système prédéfinis.
-
-    **Permissions requises :** Superuser uniquement
-
-    Crée les rôles système s'ils n'existent pas :
-    - super_admin : Accès complet au système
-    - admin : Gestion complète du tenant
-    - user : Accès aux ressources assignées
-    - viewer : Lecture seule
-
-    **Note :** Cette route doit être appelée une seule fois lors de
-    l'initialisation de l'application. Elle est idempotente (peut être
-    appelée plusieurs fois sans effet secondaire).
-
-    **Example :**
-    ```
-    POST /api/v1/roles/init-system-roles
-    ```
-
-    **Response :**
-    ```json
-    {
-        "message": "4 rôles système initialisés avec succès",
-        "success": true
-    }
-    ```
-    """
-    created_roles = crud_role.create_system_roles(db)
-
-    return MessageResponse(
-        message=f"{len(created_roles)} rôles système initialisés avec succès",
-        success=True
-    )
-
-
-@router.get("/permissions/resources")
-def list_available_resources(
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
-):
-    """
-    Liste les ressources disponibles pour les permissions.
-
-    **Permissions requises :** `roles:read`
-
-    Retourne la liste des ressources qui peuvent être utilisées
-    dans les permissions des rôles.
-
-    **Example :**
-    ```
-    GET /api/v1/roles/permissions/resources
-    ```
-
-    **Response :**
-    ```json
-    {
-        "resources": [
-            "vms",
-            "hypervisors",
-            "migrations",
-            "reports",
-            "users",
-            "roles",
-            "settings"
-        ],
-        "actions": [
-            "create",
-            "read",
-            "update",
-            "delete",
-            "*"
-        ]
-    }
-    ```
-    """
-    return {
-        "resources": [
-            "vms",
-            "hypervisors",
-            "migrations",
-            "reports",
-            "users",
-            "roles",
-            "settings"
-        ],
-        "actions": [
-            "create",
-            "read",
-            "update",
-            "delete",
-            "*"
-        ],
-        "description": {
-            "vms": "Machines virtuelles",
-            "hypervisors": "Hyperviseurs sources",
-            "migrations": "Opérations de migration",
-            "reports": "Rapports et journaux",
-            "users": "Gestion des utilisateurs",
-            "roles": "Gestion des rôles",
-            "settings": "Paramètres système"
-        }
     }
