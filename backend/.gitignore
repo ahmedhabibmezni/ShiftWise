@@ -68,4 +68,14 @@ temp/
 data/
 
 # Test files
-test_user_management.py
+tests/
+
+# Kubernetes configs - SENSIBLES (NOUVEAU)
+config/kubeconfig*
+*.kubeconfig
+kubeconfig
+
+# Secrets (NOUVEAU)
+*.pem
+*.key
+secrets/

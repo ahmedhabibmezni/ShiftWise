@@ -37,6 +37,52 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
+    # ============================================
+    # KUBERNETES / OPENSHIFT CONFIGURATION
+    # ============================================
+
+    # Mode de connexion au cluster Kubernetes
+    # Options:
+    #   - "kubeconfig": Utilise un fichier kubeconfig (dev local)
+    #   - "incluster": Utilise le ServiceAccount du pod (production)
+    #   - "custom": Utilise URL et token personnalisés (production externe)
+    KUBERNETES_MODE: str = "kubeconfig"
+
+    # Chemin vers le fichier kubeconfig (mode: kubeconfig)
+    KUBECONFIG_PATH: str | None = "./config/kubeconfig"
+
+    # Utiliser la configuration in-cluster (mode: incluster)
+    USE_IN_CLUSTER: bool = False
+
+    # Configuration custom (mode: custom)
+    KUBERNETES_API_URL: str | None = None
+    KUBERNETES_TOKEN: str | None = None
+    KUBERNETES_VERIFY_SSL: bool = False
+
+    # Namespace par défaut pour les VMs
+    KUBERNETES_DEFAULT_NAMESPACE: str = "default"
+
+    @validator("KUBERNETES_MODE")
+    def validate_kubernetes_mode(cls, v: str) -> str:
+        """
+        Valide le mode de connexion Kubernetes.
+        """
+        allowed_modes = ["kubeconfig", "incluster", "custom"]
+        if v not in allowed_modes:
+            raise ValueError(
+                f"KUBERNETES_MODE doit être l'un de : {', '.join(allowed_modes)}"
+            )
+        return v
+
+    @property
+    def is_kubernetes_incluster(self) -> bool:
+        """
+        Indique si l'application tourne dans un cluster Kubernetes.
+        Détecté automatiquement via la présence de variables d'environnement.
+        """
+        import os
+        return bool(os.getenv("KUBERNETES_SERVICE_HOST"))
+
     @property
     def DATABASE_URL(self) -> str:
         """
@@ -75,6 +121,25 @@ class Settings(BaseSettings):
 
     # API Configuration
     API_V1_PREFIX: str = "/api/v1"
+
+    # ============================================
+    # LOGGING
+    # ============================================
+
+    LOG_LEVEL: str = "INFO"
+
+    @validator("LOG_LEVEL")
+    def validate_log_level(cls, v: str) -> str:
+        """
+        Valide le niveau de log.
+        """
+        allowed_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        v_upper = v.upper()
+        if v_upper not in allowed_levels:
+            raise ValueError(
+                f"LOG_LEVEL doit être l'un de : {', '.join(allowed_levels)}"
+            )
+        return v_upper
 
     class Config:
         """Configuration de Pydantic Settings"""
