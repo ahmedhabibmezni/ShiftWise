@@ -128,9 +128,7 @@ class KubeVirtClient:
         config.load_kube_config(config_file=kube_path)
         logger.info(f"🔧 Loaded kubeconfig from: {kube_path}")
 
-    # ========================================
     # GESTION DES VIRTUALMACHINES
-    # ========================================
 
     def list_vms(
         self,
@@ -306,9 +304,9 @@ class KubeVirtClient:
             logger.error(f"❌ Error deleting VM '{name}': {e}")
             raise KubeVirtClientError(f"Failed to delete VM: {e}") from e
 
-    # ========================================
+     
     # GESTION DES VIRTUALMACHINEINSTANCES
-    # ========================================
+     
 
     def list_vmis(
         self,
@@ -379,9 +377,9 @@ class KubeVirtClient:
             logger.error(f"❌ Error getting VMI '{name}': {e}")
             raise KubeVirtClientError(f"Failed to get VMI: {e}") from e
 
-    # ========================================
+     
     # CONTRÔLE D'ÉTAT DES VMS
-    # ========================================
+     
 
     def start_vm(
         self,
@@ -461,9 +459,9 @@ class KubeVirtClient:
             logger.error(f"❌ Error stopping VM '{name}': {e}")
             raise KubeVirtClientError(f"Failed to stop VM: {e}") from e
 
-    # ========================================
+     
     # UTILITAIRES
-    # ========================================
+     
 
     def get_vm_status(
         self,
@@ -515,9 +513,7 @@ class KubeVirtClient:
             logger.error(f"❌ Error listing storage classes: {e}")
             return []
 
-    # ========================================
     # MÉTHODES PRIVÉES
-    # ========================================
 
     def _build_vm_manifest(
             self,
@@ -573,9 +569,9 @@ class KubeVirtClient:
             }
         }
 
-        # ========================================
+         
         # GESTION DES DISQUES (NOUVEAU)
-        # ========================================
+         
 
         if disk_size and storage_class:
             # Disque persistant avec PVC

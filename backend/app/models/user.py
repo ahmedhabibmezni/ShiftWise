@@ -123,6 +123,13 @@ class User(BaseModel):
         lazy="joined"
     )
 
+    # Roles : Many-to-Many avec Role
+    created_vms = relationship(
+        "VirtualMachine",
+        foreign_keys="VirtualMachine.created_by",
+        back_populates="created_by_user"
+    )
+
     # VMs créées par cet utilisateur (défini dans VM model)
     # created_vms = relationship("VirtualMachine", back_populates="owner")
 
