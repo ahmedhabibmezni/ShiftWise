@@ -18,6 +18,7 @@ def utc_now():
     """Retourne un datetime UTC timezone-aware."""
     return datetime.now(timezone.utc)
 
+
 class BaseModel(Base):
     """
     Modèle abstrait de base pour toutes les tables.
@@ -56,6 +57,7 @@ class BaseModel(Base):
     def __tablename__(cls) -> str:
         """
         Génère automatiquement le nom de la table à partir du nom de la classe.
+
         Ex: User -> users, VirtualMachine -> virtual_machines
         """
         import re

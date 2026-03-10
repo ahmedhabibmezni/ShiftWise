@@ -15,6 +15,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.core.config import settings
 from app.models.base import Base
 
+# Importer la configuration et les modèles
+from app.core.config import settings
+from app.core.database import Base
+
+# Importer TOUS les modèles dans le bon ordre
+from app.models import (
+    User, Role, user_roles,
+    Hypervisor, HypervisorType, HypervisorStatus,
+    VirtualMachine, VMStatus, CompatibilityStatus, OSType,
+    Migration, MigrationStatus, MigrationStrategy
+)
+
 # Importer TOUS les modèles pour que SQLAlchemy les connaisse
 from app.models.user import User
 from app.models.role import Role

@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.v1 import auth, users, roles
+from app.api.v1 import auth, users, roles, vms
 
 # Création de l'application FastAPI
 app = FastAPI(
@@ -165,6 +165,12 @@ app.include_router(
     roles.router,
     prefix=f"{settings.API_V1_PREFIX}/roles",
     tags=["Roles"],
+)
+
+app.include_router(
+    vms.router,
+    prefix=f"{settings.API_V1_PREFIX}/vms",
+    tags=["VirtualMachines"],
 )
 
 
