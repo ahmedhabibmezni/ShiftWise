@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.v1 import auth, users, roles, vms, hypervisors, migrations
+from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt
 
 # Création de l'application FastAPI
 app = FastAPI(
@@ -183,6 +183,12 @@ app.include_router(
     migrations.router,
     prefix=f"{settings.API_V1_PREFIX}/migrations",
     tags=["Migrations"],
+)
+
+app.include_router(
+    kubevirt.router,
+    prefix=f"{settings.API_V1_PREFIX}/kubevirt",
+    tags=["KubeVirt / OpenShift"],
 )
 
 

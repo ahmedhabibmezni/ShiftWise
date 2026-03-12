@@ -6,6 +6,7 @@ Endpoints CRUD pour les migrations de VMs.
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import Annotated, Optional
 
 from app.core.database import get_db
@@ -345,9 +346,11 @@ def get_migrations_stats(
         avg_duration = int(total_duration / len(completed_migrations))
 
     # Total données transférées
-    total_transferred = db.query(Migration).with_entities(
-        db.func.sum(Migration.transferred_gb)
-    ).scalar() or 0.0
+    # total_transferred = db.query(Migration).with_entities(
+    #     db.func.sum(Migration.transferred_gb)
+    # ).scalar() or 0.0
+
+    total_transferred = db.query(func.sum(Migration.transferred_gb)).scalar() or 0.0
 
     return MigrationStats(
         total_migrations=total,

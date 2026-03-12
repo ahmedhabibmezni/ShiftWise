@@ -154,8 +154,21 @@ class Migration(BaseModel):
         if not self.started_at:
             return 0
 
-        end_time = self.completed_at or datetime.now(timezone.utc)
-        delta = end_time - self.started_at
+        # Assurer que started_at est timezone-aware
+        started = self.started_at
+        if started.tzinfo is None:
+            from datetime import timezone as tz
+            started = started.replace(tzinfo=tz.utc)
+
+        # Assurer que end_time est timezone-aware
+        if self.completed_at:
+            end_time = self.completed_at
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=tz.utc)
+        else:
+            end_time = datetime.now(timezone.utc)
+
+        delta = end_time - started
         return int(delta.total_seconds())
 
     @property
