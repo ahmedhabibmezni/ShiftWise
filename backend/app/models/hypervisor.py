@@ -33,6 +33,7 @@ class HypervisorStatus(str, enum.Enum):
     ERROR = "error"  # Erreur de connexion
     UNREACHABLE = "unreachable"  # Non accessible (réseau, firewall, etc.)
     AUTHENTICATING = "authenticating"  # Authentification en cours
+    DISCOVERING = "discovering"  # Découverte en cours
     UNKNOWN = "unknown"  # Statut inconnu
 
 
@@ -113,8 +114,14 @@ class Hypervisor(BaseModel):
 
         # Sync nécessaire si > 24h
         from datetime import timedelta
+
+        # S'assurer que last_sync_at est timezone-aware
+        last_sync = self.last_sync_at
+        if last_sync.tzinfo is None:
+            last_sync = last_sync.replace(tzinfo=timezone.utc)
+
         threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        return self.last_sync_at < threshold
+        return last_sync < threshold
 
     def to_dict(self, include_credentials: bool = False) -> dict:
         """
@@ -169,8 +176,18 @@ class Hypervisor(BaseModel):
 
         self.updated_at = datetime.now(timezone.utc)
 
-    def mark_sync_completed(self, vms_count: int):
-        """Marque une synchronisation comme complétée"""
+    def mark_sync_completed(self, success: bool = True, total_vms: int = 0):
+        """
+        Marque une synchronisation comme complétée
+
+        Args:
+            success: Si True, la sync a réussi
+            total_vms: Nombre de VMs découvertes
+        """
         self.last_sync_at = datetime.now(timezone.utc)
-        self.total_vms_discovered = vms_count
+
+        if success:
+            self.total_vms_discovered = total_vms
+            self.last_successful_connection = datetime.now(timezone.utc)
+
         self.updated_at = datetime.now(timezone.utc)

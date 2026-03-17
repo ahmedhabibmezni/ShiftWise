@@ -20,6 +20,7 @@ from app.schemas.hypervisor import (
     HypervisorTestConnection,
     HypervisorTestConnectionResponse
 )
+from app.services.discovery import create_discovery_service, DiscoveryError
 
 router = APIRouter()
 
@@ -269,8 +270,7 @@ def sync_hypervisor(
     **Permissions requises :** hypervisors:update
 
     Lance une découverte des VMs sur l'hypervisor source.
-
-    ⚠️ Note : Nécessite l'implémentation du module Discovery.
+    Utilise le Discovery Service pour scanner et importer les VMs.
     """
     hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
 
@@ -280,14 +280,29 @@ def sync_hypervisor(
             detail=f"Hypervisor avec l'ID {hypervisor_id} introuvable"
         )
 
-    # TODO: Lancer le module Discovery
-    # discovery_service.sync_hypervisor(hypervisor)
+    # Lancer la découverte
+    try:
+        discovery_service = create_discovery_service(db)
+        stats = discovery_service.discover_hypervisor(hypervisor_id)
 
-    return {
-        "hypervisor_id": hypervisor_id,
-        "status": "sync_scheduled",
-        "message": "Synchronisation planifiée (implémentation Discovery à venir)"
-    }
+        return {
+            "hypervisor_id": hypervisor_id,
+            "hypervisor_name": hypervisor.name,
+            "status": "success",
+            "message": "Découverte terminée avec succès",
+            "statistics": {
+                "total_discovered": stats["total_discovered"],
+                "new_vms": stats["new_vms"],
+                "updated_vms": stats["updated_vms"],
+                "errors": stats["errors"]
+            }
+        }
+
+    except DiscoveryError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de la découverte: {str(e)}"
+        )
 
 
 @router.get("/stats/summary")
