@@ -123,6 +123,83 @@ def create_hypervisor(
     return HypervisorResponse.model_validate(hypervisor)
 
 
+# ---------------------------------------------------------------------------
+# Routes statiques — DOIVENT être déclarées avant les routes dynamiques /{id}
+# ---------------------------------------------------------------------------
+
+@router.get("/stats/summary")
+def get_hypervisors_stats(
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("hypervisors", "read"))] = None
+):
+    """
+    Statistiques globales des hypervisors.
+
+    **Permissions requises :** hypervisors:read
+    """
+    def _scoped_query():
+        q = db.query(Hypervisor)
+        if not current_user.is_superuser:
+            q = q.filter(Hypervisor.tenant_id == current_user.tenant_id)
+        return q
+
+    total = _scoped_query().count()
+
+    stats = {
+        "total": total,
+        "by_type": {},
+        "by_status": {},
+        "active": _scoped_query().filter(Hypervisor.is_active == True).count(),
+        "inactive": _scoped_query().filter(Hypervisor.is_active == False).count()
+    }
+
+    # Par type
+    for hyp_type in HypervisorType:
+        count = _scoped_query().filter(Hypervisor.type == hyp_type).count()
+        if count > 0:
+            stats["by_type"][hyp_type.value] = count
+
+    # Par statut
+    for hyp_status in HypervisorStatus:
+        count = _scoped_query().filter(Hypervisor.status == hyp_status).count()
+        if count > 0:
+            stats["by_status"][hyp_status.value] = count
+
+    return stats
+
+
+@router.post("/test-connection", response_model=HypervisorTestConnectionResponse)
+def test_hypervisor_connection(
+        test_data: HypervisorTestConnection,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("hypervisors", "create"))] = None
+):
+    """
+    Teste la connexion à un hypervisor avant de le créer.
+
+    **Permissions requises :** hypervisors:create
+
+    ⚠️ Note : Cette fonctionnalité nécessite l'implémentation des clients
+    vSphere/VMware/Hyper-V. Pour l'instant, retourne un échec explicite.
+    """
+    # TODO: Implémenter la connexion réelle selon le type
+    # - vSphere: utiliser pyvmomi
+    # - VMware Workstation: utiliser vmrun
+    # - Hyper-V: utiliser PowerShell via subprocess
+    # - KVM: utiliser libvirt
+
+    return HypervisorTestConnectionResponse(
+        success=False,
+        message="Connection test not yet implemented — simulation mode",
+        vms_count=None,
+        error=None
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes dynamiques /{hypervisor_id}
+# ---------------------------------------------------------------------------
+
 @router.get("/{hypervisor_id}", response_model=HypervisorResponse)
 def get_hypervisor(
         hypervisor_id: int,
@@ -193,7 +270,8 @@ def delete_hypervisor(
 
     **Permissions requises :** hypervisors:delete
 
-    ⚠️ Attention : Les VMs associées auront leur source_hypervisor_id mis à NULL.
+    ⚠️ Attention : Les VMs associées auront leur source_hypervisor_id mis à NULL
+    (SET NULL). Les migrations en cours sur ces VMs deviennent orphelines.
     """
     query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
     if not current_user.is_superuser:
@@ -246,35 +324,6 @@ def get_hypervisor_vms(
     }
 
 
-@router.post("/test-connection", response_model=HypervisorTestConnectionResponse)
-def test_hypervisor_connection(
-        test_data: HypervisorTestConnection,
-        db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("hypervisors", "create"))] = None
-):
-    """
-    Teste la connexion à un hypervisor avant de le créer.
-
-    **Permissions requises :** hypervisors:create
-
-    ⚠️ Note : Cette fonctionnalité nécessite l'implémentation des clients
-    vSphere/VMware/Hyper-V. Pour l'instant, retourne un succès simulé.
-    """
-    # TODO: Implémenter la connexion réelle selon le type
-    # - vSphere: utiliser pyvmomi
-    # - VMware Workstation: utiliser vmrun
-    # - Hyper-V: utiliser PowerShell via subprocess
-    # - KVM: utiliser libvirt
-
-    # Simulation pour le moment
-    return HypervisorTestConnectionResponse(
-        success=True,
-        message=f"Connexion à {test_data.host} simulée avec succès (implémentation à venir)",
-        vms_count=None,
-        error=None
-    )
-
-
 @router.post("/{hypervisor_id}/sync")
 def sync_hypervisor(
         hypervisor_id: int,
@@ -323,44 +372,3 @@ def sync_hypervisor(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur lors de la découverte: {str(e)}"
         )
-
-
-@router.get("/stats/summary")
-def get_hypervisors_stats(
-        db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("hypervisors", "read"))] = None
-):
-    """
-    Statistiques globales des hypervisors.
-
-    **Permissions requises :** hypervisors:read
-    """
-    def _scoped_query():
-        q = db.query(Hypervisor)
-        if not current_user.is_superuser:
-            q = q.filter(Hypervisor.tenant_id == current_user.tenant_id)
-        return q
-
-    total = _scoped_query().count()
-
-    stats = {
-        "total": total,
-        "by_type": {},
-        "by_status": {},
-        "active": _scoped_query().filter(Hypervisor.is_active == True).count(),
-        "inactive": _scoped_query().filter(Hypervisor.is_active == False).count()
-    }
-
-    # Par type
-    for hyp_type in HypervisorType:
-        count = _scoped_query().filter(Hypervisor.type == hyp_type).count()
-        if count > 0:
-            stats["by_type"][hyp_type.value] = count
-
-    # Par statut
-    for hyp_status in HypervisorStatus:
-        count = _scoped_query().filter(Hypervisor.status == hyp_status).count()
-        if count > 0:
-            stats["by_status"][hyp_status.value] = count
-
-    return stats
