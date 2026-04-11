@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.kubevirt_client import KubeVirtClient, KubeVirtClientError, get_kubevirt_client
 from app.api.deps import check_permission, validate_kubevirt_namespace
 from app.models.user import User
+from app.schemas.kubevirt import KubeVirtVMCreate
 
 router = APIRouter()
 
@@ -98,15 +99,9 @@ def get_kubevirt_vm_status(
 
 @router.post("/vms")
 def create_kubevirt_vm(
-        name: Annotated[str, Query(description="Nom de la VM")],
+        vm_data: KubeVirtVMCreate,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
-        cpu: Annotated[int, Query(ge=1, le=64, description="Nombre de vCPUs")] = 1,
-        memory: Annotated[str, Query(description="Mémoire (ex: 2Gi, 4Gi)")] = "2Gi",
-        image: Annotated[str, Query(description="Image container")] = "quay.io/containerdisks/fedora:latest",
-        disk_size: Annotated[Optional[str], Query(description="Taille disque persistant")] = None,
-        storage_class: Annotated[str, Query(description="StorageClass")] = "nfs-client",
-        run_strategy: Annotated[str, Query(description="RunStrategy")] = "Always",
         current_user: Annotated[User, Depends(check_permission("vms", "create"))] = None
 ):
     """
@@ -121,18 +116,18 @@ def create_kubevirt_vm(
     """
     try:
         vm = kube_client.create_vm(
-            name=name,
+            name=vm_data.name,
             namespace=namespace,
-            cpu=cpu,
-            memory=memory,
-            image=image,
-            disk_size=disk_size,
-            storage_class=storage_class,
-            run_strategy=run_strategy
+            cpu=vm_data.cpu,
+            memory=vm_data.memory,
+            image=vm_data.image,
+            disk_size=vm_data.disk_size,
+            storage_class=vm_data.storage_class,
+            run_strategy=vm_data.run_strategy
         )
 
         return {
-            "message": f"VM '{name}' créée avec succès",
+            "message": f"VM '{vm_data.name}' créée avec succès",
             "vm": vm
         }
     except KubeVirtClientError as e:
