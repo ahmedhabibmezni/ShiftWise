@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from typing import Annotated, Optional
 
 from app.core.database import get_db
-from app.api.deps import get_current_user, check_permission
+from app.api.deps import check_permission
 from app.models.user import User
 from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
 from app.schemas.hypervisor import (
@@ -45,6 +45,10 @@ def list_hypervisors(
     """
     # Construction de la requête
     query = db.query(Hypervisor)
+
+    # Multi-tenancy isolation
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
 
     # Filtres
     if hypervisor_type:
@@ -108,6 +112,7 @@ def create_hypervisor(
     # Créer l'hypervisor
     hypervisor = Hypervisor(
         **hypervisor_data.model_dump(exclude_unset=True),
+        tenant_id=current_user.tenant_id,
         status=HypervisorStatus.UNKNOWN
     )
 
@@ -129,7 +134,10 @@ def get_hypervisor(
 
     **Permissions requises :** hypervisors:read
     """
-    hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
+    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    hypervisor = query.first()
 
     if not hypervisor:
         raise HTTPException(
@@ -152,7 +160,10 @@ def update_hypervisor(
 
     **Permissions requises :** hypervisors:update
     """
-    hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
+    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    hypervisor = query.first()
 
     if not hypervisor:
         raise HTTPException(
@@ -184,7 +195,10 @@ def delete_hypervisor(
 
     ⚠️ Attention : Les VMs associées auront leur source_hypervisor_id mis à NULL.
     """
-    hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
+    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    hypervisor = query.first()
 
     if not hypervisor:
         raise HTTPException(
@@ -209,7 +223,10 @@ def get_hypervisor_vms(
 
     **Permissions requises :** hypervisors:read, vms:read
     """
-    hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
+    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    hypervisor = query.first()
 
     if not hypervisor:
         raise HTTPException(
@@ -272,7 +289,10 @@ def sync_hypervisor(
     Lance une découverte des VMs sur l'hypervisor source.
     Utilise le Discovery Service pour scanner et importer les VMs.
     """
-    hypervisor = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id).first()
+    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
+    if not current_user.is_superuser:
+        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    hypervisor = query.first()
 
     if not hypervisor:
         raise HTTPException(
@@ -315,25 +335,31 @@ def get_hypervisors_stats(
 
     **Permissions requises :** hypervisors:read
     """
-    total = db.query(Hypervisor).count()
+    def _scoped_query():
+        q = db.query(Hypervisor)
+        if not current_user.is_superuser:
+            q = q.filter(Hypervisor.tenant_id == current_user.tenant_id)
+        return q
+
+    total = _scoped_query().count()
 
     stats = {
         "total": total,
         "by_type": {},
         "by_status": {},
-        "active": db.query(Hypervisor).filter(Hypervisor.is_active == True).count(),
-        "inactive": db.query(Hypervisor).filter(Hypervisor.is_active == False).count()
+        "active": _scoped_query().filter(Hypervisor.is_active == True).count(),
+        "inactive": _scoped_query().filter(Hypervisor.is_active == False).count()
     }
 
     # Par type
     for hyp_type in HypervisorType:
-        count = db.query(Hypervisor).filter(Hypervisor.type == hyp_type).count()
+        count = _scoped_query().filter(Hypervisor.type == hyp_type).count()
         if count > 0:
             stats["by_type"][hyp_type.value] = count
 
     # Par statut
     for hyp_status in HypervisorStatus:
-        count = db.query(Hypervisor).filter(Hypervisor.status == hyp_status).count()
+        count = _scoped_query().filter(Hypervisor.status == hyp_status).count()
         if count > 0:
             stats["by_status"][hyp_status.value] = count
 

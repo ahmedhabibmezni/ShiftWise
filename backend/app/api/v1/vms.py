@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from typing import Annotated, Optional
 
 from app.core.database import get_db
-from app.api.deps import get_current_user, check_permission
+from app.api.deps import check_permission
 from app.models.user import User
 from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus
 from app.schemas.vm import (
@@ -40,6 +40,10 @@ def list_vms(
     """
     # Construction de la requête
     query = db.query(VirtualMachine)
+
+    # Multi-tenancy isolation
+    if not current_user.is_superuser:
+        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
 
     # Filtres
     if status_filter:
@@ -101,6 +105,7 @@ def create_vm(
     # Créer la VM
     vm = VirtualMachine(
         **vm_data.model_dump(exclude_unset=True),
+        tenant_id=current_user.tenant_id,
         status=VMStatus.DISCOVERED,
         compatibility_status=CompatibilityStatus.UNKNOWN
     )
@@ -123,7 +128,10 @@ def get_vm(
 
     **Permissions requises :** vms:read
     """
-    vm = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id).first()
+    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
+    if not current_user.is_superuser:
+        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    vm = query.first()
 
     if not vm:
         raise HTTPException(
@@ -146,7 +154,10 @@ def update_vm(
 
     **Permissions requises :** vms:update
     """
-    vm = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id).first()
+    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
+    if not current_user.is_superuser:
+        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    vm = query.first()
 
     if not vm:
         raise HTTPException(
@@ -181,7 +192,10 @@ def delete_vm(
 
     ⚠️ Attention : Supprime également toutes les migrations associées.
     """
-    vm = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id).first()
+    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
+    if not current_user.is_superuser:
+        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    vm = query.first()
 
     if not vm:
         raise HTTPException(
@@ -206,7 +220,10 @@ def get_vm_migrations(
 
     **Permissions requises :** vms:read, migrations:read
     """
-    vm = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id).first()
+    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
+    if not current_user.is_superuser:
+        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    vm = query.first()
 
     if not vm:
         raise HTTPException(
@@ -236,7 +253,13 @@ def get_vms_stats(
 
     **Permissions requises :** vms:read
     """
-    total = db.query(VirtualMachine).count()
+    def _scoped_query():
+        q = db.query(VirtualMachine)
+        if not current_user.is_superuser:
+            q = q.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+        return q
+
+    total = _scoped_query().count()
 
     stats = {
         "total": total,
@@ -246,14 +269,14 @@ def get_vms_stats(
 
     # Par statut
     for status_value in VMStatus:
-        count = db.query(VirtualMachine).filter(
+        count = _scoped_query().filter(
             VirtualMachine.status == status_value
         ).count()
         stats["by_status"][status_value.value] = count
 
     # Par compatibilité
     for compat in CompatibilityStatus:
-        count = db.query(VirtualMachine).filter(
+        count = _scoped_query().filter(
             VirtualMachine.compatibility_status == compat
         ).count()
         stats["by_compatibility"][compat.value] = count

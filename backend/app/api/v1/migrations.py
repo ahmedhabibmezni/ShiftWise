@@ -10,7 +10,7 @@ from sqlalchemy import func
 from typing import Annotated, Optional
 
 from app.core.database import get_db
-from app.api.deps import get_current_user, check_permission
+from app.api.deps import check_permission
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.virtual_machine import VirtualMachine
@@ -44,6 +44,10 @@ def list_migrations(
     """
     # Construction de la requête
     query = db.query(Migration)
+
+    # Multi-tenancy isolation
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
 
     # Filtres
     if status_filter:
@@ -83,8 +87,11 @@ def create_migration(
 
     **Permissions requises :** migrations:create
     """
-    # Vérifier que la VM existe
-    vm = db.query(VirtualMachine).filter(VirtualMachine.id == migration_data.vm_id).first()
+    # Vérifier que la VM existe (et appartient au tenant de l'utilisateur)
+    vm_query = db.query(VirtualMachine).filter(VirtualMachine.id == migration_data.vm_id)
+    if not current_user.is_superuser:
+        vm_query = vm_query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    vm = vm_query.first()
 
     if not vm:
         raise HTTPException(
@@ -102,6 +109,7 @@ def create_migration(
     # Créer la migration
     migration = Migration(
         **migration_data.model_dump(exclude_unset=True),
+        tenant_id=current_user.tenant_id,
         status=MigrationStatus.PENDING
     )
 
@@ -123,7 +131,10 @@ def get_migration(
 
     **Permissions requises :** migrations:read
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -146,7 +157,10 @@ def update_migration(
 
     **Permissions requises :** migrations:update
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -179,7 +193,10 @@ def delete_migration(
 
     **Permissions requises :** migrations:delete
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -211,7 +228,10 @@ def start_migration(
 
     **Permissions requises :** migrations:update
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -247,7 +267,10 @@ def cancel_migration(
 
     **Permissions requises :** migrations:update
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -282,7 +305,10 @@ def update_migration_progress(
 
     **Permissions requises :** migrations:update
     """
-    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    query = db.query(Migration).filter(Migration.id == migration_id)
+    if not current_user.is_superuser:
+        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    migration = query.first()
 
     if not migration:
         raise HTTPException(
@@ -319,12 +345,18 @@ def get_migrations_stats(
 
     **Permissions requises :** migrations:read
     """
-    total = db.query(Migration).count()
-    completed = db.query(Migration).filter(Migration.status == MigrationStatus.COMPLETED).count()
-    failed = db.query(Migration).filter(Migration.status == MigrationStatus.FAILED).count()
+    def _scoped_query():
+        q = db.query(Migration)
+        if not current_user.is_superuser:
+            q = q.filter(Migration.tenant_id == current_user.tenant_id)
+        return q
+
+    total = _scoped_query().count()
+    completed = _scoped_query().filter(Migration.status == MigrationStatus.COMPLETED).count()
+    failed = _scoped_query().filter(Migration.status == MigrationStatus.FAILED).count()
 
     # Migrations en cours
-    in_progress = db.query(Migration).filter(Migration.status.in_([
+    in_progress = _scoped_query().filter(Migration.status.in_([
         MigrationStatus.VALIDATING,
         MigrationStatus.PREPARING,
         MigrationStatus.TRANSFERRING,
@@ -333,13 +365,13 @@ def get_migrations_stats(
         MigrationStatus.VERIFYING
     ])).count()
 
-    pending = db.query(Migration).filter(Migration.status == MigrationStatus.PENDING).count()
+    pending = _scoped_query().filter(Migration.status == MigrationStatus.PENDING).count()
 
     # Taux de succès
     success_rate = (completed / total * 100) if total > 0 else 0.0
 
     # Durée moyenne (migrations terminées)
-    completed_migrations = db.query(Migration).filter(
+    completed_migrations = _scoped_query().filter(
         Migration.status == MigrationStatus.COMPLETED
     ).all()
 
@@ -348,12 +380,13 @@ def get_migrations_stats(
         total_duration = sum(m.duration_seconds for m in completed_migrations)
         avg_duration = int(total_duration / len(completed_migrations))
 
-    # Total données transférées
-    # total_transferred = db.query(Migration).with_entities(
-    #     db.func.sum(Migration.transferred_gb)
-    # ).scalar() or 0.0
-
-    total_transferred = db.query(func.sum(Migration.transferred_gb)).scalar() or 0.0
+    # Total données transférées — scopé par tenant
+    total_transferred_query = db.query(func.sum(Migration.transferred_gb))
+    if not current_user.is_superuser:
+        total_transferred_query = total_transferred_query.filter(
+            Migration.tenant_id == current_user.tenant_id
+        )
+    total_transferred = total_transferred_query.scalar() or 0.0
 
     return MigrationStats(
         total_migrations=total,

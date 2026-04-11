@@ -374,6 +374,7 @@ class DiscoveryService:
         """
         vm = VirtualMachine(
             name=vm_data["name"],
+            tenant_id=hypervisor.tenant_id,
             source_hypervisor_id=hypervisor.id,
             source_uuid=vm_data["source_uuid"],
             source_name=vm_data["source_name"],
