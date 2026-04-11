@@ -49,6 +49,9 @@ class Migration(BaseModel):
 
     __tablename__ = "migrations"
 
+    # Multi-tenancy isolation
+    tenant_id = Column(String(100), nullable=False, index=True)
+
     # VM concernée
     vm_id = Column(
         Integer,

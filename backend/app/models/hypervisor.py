@@ -47,6 +47,9 @@ class Hypervisor(BaseModel):
 
     __tablename__ = "hypervisors"
 
+    # Multi-tenancy isolation
+    tenant_id = Column(String(100), nullable=False, index=True)
+
     # Identité de l'hyperviseur
     name = Column(String(255), nullable=False, unique=True, index=True)
     description = Column(Text, nullable=True)

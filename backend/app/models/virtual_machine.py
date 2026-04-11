@@ -52,6 +52,9 @@ class VirtualMachine(BaseModel):
 
     __tablename__ = "virtual_machines"
 
+    # Multi-tenancy isolation
+    tenant_id = Column(String(100), nullable=False, index=True)
+
     # Identité de la VM
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
