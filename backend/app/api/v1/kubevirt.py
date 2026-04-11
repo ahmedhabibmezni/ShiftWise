@@ -5,13 +5,11 @@ Endpoints pour interagir directement avec le cluster OpenShift.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
-from typing import Annotated, Optional, List
+from typing import Annotated, Optional
 
 from app.core.config import settings
-from app.core.database import get_db
-from app.core.kubevirt_client import KubeVirtClient, KubeVirtClientError
-from app.api.deps import get_current_user, check_permission, validate_kubevirt_namespace
+from app.core.kubevirt_client import KubeVirtClient, KubeVirtClientError, get_kubevirt_client
+from app.api.deps import check_permission, validate_kubevirt_namespace
 from app.models.user import User
 
 router = APIRouter()
@@ -20,6 +18,7 @@ router = APIRouter()
 @router.get("/vms")
 def list_kubevirt_vms(
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         label_selector: Annotated[Optional[str], Query(description="Sélecteur de labels")] = None,
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
@@ -31,8 +30,7 @@ def list_kubevirt_vms(
     Utilise le KubeVirtClient pour interroger directement le cluster OpenShift.
     """
     try:
-        client = KubeVirtClient()
-        vms = client.list_vms(namespace=namespace, label_selector=label_selector)
+        vms = kube_client.list_vms(namespace=namespace, label_selector=label_selector)
 
         return {
             "namespace": namespace,
@@ -50,6 +48,7 @@ def list_kubevirt_vms(
 def get_kubevirt_vm(
         vm_name: str,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -58,8 +57,7 @@ def get_kubevirt_vm(
     **Permissions requises :** vms:read
     """
     try:
-        client = KubeVirtClient()
-        vm = client.get_vm(name=vm_name, namespace=namespace)
+        vm = kube_client.get_vm(name=vm_name, namespace=namespace)
 
         if not vm:
             raise HTTPException(
@@ -79,6 +77,7 @@ def get_kubevirt_vm(
 def get_kubevirt_vm_status(
         vm_name: str,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -87,8 +86,7 @@ def get_kubevirt_vm_status(
     **Permissions requises :** vms:read
     """
     try:
-        client = KubeVirtClient()
-        status_info = client.get_vm_status(name=vm_name, namespace=namespace)
+        status_info = kube_client.get_vm_status(name=vm_name, namespace=namespace)
 
         return status_info
     except KubeVirtClientError as e:
@@ -102,6 +100,7 @@ def get_kubevirt_vm_status(
 def create_kubevirt_vm(
         name: Annotated[str, Query(description="Nom de la VM")],
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         cpu: Annotated[int, Query(ge=1, le=64, description="Nombre de vCPUs")] = 1,
         memory: Annotated[str, Query(description="Mémoire (ex: 2Gi, 4Gi)")] = "2Gi",
         image: Annotated[str, Query(description="Image container")] = "quay.io/containerdisks/fedora:latest",
@@ -121,9 +120,7 @@ def create_kubevirt_vm(
     - `quay.io/containerdisks/ubuntu:22.04`
     """
     try:
-        client = KubeVirtClient()
-
-        vm = client.create_vm(
+        vm = kube_client.create_vm(
             name=name,
             namespace=namespace,
             cpu=cpu,
@@ -149,6 +146,7 @@ def create_kubevirt_vm(
 def delete_kubevirt_vm(
         vm_name: str,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "delete"))] = None
 ):
     """
@@ -157,8 +155,7 @@ def delete_kubevirt_vm(
     **Permissions requises :** vms:delete
     """
     try:
-        client = KubeVirtClient()
-        success = client.delete_vm(name=vm_name, namespace=namespace)
+        success = kube_client.delete_vm(name=vm_name, namespace=namespace)
 
         if not success:
             raise HTTPException(
@@ -180,6 +177,7 @@ def delete_kubevirt_vm(
 def start_kubevirt_vm(
         vm_name: str,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
 ):
     """
@@ -188,8 +186,7 @@ def start_kubevirt_vm(
     **Permissions requises :** vms:update
     """
     try:
-        client = KubeVirtClient()
-        success = client.start_vm(name=vm_name, namespace=namespace)
+        success = kube_client.start_vm(name=vm_name, namespace=namespace)
 
         if not success:
             raise HTTPException(
@@ -211,6 +208,7 @@ def start_kubevirt_vm(
 def stop_kubevirt_vm(
         vm_name: str,
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
 ):
     """
@@ -219,8 +217,7 @@ def stop_kubevirt_vm(
     **Permissions requises :** vms:update
     """
     try:
-        client = KubeVirtClient()
-        success = client.stop_vm(name=vm_name, namespace=namespace)
+        success = kube_client.stop_vm(name=vm_name, namespace=namespace)
 
         if not success:
             raise HTTPException(
@@ -241,6 +238,7 @@ def stop_kubevirt_vm(
 @router.get("/vmis")
 def list_kubevirt_vmis(
         namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         label_selector: Annotated[Optional[str], Query(description="Sélecteur de labels")] = None,
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
@@ -250,8 +248,7 @@ def list_kubevirt_vmis(
     **Permissions requises :** vms:read
     """
     try:
-        client = KubeVirtClient()
-        vmis = client.list_vmis(namespace=namespace, label_selector=label_selector)
+        vmis = kube_client.list_vmis(namespace=namespace, label_selector=label_selector)
 
         return {
             "namespace": namespace,
@@ -267,6 +264,7 @@ def list_kubevirt_vmis(
 
 @router.get("/storage-classes")
 def list_storage_classes(
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -275,8 +273,7 @@ def list_storage_classes(
     **Permissions requises :** vms:read
     """
     try:
-        client = KubeVirtClient()
-        storage_classes = client.list_storage_classes()
+        storage_classes = kube_client.list_storage_classes()
 
         return {
             "total": len(storage_classes),
@@ -291,6 +288,7 @@ def list_storage_classes(
 
 @router.get("/cluster-info")
 def get_cluster_info(
+        kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -299,12 +297,9 @@ def get_cluster_info(
     **Permissions requises :** vms:read
     """
     try:
-        client = KubeVirtClient()
-
-        # Récupérer quelques infos
-        vms_total = len(client.list_vms())
-        vmis_running = len(client.list_vmis())
-        storage_classes = client.list_storage_classes()
+        vms_total = len(kube_client.list_vms())
+        vmis_running = len(kube_client.list_vmis())
+        storage_classes = kube_client.list_storage_classes()
 
         return {
             "connected": True,

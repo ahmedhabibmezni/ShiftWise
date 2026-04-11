@@ -75,10 +75,10 @@ class KubeVirtClient:
             else:  # Mode kubeconfig (par défaut)
                 self._load_kubeconfig()
 
-            # Initialiser les clients API
-            self.api = client.CustomObjectsApi()
-            self.core_api = client.CoreV1Api()
-            self.storage_api = client.StorageV1Api()
+            # Initialiser les clients API sur l'ApiClient dédié (pas de global state)
+            self.api = client.CustomObjectsApi(self._api_client)
+            self.core_api = client.CoreV1Api(self._api_client)
+            self.storage_api = client.StorageV1Api(self._api_client)
 
             logger.info("✅ KubeVirt client initialized successfully")
 
@@ -89,6 +89,7 @@ class KubeVirtClient:
     def _load_incluster_config(self):
         """Charge la configuration in-cluster (ServiceAccount du pod)"""
         config.load_incluster_config()
+        self._api_client = client.ApiClient()
         logger.info("🔧 Loaded IN-CLUSTER config (Production mode)")
 
     def _load_custom_config(self):
@@ -104,7 +105,8 @@ class KubeVirtClient:
         configuration.api_key_prefix["authorization"] = "Bearer"
         configuration.verify_ssl = settings.KUBERNETES_VERIFY_SSL
 
-        client.Configuration.set_default(configuration)
+        # Use a dedicated ApiClient — never mutate the global default configuration
+        self._api_client = client.ApiClient(configuration)
         logger.info(f"🔧 Loaded CUSTOM config (API: {settings.KUBERNETES_API_URL})")
 
     def _load_kubeconfig(self):
@@ -114,6 +116,7 @@ class KubeVirtClient:
         if not kube_path:
             # Fallback: ~/.kube/config
             config.load_kube_config()
+            self._api_client = client.ApiClient()
             logger.info("🔧 Loaded kubeconfig from default location (~/.kube/config)")
             return
 
@@ -126,6 +129,7 @@ class KubeVirtClient:
             raise KubeVirtClientError(f"Kubeconfig not found: {kube_path}")
 
         config.load_kube_config(config_file=kube_path)
+        self._api_client = client.ApiClient()
         logger.info(f"🔧 Loaded kubeconfig from: {kube_path}")
 
     # GESTION DES VIRTUALMACHINES
@@ -618,3 +622,23 @@ class KubeVirtClient:
             if condition.get("type") == "LiveMigratable":
                 return condition.get("status") == "True"
         return False
+
+
+# ---------------------------------------------------------------------------
+# Singleton — une seule instance par worker (évite le rechargement kubeconfig)
+# ---------------------------------------------------------------------------
+
+_kubevirt_client_instance: KubeVirtClient | None = None
+
+
+def get_kubevirt_client() -> KubeVirtClient:
+    """
+    Retourne l'instance singleton du KubeVirtClient.
+
+    L'instance est créée à la première invocation et réutilisée ensuite.
+    À injecter via FastAPI Depends() dans les routes kubevirt.
+    """
+    global _kubevirt_client_instance
+    if _kubevirt_client_instance is None:
+        _kubevirt_client_instance = KubeVirtClient()
+    return _kubevirt_client_instance
