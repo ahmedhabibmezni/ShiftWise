@@ -35,6 +35,7 @@ from app.api.deps import (
     get_current_user_tenant
 )
 from app.models.user import User
+from app.models.role import Role
 
 router = APIRouter()
 
@@ -85,6 +86,23 @@ def create_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Vous ne pouvez créer des utilisateurs que dans votre propre tenant"
             )
+
+    # Guard: prevent privilege escalation via role assignment at creation
+    if not current_user.is_superuser and user_data.role_ids:
+        assigned_roles = db.query(Role).filter(Role.id.in_(user_data.role_ids)).all()
+        admin_permissions = current_user.get_all_permissions()
+        for role in assigned_roles:
+            if role.name == "super_admin":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Seul un super_admin peut assigner le rôle super_admin"
+                )
+            for resource, actions in (role.permissions or {}).items():
+                if "*" in actions and resource not in admin_permissions:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
+                    )
 
     # Créer l'utilisateur
     try:
@@ -436,6 +454,22 @@ def add_role_to_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Rôle non trouvé"
         )
+
+    # Guard: prevent privilege escalation
+    if role.name == "super_admin" and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul un super_admin peut assigner le rôle super_admin"
+        )
+
+    if not current_user.is_superuser:
+        admin_permissions = current_user.get_all_permissions()
+        for resource, actions in (role.permissions or {}).items():
+            if "*" in actions and resource not in admin_permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
+                )
 
     # Ajouter le rôle
     updated_user = crud_user.add_role_to_user(db, user_id, role_id)
