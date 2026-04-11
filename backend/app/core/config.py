@@ -8,9 +8,10 @@ Utilise Pydantic Settings pour la validation automatique des types
 et la gestion des valeurs par défaut.
 """
 
+import os
 from typing import List
-from pydantic_settings import BaseSettings
-from pydantic import AnyHttpUrl, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AnyHttpUrl, field_validator
 from urllib.parse import quote_plus
 
 
@@ -22,10 +23,18 @@ class Settings(BaseSettings):
     et valide leur format.
     """
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
     # Application Info
     APP_NAME: str = "ShiftWise"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
+
+    SERVER_HOST: str = "127.0.0.1"
 
     # Database Configuration
     DATABASE_HOST: str
@@ -62,7 +71,8 @@ class Settings(BaseSettings):
     # Namespace par défaut pour les VMs
     KUBERNETES_DEFAULT_NAMESPACE: str = "default"
 
-    @validator("KUBERNETES_MODE")
+    @field_validator("KUBERNETES_MODE")
+    @classmethod
     def validate_kubernetes_mode(cls, v: str) -> str:
         """
         Valide le mode de connexion Kubernetes.
@@ -80,7 +90,6 @@ class Settings(BaseSettings):
         Indique si l'application tourne dans un cluster Kubernetes.
         Détecté automatiquement via la présence de variables d'environnement.
         """
-        import os
         return bool(os.getenv("KUBERNETES_SERVICE_HOST"))
 
     @property
@@ -107,7 +116,8 @@ class Settings(BaseSettings):
     # CORS - Origins autorisées pour les requêtes cross-origin
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
 
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
     def assemble_cors_origins(cls, v: str | List[str]) -> List[str] | str:
         """
         Valide et transforme les origines CORS.
@@ -128,7 +138,8 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
 
-    @validator("LOG_LEVEL")
+    @field_validator("LOG_LEVEL")
+    @classmethod
     def validate_log_level(cls, v: str) -> str:
         """
         Valide le niveau de log.
@@ -140,12 +151,6 @@ class Settings(BaseSettings):
                 f"LOG_LEVEL doit être l'un de : {', '.join(allowed_levels)}"
             )
         return v_upper
-
-    class Config:
-        """Configuration de Pydantic Settings"""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
 
 
 # Instance globale des settings
