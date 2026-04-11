@@ -11,6 +11,8 @@ Ce fichier configure :
 - L'initialisation de la base de données
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,10 +21,28 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Lifecycle: startup and shutdown events."""
+    # Startup
+    print(f"🚀 Démarrage de {settings.APP_NAME} v{settings.APP_VERSION}")
+    print(f"📊 Base de données : {settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_NAME}")
+    init_db()
+    print("✅ Base de données initialisée")
+    print("📖 Documentation disponible sur : http://localhost:8000/docs")
+    print(f"🔐 Mode debug : {settings.DEBUG}")
+
+    yield
+
+    # Shutdown
+    print(f"🛑 Arrêt de {settings.APP_NAME}")
+
+
 # Création de l'application FastAPI
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
+    lifespan=lifespan,
     description="""
     **ShiftWise** - Plateforme intelligente de migration de machines virtuelles vers OpenShift.
 
@@ -66,34 +86,6 @@ app.add_middleware(
     allow_methods=["*"],  # Permet tous les HTTP methods
     allow_headers=["*"],  # Permet tous les headers
 )
-
-
-# Event handlers
-@app.on_event("startup")
-async def startup_event():
-    """
-    Exécuté au démarrage de l'application.
-
-    Initialise la base de données et crée les tables si nécessaire.
-    """
-    print(f"🚀 Démarrage de {settings.APP_NAME} v{settings.APP_VERSION}")
-    print(f"📊 Base de données : {settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_NAME}")
-
-    # Initialiser la base de données
-    init_db()
-    print("✅ Base de données initialisée")
-
-    # S3457 — Pas de champs de remplacement : f-string inutile, remplacée par str normale
-    print("📖 Documentation disponible sur : http://localhost:8000/docs")
-    print(f"🔐 Mode debug : {settings.DEBUG}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """
-    Exécuté à l'arrêt de l'application.
-    """
-    print(f"🛑 Arrêt de {settings.APP_NAME}")
 
 
 # Route racine
