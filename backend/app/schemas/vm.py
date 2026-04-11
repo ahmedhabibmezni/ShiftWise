@@ -67,7 +67,11 @@ class VMCreate(VMBase):
 
 # Schéma pour la mise à jour (input API)
 class VMUpdate(BaseModel):
-    """Schéma pour mettre à jour une VM"""
+    """Schéma pour mettre à jour une VM.
+
+    status et compatibility_status sont gérés exclusivement par le
+    Discovery Service et l'Analyzer — non acceptés ici.
+    """
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
     cpu_cores: Optional[int] = Field(None, ge=1, le=128)
@@ -76,8 +80,6 @@ class VMUpdate(BaseModel):
     os_type: Optional[OSTypeEnum] = None
     os_version: Optional[str] = Field(None, max_length=255)
     os_name: Optional[str] = Field(None, max_length=255)
-    status: Optional[VMStatusEnum] = None
-    compatibility_status: Optional[CompatibilityStatusEnum] = None
     compatibility_details: Optional[dict] = None
     openshift_vm_name: Optional[str] = Field(None, max_length=255)
     openshift_namespace: Optional[str] = Field(None, max_length=255)

@@ -154,8 +154,11 @@ def update_vm(
             detail=f"VM avec l'ID {vm_id} introuvable"
         )
 
+    # Champs protégés — gérés exclusivement par Discovery Service et Analyzer
+    _VM_PROTECTED_FIELDS = {"status", "compatibility_status"}
+
     # Appliquer les modifications
-    update_data = vm_update.model_dump(exclude_unset=True)
+    update_data = vm_update.model_dump(exclude_unset=True, exclude=_VM_PROTECTED_FIELDS)
     for field, value in update_data.items():
         setattr(vm, field, value)
 

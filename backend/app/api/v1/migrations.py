@@ -154,8 +154,11 @@ def update_migration(
             detail=f"Migration avec l'ID {migration_id} introuvable"
         )
 
+    # Champs protégés — gérés exclusivement par le worker Celery
+    _MIGRATION_PROTECTED_FIELDS = {"status"}
+
     # Appliquer les modifications
-    update_data = migration_update.model_dump(exclude_unset=True)
+    update_data = migration_update.model_dump(exclude_unset=True, exclude=_MIGRATION_PROTECTED_FIELDS)
     for field, value in update_data.items():
         setattr(migration, field, value)
 

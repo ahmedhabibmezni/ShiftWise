@@ -70,8 +70,10 @@ class MigrationCreate(MigrationBase):
 
 # Schéma pour la mise à jour
 class MigrationUpdate(BaseModel):
-    """Schéma pour mettre à jour une migration"""
-    status: Optional[MigrationStatusEnum] = None
+    """Schéma pour mettre à jour une migration.
+
+    status est géré exclusivement par le worker Celery — non accepté ici.
+    """
     strategy: Optional[MigrationStrategyEnum] = None
     scheduled_at: Optional[datetime] = None
     target_namespace: Optional[str] = Field(None, min_length=1, max_length=255)
