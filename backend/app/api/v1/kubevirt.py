@@ -11,7 +11,7 @@ from typing import Annotated, Optional, List
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.kubevirt_client import KubeVirtClient, KubeVirtClientError
-from app.api.deps import get_current_user, check_permission
+from app.api.deps import get_current_user, check_permission, validate_kubevirt_namespace
 from app.models.user import User
 
 router = APIRouter()
@@ -19,7 +19,7 @@ router = APIRouter()
 
 @router.get("/vms")
 def list_kubevirt_vms(
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         label_selector: Annotated[Optional[str], Query(description="Sélecteur de labels")] = None,
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
@@ -49,7 +49,7 @@ def list_kubevirt_vms(
 @router.get("/vms/{vm_name}")
 def get_kubevirt_vm(
         vm_name: str,
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -78,7 +78,7 @@ def get_kubevirt_vm(
 @router.get("/vms/{vm_name}/status")
 def get_kubevirt_vm_status(
         vm_name: str,
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):
     """
@@ -101,7 +101,7 @@ def get_kubevirt_vm_status(
 @router.post("/vms")
 def create_kubevirt_vm(
         name: Annotated[str, Query(description="Nom de la VM")],
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         cpu: Annotated[int, Query(ge=1, le=64, description="Nombre de vCPUs")] = 1,
         memory: Annotated[str, Query(description="Mémoire (ex: 2Gi, 4Gi)")] = "2Gi",
         image: Annotated[str, Query(description="Image container")] = "quay.io/containerdisks/fedora:latest",
@@ -148,7 +148,7 @@ def create_kubevirt_vm(
 @router.delete("/vms/{vm_name}")
 def delete_kubevirt_vm(
         vm_name: str,
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         current_user: Annotated[User, Depends(check_permission("vms", "delete"))] = None
 ):
     """
@@ -179,7 +179,7 @@ def delete_kubevirt_vm(
 @router.post("/vms/{vm_name}/start")
 def start_kubevirt_vm(
         vm_name: str,
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
 ):
     """
@@ -210,7 +210,7 @@ def start_kubevirt_vm(
 @router.post("/vms/{vm_name}/stop")
 def stop_kubevirt_vm(
         vm_name: str,
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
 ):
     """
@@ -240,7 +240,7 @@ def stop_kubevirt_vm(
 
 @router.get("/vmis")
 def list_kubevirt_vmis(
-        namespace: Annotated[str, Query(description="Namespace OpenShift")] = "default",
+        namespace: Annotated[str, Depends(validate_kubevirt_namespace)],
         label_selector: Annotated[Optional[str], Query(description="Sélecteur de labels")] = None,
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):

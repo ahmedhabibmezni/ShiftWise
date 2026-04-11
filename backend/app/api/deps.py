@@ -266,6 +266,39 @@ def get_current_user_tenant(
     return current_user.tenant_id
 
 
+def validate_kubevirt_namespace(
+        namespace: str | None = None,
+        current_user: User = Depends(get_current_user)
+) -> str:
+    """
+    Valide que le namespace demandé appartient au tenant de l'utilisateur.
+
+    - Superuser : accepte n'importe quel namespace, ou retourne le namespace du tenant par défaut.
+    - Utilisateur normal : namespace doit être shiftwise-{tenant_id} ou absent.
+
+    Args:
+        namespace: Namespace OpenShift demandé (optionnel)
+        current_user: Utilisateur authentifié
+
+    Returns:
+        str: Namespace validé
+
+    Raises:
+        HTTPException 403: Si le namespace ne correspond pas au tenant de l'utilisateur
+    """
+    allowed = f"shiftwise-{current_user.tenant_id}"
+
+    if current_user.is_superuser:
+        return namespace or allowed
+
+    if namespace and namespace != allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Accès interdit au namespace '{namespace}'"
+        )
+    return allowed
+
+
 class PermissionChecker:
     """
     Classe pour vérifier plusieurs permissions à la fois.
