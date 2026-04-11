@@ -126,47 +126,6 @@ class Hypervisor(BaseModel):
         threshold = datetime.now(timezone.utc) - timedelta(hours=24)
         return last_sync < threshold
 
-    def to_dict(self, include_credentials: bool = False) -> dict:
-        """
-        Conversion en dictionnaire pour API.
-
-        Args:
-            include_credentials: Si True, inclut username/password (ATTENTION: usage admin uniquement)
-        """
-        data = {
-            "id": str(self.id),
-            "name": self.name,
-            "description": self.description,
-            "type": self.type.value,
-            "host": self.host,
-            "port": self.port,
-            "verify_ssl": self.verify_ssl,
-            "status": self.status.value,
-            "is_active": self.is_active,
-            "last_sync_at": self.last_sync_at.isoformat() if self.last_sync_at else None,
-            "last_successful_connection": self.last_successful_connection.isoformat() if self.last_successful_connection else None,
-            "last_error": self.last_error,
-            "total_vms_discovered": self.total_vms_discovered,
-            "total_vms_migrated": self.total_vms_migrated,
-            "connection_config": self.connection_config,
-            "tags": self.tags,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "is_reachable": self.is_reachable,
-            "connection_url": self.connection_url,
-            "needs_sync": self.needs_sync
-        }
-
-        # Inclure credentials uniquement si explicitement demandé (usage admin)
-        if include_credentials:
-            data["username"] = self.username
-            data["password"] = self.password  # ATTENTION: Sensible !
-        else:
-            data["username"] = self.username
-            # Ne jamais exposer le password dans l'API par défaut
-
-        return data
-
     def update_status(self, new_status: HypervisorStatus, error_message: str = None):
         """Met à jour le statut de l'hyperviseur"""
         self.status = new_status
