@@ -79,6 +79,6 @@ def init_db() -> None:
     En production, utiliser Alembic :
         alembic upgrade head
     """
-    # IMPORTANT : importer tous les modèles ici
-    # from app.models import user, role
+    # Importer tous les modèles pour que SQLAlchemy les enregistre dans Base.metadata
+    from app.models import user, role, hypervisor, virtual_machine, migration  # noqa: F401
     Base.metadata.create_all(bind=engine)
