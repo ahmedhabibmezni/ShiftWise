@@ -8,7 +8,8 @@ Supporte :
 - KVM/QEMU (via libvirt)
 """
 
-from typing import List, Dict, Optional, Any
+import traceback
+from typing import List, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 import logging
@@ -57,9 +58,9 @@ class DiscoveryService:
 
         logger.info(f"Début découverte hypervisor {hypervisor.name} (type: {hypervisor.type})")
 
-        # Marquer le début de la synchronisation
+        # Marquer le début de la synchronisation — last_sync_at n'est PAS mis à jour ici.
+        # Il sera mis à jour par mark_sync_completed(success=True) uniquement.
         hypervisor.status = HypervisorStatus.DISCOVERING
-        hypervisor.last_sync_at = datetime.now(timezone.utc)
         self.db.commit()
 
         try:
@@ -87,7 +88,7 @@ class DiscoveryService:
 
             return stats
 
-        except Exception as e:
+        except (DiscoveryError, ConnectionError, TimeoutError) as e:
             logger.error(f"Erreur découverte hypervisor {hypervisor.name}: {str(e)}")
             hypervisor.update_status(HypervisorStatus.ERROR, error_message=str(e))
             hypervisor.mark_sync_completed(success=False)
@@ -347,8 +348,7 @@ class DiscoveryService:
                     stats["new_vms"] += 1
                     logger.info(f"✅ Nouvelle VM créée: {vm_data['name']} (ID: {new_vm.id})")
 
-            except Exception as e:
-                import traceback
+            except (ValueError, KeyError, AttributeError, TypeError) as e:
                 logger.error(f"❌ Erreur sauvegarde VM {vm_data.get('name', 'unknown')}: {str(e)}")
                 logger.error(traceback.format_exc())
                 stats["errors"] += 1
@@ -377,9 +377,9 @@ class DiscoveryService:
             source_hypervisor_id=hypervisor.id,
             source_uuid=vm_data["source_uuid"],
             source_name=vm_data["source_name"],
-            cpu_cores=vm_data.get("cpu_cores"),
-            memory_mb=vm_data.get("memory_mb"),
-            disk_gb=vm_data.get("disk_gb"),
+            cpu_cores=vm_data.get("cpu_cores", 1),
+            memory_mb=vm_data.get("memory_mb", 1024),
+            disk_gb=vm_data.get("disk_gb", 10),
             os_type=vm_data.get("os_type"),
             os_version=vm_data.get("os_version"),
             os_name=vm_data.get("os_name"),
