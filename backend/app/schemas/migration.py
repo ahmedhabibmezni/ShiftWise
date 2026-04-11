@@ -78,6 +78,12 @@ class MigrationUpdate(BaseModel):
     tags: Optional[dict] = None
 
 
+# Schéma pour annuler une migration
+class MigrationCancel(BaseModel):
+    """Schéma pour annuler une migration"""
+    reason: Optional[str] = Field(None, max_length=500, description="Raison de l'annulation")
+
+
 # Schéma pour mettre à jour la progression
 class MigrationProgressUpdate(BaseModel):
     """Schéma pour mettre à jour la progression"""

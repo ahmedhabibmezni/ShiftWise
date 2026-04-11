@@ -4,6 +4,8 @@ Routes API pour la gestion des Migrations
 Endpoints CRUD pour les migrations de VMs.
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -15,6 +17,7 @@ from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.virtual_machine import VirtualMachine
 from app.schemas.migration import (
+    MigrationCancel,
     MigrationCreate,
     MigrationUpdate,
     MigrationProgressUpdate,
@@ -260,6 +263,7 @@ def start_migration(
 @router.post("/{migration_id}/cancel", response_model=MigrationResponse)
 def cancel_migration(
         migration_id: int,
+        cancel_data: MigrationCancel = None,
         db: Annotated[Session, Depends(get_db)] = None,
         current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
 ):
@@ -287,6 +291,10 @@ def cancel_migration(
 
     # Annuler
     migration.status = MigrationStatus.CANCELLED
+    migration.completed_at = datetime.now(timezone.utc)
+    migration.success = False
+    migration.error_message = (cancel_data.reason if cancel_data and cancel_data.reason
+                               else "Annulée par l'utilisateur")
 
     db.commit()
     db.refresh(migration)
