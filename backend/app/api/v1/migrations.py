@@ -106,10 +106,11 @@ def create_migration(
             detail=f"La VM '{vm.name}' ne peut pas être migrée (statut: {vm.status.value}, compatibilité: {vm.compatibility_status.value})"
         )
 
-    # Créer la migration
+    # Créer la migration — namespace imposé par le tenant, non configurable par le client
     migration = Migration(
         **migration_data.model_dump(exclude_unset=True),
         tenant_id=current_user.tenant_id,
+        target_namespace=f"shiftwise-{current_user.tenant_id}",
         status=MigrationStatus.PENDING
     )
 
@@ -168,8 +169,8 @@ def update_migration(
             detail=f"Migration avec l'ID {migration_id} introuvable"
         )
 
-    # Champs protégés — gérés exclusivement par le worker Celery
-    _MIGRATION_PROTECTED_FIELDS = {"status"}
+    # Champs protégés — status par le worker Celery, target_namespace immuable après création
+    _MIGRATION_PROTECTED_FIELDS = {"status", "target_namespace"}
 
     # Appliquer les modifications
     update_data = migration_update.model_dump(exclude_unset=True, exclude=_MIGRATION_PROTECTED_FIELDS)

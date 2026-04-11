@@ -44,12 +44,7 @@ class MigrationBase(BaseModel):
         MigrationStrategyEnum.AUTO,
         description="Stratégie de migration"
     )
-    target_namespace: str = Field(
-        "default",
-        min_length=1,
-        max_length=255,
-        description="Namespace OpenShift de destination"
-    )
+    # target_namespace RETIRÉ — auto-calculé depuis le tenant (shiftwise-{tenant_id})
     target_storage_class: str = Field(
         "nfs-client",
         min_length=1,
@@ -76,7 +71,7 @@ class MigrationUpdate(BaseModel):
     """
     strategy: Optional[MigrationStrategyEnum] = None
     scheduled_at: Optional[datetime] = None
-    target_namespace: Optional[str] = Field(None, min_length=1, max_length=255)
+    # target_namespace RETIRÉ — immuable après création
     target_storage_class: Optional[str] = Field(None, min_length=1, max_length=255)
     migration_config: Optional[dict] = None
     notes: Optional[str] = None
@@ -99,6 +94,7 @@ class MigrationResponse(MigrationBase):
     id: int
     vm_id: int
     status: MigrationStatusEnum
+    target_namespace: str  # lecture seule — auto-calculé à la création
     scheduled_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
