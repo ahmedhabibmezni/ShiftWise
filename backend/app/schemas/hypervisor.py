@@ -31,6 +31,7 @@ class HypervisorStatusEnum(str, Enum):
     ERROR = "error"
     UNREACHABLE = "unreachable"
     AUTHENTICATING = "authenticating"
+    DISCOVERING = "discovering"
     UNKNOWN = "unknown"
 
 
