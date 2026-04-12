@@ -24,7 +24,8 @@ from app.core.security import (
     decode_token,
     verify_token_type,
     get_password_hash,
-    verify_password
+    verify_password,
+    validate_password_strength
 )
 from app.schemas.auth import (
     LoginRequest,
@@ -299,6 +300,14 @@ def change_password(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Le nouveau mot de passe doit être différent de l'ancien"
+        )
+
+    # Valider la force du nouveau mot de passe
+    is_valid, error_msg = validate_password_strength(password_data.new_password)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
         )
 
     # Hasher et mettre à jour le mot de passe

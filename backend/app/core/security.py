@@ -8,7 +8,7 @@ Ce module gère :
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union, Any
+from typing import Optional
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 
@@ -88,8 +88,8 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(
-        subject: Union[str, Any],
-        expires_delta: Optional[timedelta] = None
+        subject: str,
+        expires_delta: timedelta | None = None
 ) -> str:
     """
     Crée un token JWT d'accès.
@@ -132,8 +132,8 @@ def create_access_token(
 
 
 def create_refresh_token(
-        subject: Union[str, Any],
-        expires_delta: Optional[timedelta] = None
+        subject: str,
+        expires_delta: timedelta | None = None
 ) -> str:
     """
     Crée un token JWT de refresh.
