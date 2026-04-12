@@ -163,7 +163,7 @@ def create_hypervisor(db: Session, data: dict, tenant_id: str) -> Hypervisor:
     """
     existing = get_hypervisor_by_name(db, data.get("name", ""))
     if existing:
-        raise ValueError(f"Un hypervisor avec le nom '{data['name']}' existe deja")
+        raise ValueError(f"Un hypervisor avec le nom '{data['name']}' existe déjà")
 
     hypervisor = Hypervisor(
         **data,

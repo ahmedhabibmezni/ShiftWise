@@ -15,7 +15,6 @@ from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
-from app.models.virtual_machine import VirtualMachine
 from app.schemas.migration import (
     MigrationCancel,
     MigrationCreate,
@@ -25,6 +24,8 @@ from app.schemas.migration import (
     MigrationListResponse,
     MigrationStats
 )
+from app.crud import migration as crud_migration
+from app.crud import vm as crud_vm
 
 router = APIRouter()
 
@@ -45,30 +46,17 @@ def list_migrations(
 
     **Permissions requises :** migrations:read
     """
-    # Construction de la requête
-    query = db.query(Migration)
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
-    # Multi-tenancy isolation
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
+    total = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=status_filter,
+        strategy=strategy, vm_id=vm_id
+    )
+    migrations = crud_migration.get_migrations(
+        db, skip=skip, limit=limit, tenant_id=tenant_id,
+        status=status_filter, strategy=strategy, vm_id=vm_id
+    )
 
-    # Filtres
-    if status_filter:
-        query = query.filter(Migration.status == status_filter)
-
-    if strategy:
-        query = query.filter(Migration.strategy == strategy)
-
-    if vm_id:
-        query = query.filter(Migration.vm_id == vm_id)
-
-    # Total count
-    total = query.count()
-
-    # Pagination
-    migrations = query.order_by(Migration.created_at.desc()).offset(skip).limit(limit).all()
-
-    # Convertir en schémas Pydantic
     items = [MigrationResponse.model_validate(m) for m in migrations]
 
     return MigrationListResponse(
@@ -91,10 +79,8 @@ def create_migration(
     **Permissions requises :** migrations:create
     """
     # Vérifier que la VM existe (et appartient au tenant de l'utilisateur)
-    vm_query = db.query(VirtualMachine).filter(VirtualMachine.id == migration_data.vm_id)
-    if not current_user.is_superuser:
-        vm_query = vm_query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-    vm = vm_query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    vm = crud_vm.get_vm(db, migration_data.vm_id, tenant_id=tenant_id)
 
     if not vm:
         raise HTTPException(
@@ -110,19 +96,90 @@ def create_migration(
         )
 
     # Créer la migration — namespace imposé par le tenant, non configurable par le client
-    migration = Migration(
-        **migration_data.model_dump(exclude_unset=True),
+    migration = crud_migration.create_migration(
+        db,
+        data=migration_data.model_dump(exclude_unset=True),
         tenant_id=current_user.tenant_id,
-        target_namespace=f"shiftwise-{current_user.tenant_id}",
-        status=MigrationStatus.PENDING
+        target_namespace=f"shiftwise-{current_user.tenant_id}"
     )
-
-    db.add(migration)
-    db.commit()
-    db.refresh(migration)
 
     return MigrationResponse.model_validate(migration)
 
+
+# ---------------------------------------------------------------------------
+# Routes statiques — DOIVENT être déclarées avant les routes dynamiques /{id}
+# ---------------------------------------------------------------------------
+
+@router.get("/stats/summary", response_model=MigrationStats)
+def get_migrations_stats(
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission("migrations", "read"))] = None
+):
+    """
+    Statistiques globales des migrations.
+
+    **Permissions requises :** migrations:read
+    """
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+
+    total = crud_migration.get_migrations_count(db, tenant_id=tenant_id)
+    completed = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.COMPLETED
+    )
+    failed = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.FAILED
+    )
+    pending = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.PENDING
+    )
+    cancelled = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.CANCELLED
+    )
+    rollback = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.ROLLBACK
+    )
+    rolled_back = crud_migration.get_migrations_count(
+        db, tenant_id=tenant_id, status=MigrationStatus.ROLLED_BACK
+    )
+    in_progress = total - completed - failed - pending - cancelled - rollback - rolled_back
+
+    # Taux de succès
+    success_rate = (completed / total * 100) if total > 0 else 0.0
+
+    # Durée moyenne (migrations terminées)
+    completed_migrations = crud_migration.get_migrations(
+        db, tenant_id=tenant_id, status=MigrationStatus.COMPLETED,
+        skip=0, limit=10000
+    )
+
+    avg_duration = None
+    if completed_migrations:
+        total_duration = sum(m.duration_seconds for m in completed_migrations)
+        avg_duration = int(total_duration / len(completed_migrations))
+
+    # Total données transférées — scopé par tenant
+    total_transferred_query = db.query(func.sum(Migration.transferred_gb))
+    if tenant_id is not None:
+        total_transferred_query = total_transferred_query.filter(
+            Migration.tenant_id == tenant_id
+        )
+    total_transferred = total_transferred_query.scalar() or 0.0
+
+    return MigrationStats(
+        total_migrations=total,
+        completed=completed,
+        failed=failed,
+        in_progress=in_progress,
+        pending=pending,
+        success_rate=success_rate,
+        average_duration_seconds=avg_duration,
+        total_data_transferred_gb=float(total_transferred)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes dynamiques /{migration_id}
+# ---------------------------------------------------------------------------
 
 @router.get("/{migration_id}", response_model=MigrationResponse)
 def get_migration(
@@ -135,10 +192,8 @@ def get_migration(
 
     **Permissions requises :** migrations:read
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
 
     if not migration:
         raise HTTPException(
@@ -161,27 +216,15 @@ def update_migration(
 
     **Permissions requises :** migrations:update
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    update_data = migration_update.model_dump(exclude_unset=True)
+    migration = crud_migration.update_migration(db, migration_id, update_data, tenant_id=tenant_id)
 
     if not migration:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Migration avec l'ID {migration_id} introuvable"
         )
-
-    # Champs protégés — status par le worker Celery, target_namespace immuable après création
-    _MIGRATION_PROTECTED_FIELDS = {"status", "target_namespace"}
-
-    # Appliquer les modifications
-    update_data = migration_update.model_dump(exclude_unset=True, exclude=_MIGRATION_PROTECTED_FIELDS)
-    for field, value in update_data.items():
-        setattr(migration, field, value)
-
-    db.commit()
-    db.refresh(migration)
 
     return MigrationResponse.model_validate(migration)
 
@@ -197,26 +240,21 @@ def delete_migration(
 
     **Permissions requises :** migrations:delete
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
-    if not migration:
+    try:
+        deleted = crud_migration.delete_migration(db, migration_id, tenant_id=tenant_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Migration avec l'ID {migration_id} introuvable"
         )
-
-    # Ne pas supprimer une migration en cours
-    if migration.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Impossible de supprimer une migration en cours"
-        )
-
-    db.delete(migration)
-    db.commit()
 
     return None
 
@@ -232,10 +270,8 @@ def start_migration(
 
     **Permissions requises :** migrations:update
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
 
     if not migration:
         raise HTTPException(
@@ -272,10 +308,8 @@ def cancel_migration(
 
     **Permissions requises :** migrations:update
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
 
     if not migration:
         raise HTTPException(
@@ -314,10 +348,8 @@ def update_migration_progress(
 
     **Permissions requises :** migrations:update
     """
-    query = db.query(Migration).filter(Migration.id == migration_id)
-    if not current_user.is_superuser:
-        query = query.filter(Migration.tenant_id == current_user.tenant_id)
-    migration = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
 
     if not migration:
         raise HTTPException(
@@ -342,68 +374,3 @@ def update_migration_progress(
     db.refresh(migration)
 
     return MigrationResponse.model_validate(migration)
-
-
-@router.get("/stats/summary", response_model=MigrationStats)
-def get_migrations_stats(
-        db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "read"))] = None
-):
-    """
-    Statistiques globales des migrations.
-
-    **Permissions requises :** migrations:read
-    """
-    def _scoped_query():
-        q = db.query(Migration)
-        if not current_user.is_superuser:
-            q = q.filter(Migration.tenant_id == current_user.tenant_id)
-        return q
-
-    total = _scoped_query().count()
-    completed = _scoped_query().filter(Migration.status == MigrationStatus.COMPLETED).count()
-    failed = _scoped_query().filter(Migration.status == MigrationStatus.FAILED).count()
-
-    # Migrations en cours
-    in_progress = _scoped_query().filter(Migration.status.in_([
-        MigrationStatus.VALIDATING,
-        MigrationStatus.PREPARING,
-        MigrationStatus.TRANSFERRING,
-        MigrationStatus.CONFIGURING,
-        MigrationStatus.STARTING,
-        MigrationStatus.VERIFYING
-    ])).count()
-
-    pending = _scoped_query().filter(Migration.status == MigrationStatus.PENDING).count()
-
-    # Taux de succès
-    success_rate = (completed / total * 100) if total > 0 else 0.0
-
-    # Durée moyenne (migrations terminées)
-    completed_migrations = _scoped_query().filter(
-        Migration.status == MigrationStatus.COMPLETED
-    ).all()
-
-    avg_duration = None
-    if completed_migrations:
-        total_duration = sum(m.duration_seconds for m in completed_migrations)
-        avg_duration = int(total_duration / len(completed_migrations))
-
-    # Total données transférées — scopé par tenant
-    total_transferred_query = db.query(func.sum(Migration.transferred_gb))
-    if not current_user.is_superuser:
-        total_transferred_query = total_transferred_query.filter(
-            Migration.tenant_id == current_user.tenant_id
-        )
-    total_transferred = total_transferred_query.scalar() or 0.0
-
-    return MigrationStats(
-        total_migrations=total,
-        completed=completed,
-        failed=failed,
-        in_progress=in_progress,
-        pending=pending,
-        success_rate=success_rate,
-        average_duration_seconds=avg_duration,
-        total_data_transferred_gb=float(total_transferred)
-    )

@@ -11,13 +11,14 @@ from typing import Annotated, Optional
 from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
-from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus
+from app.models.virtual_machine import VMStatus, CompatibilityStatus
 from app.schemas.vm import (
     VMCreate,
     VMUpdate,
     VMResponse,
     VMListResponse
 )
+from app.crud import vm as crud_vm
 
 router = APIRouter()
 
@@ -38,38 +39,18 @@ def list_vms(
 
     **Permissions requises :** vms:read
     """
-    # Construction de la requête
-    query = db.query(VirtualMachine)
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
-    # Multi-tenancy isolation
-    if not current_user.is_superuser:
-        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
+    total = crud_vm.get_vms_count(
+        db, tenant_id=tenant_id, status=status_filter,
+        compatibility=compatibility, hypervisor_id=hypervisor_id, search=search
+    )
+    vms = crud_vm.get_vms(
+        db, skip=skip, limit=limit, tenant_id=tenant_id,
+        status=status_filter, compatibility=compatibility,
+        hypervisor_id=hypervisor_id, search=search
+    )
 
-    # Filtres
-    if status_filter:
-        query = query.filter(VirtualMachine.status == status_filter)
-
-    if compatibility:
-        query = query.filter(VirtualMachine.compatibility_status == compatibility)
-
-    if hypervisor_id:
-        query = query.filter(VirtualMachine.source_hypervisor_id == hypervisor_id)
-
-    if search:
-        search_filter = f"%{search}%"
-        query = query.filter(
-            (VirtualMachine.name.ilike(search_filter)) |
-            (VirtualMachine.ip_address.ilike(search_filter)) |
-            (VirtualMachine.hostname.ilike(search_filter))
-        )
-
-    # Total count
-    total = query.count()
-
-    # Pagination
-    vms = query.offset(skip).limit(limit).all()
-
-    # Convertir en schémas Pydantic
     items = [VMResponse.model_validate(vm) for vm in vms]
 
     return VMListResponse(
@@ -91,31 +72,61 @@ def create_vm(
 
     **Permissions requises :** vms:create
     """
-    # Vérifier si une VM avec le même nom existe déjà
-    existing_vm = db.query(VirtualMachine).filter(
-        VirtualMachine.name == vm_data.name
-    ).first()
-
-    if existing_vm:
+    try:
+        vm = crud_vm.create_vm(
+            db,
+            data=vm_data.model_dump(exclude_unset=True),
+            tenant_id=current_user.tenant_id
+        )
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Une VM avec le nom '{vm_data.name}' existe déjà"
+            detail=str(e)
         )
-
-    # Créer la VM
-    vm = VirtualMachine(
-        **vm_data.model_dump(exclude_unset=True),
-        tenant_id=current_user.tenant_id,
-        status=VMStatus.DISCOVERED,
-        compatibility_status=CompatibilityStatus.UNKNOWN
-    )
-
-    db.add(vm)
-    db.commit()
-    db.refresh(vm)
 
     return VMResponse.model_validate(vm)
 
+
+# ---------------------------------------------------------------------------
+# Routes statiques — DOIVENT être déclarées avant les routes dynamiques /{id}
+# ---------------------------------------------------------------------------
+
+@router.get("/stats/summary")
+def get_vms_stats(
+    db: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+):
+    """
+    Statistiques globales des VMs.
+
+    **Permissions requises :** vms:read
+    """
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+
+    total = crud_vm.get_vms_count(db, tenant_id=tenant_id)
+
+    stats = {
+        "total": total,
+        "by_status": {},
+        "by_compatibility": {}
+    }
+
+    # Par statut
+    for status_value in VMStatus:
+        count = crud_vm.get_vms_count(db, tenant_id=tenant_id, status=status_value)
+        stats["by_status"][status_value.value] = count
+
+    # Par compatibilité
+    for compat in CompatibilityStatus:
+        count = crud_vm.get_vms_count(db, tenant_id=tenant_id, compatibility=compat)
+        stats["by_compatibility"][compat.value] = count
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Routes dynamiques /{vm_id}
+# ---------------------------------------------------------------------------
 
 @router.get("/{vm_id}", response_model=VMResponse)
 def get_vm(
@@ -128,10 +139,8 @@ def get_vm(
 
     **Permissions requises :** vms:read
     """
-    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
-    if not current_user.is_superuser:
-        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-    vm = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    vm = crud_vm.get_vm(db, vm_id, tenant_id=tenant_id)
 
     if not vm:
         raise HTTPException(
@@ -154,27 +163,15 @@ def update_vm(
 
     **Permissions requises :** vms:update
     """
-    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
-    if not current_user.is_superuser:
-        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-    vm = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    update_data = vm_update.model_dump(exclude_unset=True)
+    vm = crud_vm.update_vm(db, vm_id, update_data, tenant_id=tenant_id)
 
     if not vm:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"VM avec l'ID {vm_id} introuvable"
         )
-
-    # Champs protégés — gérés exclusivement par Discovery Service et Analyzer
-    _VM_PROTECTED_FIELDS = {"status", "compatibility_status"}
-
-    # Appliquer les modifications
-    update_data = vm_update.model_dump(exclude_unset=True, exclude=_VM_PROTECTED_FIELDS)
-    for field, value in update_data.items():
-        setattr(vm, field, value)
-
-    db.commit()
-    db.refresh(vm)
 
     return VMResponse.model_validate(vm)
 
@@ -192,19 +189,14 @@ def delete_vm(
 
     ⚠️ Attention : Supprime également toutes les migrations associées.
     """
-    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
-    if not current_user.is_superuser:
-        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-    vm = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    deleted = crud_vm.delete_vm(db, vm_id, tenant_id=tenant_id)
 
-    if not vm:
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"VM avec l'ID {vm_id} introuvable"
         )
-
-    db.delete(vm)
-    db.commit()
 
     return None
 
@@ -220,10 +212,8 @@ def get_vm_migrations(
 
     **Permissions requises :** vms:read, migrations:read
     """
-    query = db.query(VirtualMachine).filter(VirtualMachine.id == vm_id)
-    if not current_user.is_superuser:
-        query = query.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-    vm = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    vm = crud_vm.get_vm(db, vm_id, tenant_id=tenant_id)
 
     if not vm:
         raise HTTPException(
@@ -241,44 +231,3 @@ def get_vm_migrations(
         "total_migrations": len(migrations),
         "migrations": migrations
     }
-
-
-@router.get("/stats/summary")
-def get_vms_stats(
-    db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
-):
-    """
-    Statistiques globales des VMs.
-
-    **Permissions requises :** vms:read
-    """
-    def _scoped_query():
-        q = db.query(VirtualMachine)
-        if not current_user.is_superuser:
-            q = q.filter(VirtualMachine.tenant_id == current_user.tenant_id)
-        return q
-
-    total = _scoped_query().count()
-
-    stats = {
-        "total": total,
-        "by_status": {},
-        "by_compatibility": {}
-    }
-
-    # Par statut
-    for status_value in VMStatus:
-        count = _scoped_query().filter(
-            VirtualMachine.status == status_value
-        ).count()
-        stats["by_status"][status_value.value] = count
-
-    # Par compatibilité
-    for compat in CompatibilityStatus:
-        count = _scoped_query().filter(
-            VirtualMachine.compatibility_status == compat
-        ).count()
-        stats["by_compatibility"][compat.value] = count
-
-    return stats

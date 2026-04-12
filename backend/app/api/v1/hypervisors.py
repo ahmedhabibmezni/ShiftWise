@@ -11,7 +11,7 @@ from typing import Annotated, Optional
 from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
-from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
+from app.models.hypervisor import HypervisorType, HypervisorStatus
 from app.schemas.hypervisor import (
     HypervisorCreate,
     HypervisorUpdate,
@@ -21,6 +21,7 @@ from app.schemas.hypervisor import (
     HypervisorTestConnectionResponse
 )
 from app.services.discovery import create_discovery_service, DiscoveryError
+from app.crud import hypervisor as crud_hypervisor
 
 router = APIRouter()
 
@@ -43,37 +44,18 @@ def list_hypervisors(
 
     **Permissions requises :** hypervisors:read
     """
-    # Construction de la requête
-    query = db.query(Hypervisor)
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
-    # Multi-tenancy isolation
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
+    total = crud_hypervisor.get_hypervisors_count(
+        db, tenant_id=tenant_id, hypervisor_type=hypervisor_type,
+        status=status_filter, is_active=is_active, search=search
+    )
+    hypervisors = crud_hypervisor.get_hypervisors(
+        db, skip=skip, limit=limit, tenant_id=tenant_id,
+        hypervisor_type=hypervisor_type, status=status_filter,
+        is_active=is_active, search=search
+    )
 
-    # Filtres
-    if hypervisor_type:
-        query = query.filter(Hypervisor.type == hypervisor_type)
-
-    if status_filter:
-        query = query.filter(Hypervisor.status == status_filter)
-
-    if is_active is not None:
-        query = query.filter(Hypervisor.is_active == is_active)
-
-    if search:
-        search_filter = f"%{search}%"
-        query = query.filter(
-            (Hypervisor.name.ilike(search_filter)) |
-            (Hypervisor.host.ilike(search_filter))
-        )
-
-    # Total count
-    total = query.count()
-
-    # Pagination
-    hypervisors = query.offset(skip).limit(limit).all()
-
-    # Convertir en schémas Pydantic
     items = [HypervisorResponse.model_validate(h) for h in hypervisors]
 
     return HypervisorListResponse(
@@ -98,27 +80,17 @@ def create_hypervisor(
     ⚠️ Attention : Le mot de passe est stocké en clair pour le moment.
     TODO: Implémenter le chiffrement avec Fernet.
     """
-    # Vérifier si un hypervisor avec le même nom existe déjà
-    existing = db.query(Hypervisor).filter(
-        Hypervisor.name == hypervisor_data.name
-    ).first()
-
-    if existing:
+    try:
+        hypervisor = crud_hypervisor.create_hypervisor(
+            db,
+            data=hypervisor_data.model_dump(exclude_unset=True),
+            tenant_id=current_user.tenant_id
+        )
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Un hypervisor avec le nom '{hypervisor_data.name}' existe déjà"
+            detail=str(e)
         )
-
-    # Créer l'hypervisor
-    hypervisor = Hypervisor(
-        **hypervisor_data.model_dump(exclude_unset=True),
-        tenant_id=current_user.tenant_id,
-        status=HypervisorStatus.UNKNOWN
-    )
-
-    db.add(hypervisor)
-    db.commit()
-    db.refresh(hypervisor)
 
     return HypervisorResponse.model_validate(hypervisor)
 
@@ -137,31 +109,27 @@ def get_hypervisors_stats(
 
     **Permissions requises :** hypervisors:read
     """
-    def _scoped_query():
-        q = db.query(Hypervisor)
-        if not current_user.is_superuser:
-            q = q.filter(Hypervisor.tenant_id == current_user.tenant_id)
-        return q
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
-    total = _scoped_query().count()
+    total = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id)
 
     stats = {
         "total": total,
         "by_type": {},
         "by_status": {},
-        "active": _scoped_query().filter(Hypervisor.is_active == True).count(),
-        "inactive": _scoped_query().filter(Hypervisor.is_active == False).count()
+        "active": crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, is_active=True),
+        "inactive": crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, is_active=False)
     }
 
     # Par type
     for hyp_type in HypervisorType:
-        count = _scoped_query().filter(Hypervisor.type == hyp_type).count()
+        count = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, hypervisor_type=hyp_type)
         if count > 0:
             stats["by_type"][hyp_type.value] = count
 
     # Par statut
     for hyp_status in HypervisorStatus:
-        count = _scoped_query().filter(Hypervisor.status == hyp_status).count()
+        count = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, status=hyp_status)
         if count > 0:
             stats["by_status"][hyp_status.value] = count
 
@@ -211,10 +179,8 @@ def get_hypervisor(
 
     **Permissions requises :** hypervisors:read
     """
-    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
-    hypervisor = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    hypervisor = crud_hypervisor.get_hypervisor(db, hypervisor_id, tenant_id=tenant_id)
 
     if not hypervisor:
         raise HTTPException(
@@ -237,24 +203,15 @@ def update_hypervisor(
 
     **Permissions requises :** hypervisors:update
     """
-    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
-    hypervisor = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    update_data = hypervisor_update.model_dump(exclude_unset=True)
+    hypervisor = crud_hypervisor.update_hypervisor(db, hypervisor_id, update_data, tenant_id=tenant_id)
 
     if not hypervisor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Hypervisor avec l'ID {hypervisor_id} introuvable"
         )
-
-    # Appliquer les modifications
-    update_data = hypervisor_update.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(hypervisor, field, value)
-
-    db.commit()
-    db.refresh(hypervisor)
 
     return HypervisorResponse.model_validate(hypervisor)
 
@@ -273,19 +230,14 @@ def delete_hypervisor(
     ⚠️ Attention : Les VMs associées auront leur source_hypervisor_id mis à NULL
     (SET NULL). Les migrations en cours sur ces VMs deviennent orphelines.
     """
-    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
-    hypervisor = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    deleted = crud_hypervisor.delete_hypervisor(db, hypervisor_id, tenant_id=tenant_id)
 
-    if not hypervisor:
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Hypervisor avec l'ID {hypervisor_id} introuvable"
         )
-
-    db.delete(hypervisor)
-    db.commit()
 
     return None
 
@@ -301,10 +253,8 @@ def get_hypervisor_vms(
 
     **Permissions requises :** hypervisors:read, vms:read
     """
-    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
-    hypervisor = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    hypervisor = crud_hypervisor.get_hypervisor(db, hypervisor_id, tenant_id=tenant_id)
 
     if not hypervisor:
         raise HTTPException(
@@ -338,10 +288,8 @@ def sync_hypervisor(
     Lance une découverte des VMs sur l'hypervisor source.
     Utilise le Discovery Service pour scanner et importer les VMs.
     """
-    query = db.query(Hypervisor).filter(Hypervisor.id == hypervisor_id)
-    if not current_user.is_superuser:
-        query = query.filter(Hypervisor.tenant_id == current_user.tenant_id)
-    hypervisor = query.first()
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    hypervisor = crud_hypervisor.get_hypervisor(db, hypervisor_id, tenant_id=tenant_id)
 
     if not hypervisor:
         raise HTTPException(

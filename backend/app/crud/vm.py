@@ -170,7 +170,7 @@ def create_vm(db: Session, data: dict, tenant_id: str) -> VirtualMachine:
     """
     existing = get_vm_by_name(db, data.get("name", ""))
     if existing:
-        raise ValueError(f"Une VM avec le nom '{data['name']}' existe deja")
+        raise ValueError(f"Une VM avec le nom '{data['name']}' existe déjà")
 
     vm = VirtualMachine(
         **data,
