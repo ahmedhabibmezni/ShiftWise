@@ -65,9 +65,9 @@ class Migration(BaseModel):
     strategy = Column(SQLEnum(MigrationStrategy), nullable=False, default=MigrationStrategy.AUTO)
 
     # Timing
-    scheduled_at = Column(DateTime, nullable=True)  # Migration planifiée
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)  # Migration planifiée
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Progression
     progress_percentage = Column(Float, default=0.0)  # 0-100
@@ -97,8 +97,8 @@ class Migration(BaseModel):
     # Conversion (si nécessaire)
     requires_conversion = Column(Boolean, default=False)
     conversion_format = Column(String(50), nullable=True)  # Ex: "vmdk_to_qcow2"
-    conversion_started_at = Column(DateTime, nullable=True)
-    conversion_completed_at = Column(DateTime, nullable=True)
+    conversion_started_at = Column(DateTime(timezone=True), nullable=True)
+    conversion_completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Validation
     pre_migration_checks = Column(JSON, nullable=True)   # Résultats checks pré-migration

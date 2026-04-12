@@ -100,8 +100,8 @@ class VirtualMachine(BaseModel):
     openshift_node = Column(String(255), nullable=True)  # Node où tourne la VM
 
     # Métadonnées de découverte
-    discovered_at = Column(DateTime, nullable=True)
-    last_seen_at = Column(DateTime, nullable=True)
+    discovered_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
     # Métadonnées supplémentaires
     tags = Column(JSON, nullable=True)  # Tags personnalisés

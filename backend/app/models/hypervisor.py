@@ -73,8 +73,8 @@ class Hypervisor(BaseModel):
     is_active = Column(Boolean, default=True)  # Activer/Désactiver l'hyperviseur
 
     # Métadonnées de synchronisation
-    last_sync_at = Column(DateTime, nullable=True)  # Dernière sync VMs
-    last_successful_connection = Column(DateTime, nullable=True)
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)  # Dernière sync VMs
+    last_successful_connection = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)  # Dernier message d'erreur
 
     # Statistiques
