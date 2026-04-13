@@ -168,9 +168,15 @@ def create_vm(db: Session, data: dict, tenant_id: str) -> VirtualMachine:
     Raises:
         ValueError: Si une VM avec ce nom existe deja
     """
-    existing = get_vm_by_name(db, data.get("name", ""))
+    existing = db.query(VirtualMachine).filter(
+        VirtualMachine.name == data.get("name", ""),
+        VirtualMachine.source_hypervisor_id == data.get("source_hypervisor_id")
+    ).first()
     if existing:
-        raise ValueError(f"Une VM avec le nom '{data['name']}' existe déjà")
+        raise ValueError(
+            f"Une VM avec le nom '{data['name']}' existe déjà "
+            f"sur l'hyperviseur {data.get('source_hypervisor_id')}"
+        )
 
     vm = VirtualMachine(
         **data,

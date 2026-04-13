@@ -95,6 +95,23 @@ def create_migration(
             detail=f"La VM '{vm.name}' ne peut pas être migrée (statut: {vm.status.value}, compatibilité: {vm.compatibility_status.value})"
         )
 
+    # Vérifier qu'il n'y a pas de migration active sur cette VM
+    active_migration = db.query(Migration).filter(
+        Migration.vm_id == migration_data.vm_id,
+        Migration.status.in_([
+            MigrationStatus.PENDING, MigrationStatus.VALIDATING,
+            MigrationStatus.PREPARING, MigrationStatus.TRANSFERRING,
+            MigrationStatus.CONFIGURING, MigrationStatus.STARTING,
+            MigrationStatus.VERIFYING
+        ])
+    ).first()
+
+    if active_migration:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.id} a déjà une migration active (ID: {active_migration.id})"
+        )
+
     # Créer la migration — namespace imposé par le tenant, non configurable par le client
     migration = crud_migration.create_migration(
         db,
