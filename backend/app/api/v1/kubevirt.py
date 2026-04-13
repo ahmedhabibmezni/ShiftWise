@@ -122,7 +122,6 @@ def create_kubevirt_vm(
             memory=vm_data.memory,
             image=vm_data.image,
             disk_size=vm_data.disk_size,
-            storage_class=vm_data.storage_class,
             run_strategy=vm_data.run_strategy
         )
 
@@ -281,8 +280,8 @@ def list_storage_classes(
         )
 
 
-@router.get("/cluster-info")
-def get_cluster_info(
+@router.get("/namespace-info")
+def get_namespace_info(
         kube_client: Annotated[KubeVirtClient, Depends(get_kubevirt_client)],
         current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
 ):

@@ -21,7 +21,7 @@ Usage:
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -216,7 +216,6 @@ class KubeVirtClient:
         memory: str = "2Gi",
         image: str = "quay.io/containerdisks/fedora:latest",
         disk_size: str | None = None,
-        storage_class: str | None = "nfs-client",
         run_strategy: str = "Always",
         labels: Dict[str, str] | None = None,
         annotations: Dict[str, str] | None = None
@@ -252,7 +251,6 @@ class KubeVirtClient:
             memory=memory,
             image=image,
             disk_size=disk_size,
-            storage_class=storage_class,
             run_strategy=run_strategy,
             labels=labels or {},
             annotations=annotations or {}
@@ -471,7 +469,7 @@ class KubeVirtClient:
         self,
         name: str,
         namespace: str | None = None
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any] | None:
         """
         Récupère le statut détaillé d'une VM.
 
@@ -483,7 +481,7 @@ class KubeVirtClient:
         vmi = self.get_vmi(name, namespace)
 
         if not vm:
-            return {"error": "VM not found"}
+            return None
 
         status = {
             "name": name,
@@ -527,7 +525,6 @@ class KubeVirtClient:
             memory: str,
             image: str,
             disk_size: str | None,
-            storage_class: str | None,
             run_strategy: str,
             labels: Dict[str, str],
             annotations: Dict[str, str]
@@ -557,14 +554,14 @@ class KubeVirtClient:
                     },
                     "spec": {
                         "domain": {
+                            "cpu": {
+                                "cores": cpu
+                            },
+                            "memory": {
+                                "guest": memory
+                            },
                             "devices": {
                                 "disks": []
-                            },
-                            "resources": {
-                                "requests": {
-                                    "cpu": str(cpu),
-                                    "memory": memory
-                                }
                             }
                         },
                         "volumes": []
@@ -577,23 +574,9 @@ class KubeVirtClient:
         # GESTION DES DISQUES (NOUVEAU)
          
 
-        if disk_size and storage_class:
-            # Disque persistant avec PVC
-            manifest["spec"]["template"]["spec"]["domain"]["devices"]["disks"].append({
-                "name": "datavolumedisk",
-                "disk": {"bus": "virtio"}
-            })
-            manifest["spec"]["template"]["spec"]["volumes"].append({
-                "name": "datavolumedisk",
-                "persistentVolumeClaim": {
-                    "claimName": f"{name}-pvc"
-                }
-            })
-
-            # Note: Le PVC doit être créé séparément
-            # TODO: Implémenter create_pvc() pour créer automatiquement le PVC
-            logger.warning(
-                f"⚠️ Persistent disk requested ({disk_size}) but PVC must be created manually"
+        if disk_size:
+            raise KubeVirtClientError(
+                "Persistent disk creation not yet implemented. Use ContainerDisk or create PVC manually."
             )
         else:
             # ContainerDisk (éphémère) par défaut
