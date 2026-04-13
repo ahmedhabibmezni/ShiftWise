@@ -81,8 +81,18 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Convertir l'ID — un sub non numérique indique un JWT corrompu
+    try:
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalide — identifiant utilisateur malformé",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Récupérer l'utilisateur depuis la BDD
-    user = crud_user.get_user(db, user_id=int(user_id))
+    user = crud_user.get_user(db, user_id=user_id_int)
 
     if user is None:
         raise HTTPException(
@@ -194,50 +204,6 @@ def check_permission(resource: str, action: str):
 
     return permission_checker
 
-
-def check_tenant_access(tenant_id: str):
-    """
-    Factory pour créer une dépendance de vérification d'accès au tenant.
-
-    Vérifie que l'utilisateur peut accéder à un tenant donné (multi-tenancy).
-
-    Args:
-        tenant_id: ID du tenant à vérifier
-
-    Returns:
-        Fonction de dépendance FastAPI
-
-    Raises:
-        HTTPException 403: Si accès non autorisé au tenant
-
-    Usage:
-        @router.get("/tenants/{tenant_id}/vms")
-        def get_tenant_vms(
-            tenant_id: str,
-            current_user: User = Depends(check_tenant_access(tenant_id))
-        ):
-            # Seulement si l'utilisateur peut accéder à ce tenant
-    """
-
-    def tenant_checker(
-            current_user: User = Depends(get_current_user)
-    ) -> User:
-        """Vérifie l'accès au tenant pour l'utilisateur actuel"""
-
-        # Superuser peut accéder à tous les tenants
-        if current_user.is_superuser:
-            return current_user
-
-        # Vérifier que l'utilisateur appartient au tenant
-        if not current_user.can_access_tenant(tenant_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Accès non autorisé au tenant : {tenant_id}"
-            )
-
-        return current_user
-
-    return tenant_checker
 
 
 def get_current_user_tenant(
@@ -357,8 +323,3 @@ class PermissionChecker:
             detail=f"Au moins une de ces permissions est requise : {permissions_str}"
         )
 
-
-# Alias pour les dépendances courantes
-CurrentUser = Depends(get_current_user)
-CurrentActiveUser = Depends(get_current_active_user)
-CurrentSuperuser = Depends(get_current_superuser)
