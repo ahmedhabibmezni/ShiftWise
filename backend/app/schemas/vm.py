@@ -7,37 +7,10 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
-from enum import Enum
 
-
-# Enums (réutilisation depuis les modèles)
-class VMStatusEnum(str, Enum):
-    """Statut d'une VM"""
-    DISCOVERED = "discovered"
-    ANALYZING = "analyzing"
-    COMPATIBLE = "compatible"
-    INCOMPATIBLE = "incompatible"
-    PARTIAL = "partial"
-    MIGRATING = "migrating"
-    MIGRATED = "migrated"
-    FAILED = "failed"
-    ARCHIVED = "archived"
-
-
-class CompatibilityStatusEnum(str, Enum):
-    """Statut de compatibilité"""
-    COMPATIBLE = "compatible"
-    PARTIAL = "partial"
-    INCOMPATIBLE = "incompatible"
-    UNKNOWN = "unknown"
-
-
-class OSTypeEnum(str, Enum):
-    """Type d'OS"""
-    WINDOWS = "windows"
-    LINUX = "linux"
-    OTHER = "other"
-    UNKNOWN = "unknown"
+from app.models.virtual_machine import VMStatus as VMStatusEnum
+from app.models.virtual_machine import CompatibilityStatus as CompatibilityStatusEnum
+from app.models.virtual_machine import OSType as OSTypeEnum
 
 
 # Schéma de base (propriétés communes)

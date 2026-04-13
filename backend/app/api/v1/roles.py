@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.constants import VALID_ACTIONS, VALID_RESOURCES
 from app.core.database import get_db
 from app.models.role import Role
 from app.schemas.role import (
@@ -289,22 +290,8 @@ def list_available_resources(
     ```
     """
     return {
-        "resources": [
-            "vms",
-            "hypervisors",
-            "migrations",
-            "reports",
-            "users",
-            "roles",
-            "settings"
-        ],
-        "actions": [
-            "create",
-            "read",
-            "update",
-            "delete",
-            "*"
-        ],
+        "resources": sorted(VALID_RESOURCES),
+        "actions": sorted(VALID_ACTIONS),
         "description": {
             "vms": "Machines virtuelles",
             "hypervisors": "Hyperviseurs sources",

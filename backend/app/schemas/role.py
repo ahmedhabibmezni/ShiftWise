@@ -11,7 +11,9 @@ Les schémas définissent :
 
 from typing import Optional, Dict, List
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.constants import VALID_ACTIONS
 
 
 class RoleBase(BaseModel):
@@ -68,17 +70,15 @@ class RoleBase(BaseModel):
 
         Vérifie que chaque ressource a une liste d'actions valides.
         """
-        valid_actions = {"create", "read", "update", "delete", "*"}
-
         for resource, actions in v.items():
             if not isinstance(actions, list):
                 raise ValueError(f"Les actions pour '{resource}' doivent être une liste")
 
             for action in actions:
-                if action not in valid_actions:
+                if action not in VALID_ACTIONS:
                     raise ValueError(
                         f"Action invalide '{action}' pour '{resource}'. "
-                        f"Actions valides: {valid_actions}"
+                        f"Actions valides: {VALID_ACTIONS}"
                     )
 
         return v
@@ -144,9 +144,7 @@ class RoleInDB(RoleBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        """Configuration Pydantic"""
-        from_attributes = True  # Permet la conversion depuis SQLAlchemy models
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleRead(RoleInDB):
@@ -169,5 +167,4 @@ class RoleWithUsers(RoleRead):
         description="Nombre d'utilisateurs ayant ce rôle"
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

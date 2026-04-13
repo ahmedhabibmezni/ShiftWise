@@ -7,32 +7,9 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
-from enum import Enum
 
-
-# Enums
-class HypervisorTypeEnum(str, Enum):
-    """Type d'hyperviseur"""
-    VSPHERE = "vsphere"
-    VMWARE_WORKSTATION = "vmware_workstation"
-    VMWARE_ESXI = "vmware_esxi"
-    HYPER_V = "hyper_v"
-    KVM = "kvm"
-    PROXMOX = "proxmox"
-    VIRTUALBOX = "virtualbox"
-    XEN = "xen"
-    OTHER = "other"
-
-
-class HypervisorStatusEnum(str, Enum):
-    """Statut de connexion"""
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    ERROR = "error"
-    UNREACHABLE = "unreachable"
-    AUTHENTICATING = "authenticating"
-    DISCOVERING = "discovering"
-    UNKNOWN = "unknown"
+from app.models.hypervisor import HypervisorType as HypervisorTypeEnum
+from app.models.hypervisor import HypervisorStatus as HypervisorStatusEnum
 
 
 # Schéma de base

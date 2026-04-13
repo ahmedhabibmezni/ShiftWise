@@ -12,7 +12,7 @@ Inclut :
 
 from typing import Optional, List, Dict
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, validator, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 import re
 
 from app.schemas.role import RoleRead
@@ -230,9 +230,7 @@ class UserInDB(UserBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        """Configuration Pydantic"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserRead(BaseModel):
@@ -255,8 +253,7 @@ class UserRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserReadWithRoles(UserRead):
@@ -270,8 +267,7 @@ class UserReadWithRoles(UserRead):
         description="Liste des rôles assignés à l'utilisateur"
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserReadWithPermissions(UserReadWithRoles):
@@ -289,8 +285,7 @@ class UserReadWithPermissions(UserReadWithRoles):
         }
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserList(BaseModel):
@@ -305,5 +300,4 @@ class UserList(BaseModel):
     page_size: int
     pages: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

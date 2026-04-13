@@ -7,34 +7,9 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
-from enum import Enum
 
-
-# Enums
-class MigrationStatusEnum(str, Enum):
-    """Statut d'une migration"""
-    PENDING = "pending"
-    VALIDATING = "validating"
-    PREPARING = "preparing"
-    TRANSFERRING = "transferring"
-    CONFIGURING = "configuring"
-    STARTING = "starting"
-    VERIFYING = "verifying"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    ROLLBACK = "rollback"
-    ROLLED_BACK = "rolled_back"
-
-
-class MigrationStrategyEnum(str, Enum):
-    """Stratégie de migration"""
-    DIRECT = "direct"
-    CONVERSION = "conversion"
-    HYBRID = "hybrid"
-    COLD = "cold"
-    WARM = "warm"
-    AUTO = "auto"
+from app.models.migration import MigrationStatus as MigrationStatusEnum
+from app.models.migration import MigrationStrategy as MigrationStrategyEnum
 
 
 # Schéma de base
