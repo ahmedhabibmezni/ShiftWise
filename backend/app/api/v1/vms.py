@@ -5,13 +5,14 @@ Endpoints CRUD pour les VMs découvertes et migrées.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Annotated, Optional
 
 from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
-from app.models.virtual_machine import VMStatus, CompatibilityStatus
+from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus
 from app.schemas.vm import (
     VMCreate,
     VMUpdate,
@@ -111,15 +112,29 @@ def get_vms_stats(
         "by_compatibility": {}
     }
 
-    # Par statut
-    for status_value in VMStatus:
-        count = crud_vm.get_vms_count(db, tenant_id=tenant_id, status=status_value)
-        stats["by_status"][status_value.value] = count
+    # Par statut — single GROUP BY query (replaces 9 individual COUNT queries)
+    by_status = {s.value: 0 for s in VMStatus}
+    status_query = db.query(
+        VirtualMachine.status,
+        func.count(VirtualMachine.id)
+    ).group_by(VirtualMachine.status)
+    if tenant_id is not None:
+        status_query = status_query.filter(VirtualMachine.tenant_id == tenant_id)
+    for row_status, count in status_query.all():
+        by_status[row_status.value] = count
+    stats["by_status"] = by_status
 
-    # Par compatibilité
-    for compat in CompatibilityStatus:
-        count = crud_vm.get_vms_count(db, tenant_id=tenant_id, compatibility=compat)
-        stats["by_compatibility"][compat.value] = count
+    # Par compatibilité — single GROUP BY query (replaces 4 individual COUNT queries)
+    by_compat = {c.value: 0 for c in CompatibilityStatus}
+    compat_query = db.query(
+        VirtualMachine.compatibility_status,
+        func.count(VirtualMachine.id)
+    ).group_by(VirtualMachine.compatibility_status)
+    if tenant_id is not None:
+        compat_query = compat_query.filter(VirtualMachine.tenant_id == tenant_id)
+    for row_compat, count in compat_query.all():
+        by_compat[row_compat.value] = count
+    stats["by_compatibility"] = by_compat
 
     return stats
 

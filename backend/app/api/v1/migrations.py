@@ -146,16 +146,21 @@ def get_migrations_stats(
     # Taux de succès
     success_rate = (completed / total * 100) if total > 0 else 0.0
 
-    # Durée moyenne (migrations terminées)
-    completed_migrations = crud_migration.get_migrations(
-        db, tenant_id=tenant_id, status=MigrationStatus.COMPLETED,
-        skip=0, limit=10000
+    # Durée moyenne — func.avg + func.extract (no in-memory load)
+    avg_duration_query = db.query(
+        func.avg(
+            func.extract('epoch', Migration.completed_at) -
+            func.extract('epoch', Migration.started_at)
+        )
+    ).filter(
+        Migration.status == MigrationStatus.COMPLETED,
+        Migration.started_at.isnot(None),
+        Migration.completed_at.isnot(None)
     )
-
-    avg_duration = None
-    if completed_migrations:
-        total_duration = sum(m.duration_seconds for m in completed_migrations)
-        avg_duration = int(total_duration / len(completed_migrations))
+    if tenant_id is not None:
+        avg_duration_query = avg_duration_query.filter(Migration.tenant_id == tenant_id)
+    avg_duration_raw = avg_duration_query.scalar()
+    avg_duration = int(avg_duration_raw) if avg_duration_raw is not None else None
 
     # Total données transférées — scopé par tenant
     total_transferred_query = db.query(func.sum(Migration.transferred_gb))

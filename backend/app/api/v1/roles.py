@@ -13,9 +13,11 @@ Les rôles système (super_admin, admin, user, viewer) ne peuvent pas être modi
 
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.role import Role
 from app.schemas.role import (
     RoleCreate,
     RoleUpdate,
@@ -167,10 +169,9 @@ def count_roles(
     """
     total = crud_role.get_roles_count(db, is_active=is_active, search=search)
 
-    # Compter les rôles système vs personnalisés
-    all_roles = crud_role.get_roles(db, skip=0, limit=1000)
-    system_count = sum(1 for r in all_roles if r.is_system_role)
-    custom_count = total - system_count
+    # Compter les rôles système vs personnalisés — direct COUNT queries
+    system_count = db.query(func.count(Role.id)).filter(Role.is_system_role == True).scalar()  # NOSONAR
+    custom_count = db.query(func.count(Role.id)).filter(Role.is_system_role == False).scalar()  # NOSONAR
 
     return {
         "total": total,

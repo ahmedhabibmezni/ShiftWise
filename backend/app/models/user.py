@@ -115,12 +115,12 @@ class User(BaseModel):
     # Relations
 
     # Roles : Many-to-Many avec Role
-    # Charge les rôles automatiquement avec lazy="joined"
+    # selectin exécute une requête IN séparée — plus efficace que joined pour les collections
     roles = relationship(
         "Role",
         secondary=user_roles,
         backref="users",
-        lazy="joined"
+        lazy="selectin"
     )
 
     # VMs créées par cet utilisateur (défini dans VM model)
