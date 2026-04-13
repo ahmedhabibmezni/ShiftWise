@@ -115,14 +115,6 @@ ROLE_PERMISSIONS = {
         "reports": ["*"],
         "settings": ["*"],
     },
-    # "admin": {
-    #     # Gestion complète de son tenant
-    #     "users": ["read", "create", "update"],
-    #     "hypervisors": ["*"],
-    #     "vms": ["*"],
-    #     "migrations": ["*"],
-    #     "reports": ["*"],
-    # },
     "admin": {
         # Gestion complète de son tenant
         "users": ["read", "create", "update"],

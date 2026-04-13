@@ -9,8 +9,6 @@ Modèle de base contenant les champs communs à toutes les tables :
 
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, DateTime
-from sqlalchemy.ext.declarative import declared_attr
-
 from app.core.database import Base
 
 
@@ -52,20 +50,6 @@ class BaseModel(Base):
         nullable=False,
         comment="Date de dernière modification"
     )
-
-    @declared_attr
-    def __tablename__(cls) -> str:
-        """
-        Génère automatiquement le nom de la table à partir du nom de la classe.
-
-        Ex: User -> users, VirtualMachine -> virtual_machines
-        """
-        import re
-        name = cls.__name__
-        # Convertit CamelCase en snake_case
-        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
-        return name + 's'
 
     def __repr__(self) -> str:
         """Représentation string du modèle"""

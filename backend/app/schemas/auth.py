@@ -10,7 +10,6 @@ Inclut :
 - Vérification d'email
 """
 
-from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -23,14 +22,14 @@ class LoginRequest(BaseModel):
     email: EmailStr = Field(
         ...,
         description="Email de l'utilisateur",
-        example="ahmed.mezni@nextstep.tn"
+        json_schema_extra={"example": "ahmed.mezni@nextstep.tn"}
     )
 
     password: str = Field(
         ...,
         min_length=1,
         description="Mot de passe",
-        example="SecurePassword123!"
+        json_schema_extra={"example": "SecurePassword123!"}
     )
 
 
@@ -43,13 +42,13 @@ class TokenResponse(BaseModel):
     access_token: str = Field(
         ...,
         description="Token JWT d'accès (courte durée)",
-        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
     )
 
     refresh_token: str = Field(
         ...,
         description="Token JWT de refresh (longue durée)",
-        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.."
+        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.."}
     )
 
     token_type: str = Field(
@@ -60,7 +59,7 @@ class TokenResponse(BaseModel):
     expires_in: int = Field(
         ...,
         description="Durée de validité du access_token en secondes",
-        example=1800
+        json_schema_extra={"example": 1800}
     )
 
 
@@ -73,7 +72,7 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(
         ...,
         description="Token de refresh à utiliser pour obtenir un nouveau access_token",
-        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
     )
 
 
@@ -87,14 +86,14 @@ class ChangePasswordRequest(BaseModel):
         ...,
         min_length=1,
         description="Mot de passe actuel",
-        example="OldPassword123!"
+        json_schema_extra={"example": "OldPassword123!"}
     )
 
     new_password: str = Field(
         ...,
         min_length=8,
         description="Nouveau mot de passe",
-        example="NewSecurePassword123!"
+        json_schema_extra={"example": "NewSecurePassword123!"}
     )
 
 
@@ -107,7 +106,7 @@ class ResetPasswordRequest(BaseModel):
     email: EmailStr = Field(
         ...,
         description="Email de l'utilisateur",
-        example="ahmed.mezni@nextstep.tn"
+        json_schema_extra={"example": "ahmed.mezni@nextstep.tn"}
     )
 
 
@@ -120,14 +119,14 @@ class ResetPasswordConfirm(BaseModel):
     token: str = Field(
         ...,
         description="Token de réinitialisation reçu par email",
-        example="abc123xyz789"
+        json_schema_extra={"example": "abc123xyz789"}
     )
 
     new_password: str = Field(
         ...,
         min_length=8,
         description="Nouveau mot de passe",
-        example="NewSecurePassword123!"
+        json_schema_extra={"example": "NewSecurePassword123!"}
     )
 
 
@@ -140,7 +139,7 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(
         ...,
         description="Token de vérification reçu par email",
-        example="verify123abc"
+        json_schema_extra={"example": "verify123abc"}
     )
 
 
@@ -153,7 +152,7 @@ class MessageResponse(BaseModel):
     message: str = Field(
         ...,
         description="Message de confirmation ou d'erreur",
-        example="Mot de passe modifié avec succès"
+        json_schema_extra={"example": "Mot de passe modifié avec succès"}
     )
 
     success: bool = Field(
@@ -171,17 +170,17 @@ class TokenPayload(BaseModel):
     sub: str = Field(
         ...,
         description="Subject du token (user_id)",
-        example="123"
+        json_schema_extra={"example": "123"}
     )
 
     exp: int = Field(
         ...,
         description="Timestamp d'expiration",
-        example=1234567890
+        json_schema_extra={"example": 1234567890}
     )
 
     type: str = Field(
         ...,
         description="Type de token (access ou refresh)",
-        example="access"
+        json_schema_extra={"example": "access"}
     )

@@ -192,13 +192,10 @@ class Migration(BaseModel):
         if step_number is not None:
             self.current_step_number = step_number
 
-        self.updated_at = datetime.now(timezone.utc)
-
     def mark_started(self):
         """Marque la migration comme démarrée"""
         self.started_at = datetime.now(timezone.utc)
         self.status = MigrationStatus.VALIDATING
-        self.updated_at = datetime.now(timezone.utc)
 
     def mark_completed(self, success: bool, error_message: str = None):
         """Marque la migration comme terminée"""
@@ -212,8 +209,6 @@ class Migration(BaseModel):
         else:
             self.status = MigrationStatus.FAILED
             self.error_message = error_message
-
-        self.updated_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> dict:
         """Conversion en dictionnaire pour API"""

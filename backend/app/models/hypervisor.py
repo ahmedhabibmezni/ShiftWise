@@ -136,8 +136,6 @@ class Hypervisor(BaseModel):
         elif error_message:
             self.last_error = error_message
 
-        self.updated_at = datetime.now(timezone.utc)
-
     def mark_sync_completed(self, success: bool = True, total_vms: int = 0):
         """
         Marque une synchronisation comme complétée
@@ -151,5 +149,3 @@ class Hypervisor(BaseModel):
             self.total_vms_discovered = total_vms
             self.last_successful_connection = datetime.now(timezone.utc)
         # last_sync_at non mis à jour si success=False → needs_sync reste True
-
-        self.updated_at = datetime.now(timezone.utc)

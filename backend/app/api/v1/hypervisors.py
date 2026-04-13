@@ -22,6 +22,7 @@ from app.schemas.hypervisor import (
 )
 from app.services.discovery import create_discovery_service, DiscoveryError
 from app.crud import hypervisor as crud_hypervisor
+from app.schemas.vm import VMResponse
 
 router = APIRouter()
 
@@ -263,7 +264,6 @@ def get_hypervisor_vms(
         )
 
     # Retourner les VMs associées
-    from app.schemas.vm import VMResponse
     vms = [VMResponse.model_validate(vm) for vm in hypervisor.virtual_machines]
 
     return {

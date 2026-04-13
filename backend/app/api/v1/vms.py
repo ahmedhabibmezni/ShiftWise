@@ -19,6 +19,7 @@ from app.schemas.vm import (
     VMResponse,
     VMListResponse
 )
+from app.schemas.migration import MigrationResponse
 from app.crud import vm as crud_vm
 
 router = APIRouter()
@@ -237,7 +238,6 @@ def get_vm_migrations(
         )
 
     # Retourner les migrations associées
-    from app.schemas.migration import MigrationResponse
     migrations = [MigrationResponse.model_validate(m) for m in vm.migrations]
 
     return {

@@ -27,7 +27,7 @@ class UserBase(BaseModel):
     email: EmailStr = Field(
         ...,
         description="Email de l'utilisateur (identifiant unique)",
-        example="ahmed.mezni@nextstep.tn"
+        json_schema_extra={"example": "ahmed.mezni@nextstep.tn"}
     )
 
     username: str = Field(
@@ -35,21 +35,21 @@ class UserBase(BaseModel):
         min_length=3,
         max_length=100,
         description="Nom d'utilisateur unique",
-        example="ahmedm"
+        json_schema_extra={"example": "ahmedm"}
     )
 
     first_name: Optional[str] = Field(
         None,
         max_length=100,
         description="Prénom de l'utilisateur",
-        example="Ahmed"
+        json_schema_extra={"example": "Ahmed"}
     )
 
     last_name: Optional[str] = Field(
         None,
         max_length=100,
         description="Nom de famille de l'utilisateur",
-        example="MEZNI"
+        json_schema_extra={"example": "MEZNI"}
     )
 
     tenant_id: str = Field(
@@ -57,7 +57,7 @@ class UserBase(BaseModel):
         min_length=1,
         max_length=100,
         description="Identifiant du tenant (organisation)",
-        example="nextstep-tunisia"
+        json_schema_extra={"example": "nextstep-tunisia"}
     )
 
     is_active: bool = Field(
@@ -104,13 +104,13 @@ class UserCreate(UserBase):
         min_length=8,
         max_length=100,
         description="Mot de passe (minimum 8 caractères)",
-        example="SecurePassword123!"
+        json_schema_extra={"example": "SecurePassword123!"}
     )
 
     role_ids: List[int] = Field(
         default_factory=list,
         description="Liste des IDs de rôles à assigner",
-        example=[1, 2]
+        json_schema_extra={"example": [1, 2]}
     )
 
     @field_validator('password')
@@ -279,10 +279,7 @@ class UserReadWithPermissions(UserReadWithRoles):
     permissions: Dict[str, List[str]] = Field(
         default_factory=dict,
         description="Permissions calculées depuis tous les rôles",
-        example={
-            "vms": ["read", "create", "update"],
-            "hypervisors": ["read"]
-        }
+        json_schema_extra={"example": {"vms": ["read", "create", "update"], "hypervisors": ["read"]}}
     )
 
     model_config = ConfigDict(from_attributes=True)

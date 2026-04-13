@@ -27,23 +27,20 @@ class RoleBase(BaseModel):
         min_length=2,
         max_length=50,
         description="Nom unique du rôle",
-        example="admin"
+        json_schema_extra={"example": "admin"}
     )
 
     description: Optional[str] = Field(
         None,
         max_length=500,
         description="Description du rôle",
-        example="Administrateur avec accès complet au tenant"
+        json_schema_extra={"example": "Administrateur avec accès complet au tenant"}
     )
 
     permissions: Dict[str, List[str]] = Field(
         default_factory=dict,
         description="Permissions du rôle par ressource",
-        example={
-            "vms": ["read", "create", "update", "delete"],
-            "hypervisors": ["read", "create"]
-        }
+        json_schema_extra={"example": {"vms": ["read", "create", "update", "delete"], "hypervisors": ["read", "create"]}}
     )
 
     is_active: bool = Field(
