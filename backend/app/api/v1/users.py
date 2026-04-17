@@ -44,77 +44,49 @@ USER_NOT_FOUND = "Utilisateur non trouvé"
 USER_ACCESS_DENIED = "Accès non autorisé à cet utilisateur"
 
 
+def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Session) -> None:
+    """
+    Vérifie qu'un non-superuser ne s'octroie pas des permissions supérieures
+    aux siennes via l'assignation de rôles.
+    Lève HTTPException 403 en cas de violation.
+    """
+    assigned_roles = db.query(Role).filter(Role.id.in_(role_ids)).all()
+    admin_permissions = current_user.get_all_permissions()
+
+    for role in assigned_roles:
+        if role.name == "super_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Seul un super_admin peut assigner le rôle super_admin"
+            )
+        for resource, actions in (role.permissions or {}).items():
+            if "*" in actions and resource not in admin_permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
+                )
+
 @router.post("", response_model=UserReadWithRoles, status_code=status.HTTP_201_CREATED)
 def create_user(
         user_data: UserCreate,
         db: Annotated[Session, Depends(get_db)],
         current_user: Annotated[User, Depends(check_permission("users", "create"))]
 ):
-    """
-    Crée un nouvel utilisateur.
-
-    **Permissions requises :** `users:create`
-
-    **Multi-tenancy :**
-    - Les admins ne peuvent créer que des utilisateurs dans leur propre tenant
-    - Les superusers peuvent créer des utilisateurs dans n'importe quel tenant
-
-    **Validations :**
-    - Email unique
-    - Username unique
-    - Mot de passe fort (8+ chars, maj, min, chiffre, spécial)
-    - Rôles doivent exister
-
-    **Example :**
-    ```json
-    POST /api/v1/users
-    {
-        "email": "new.user@nextstep.tn",
-        "username": "newuser",
-        "password": "SecurePass123!",
-        "first_name": "New",
-        "last_name": "User",
-        "tenant_id": "nextstep",
-        "role_ids": [2, 3]
-    }
-    ```
-    """
     # Vérification multi-tenancy
-    if not current_user.is_superuser:
-        if user_data.tenant_id != current_user.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Vous ne pouvez créer des utilisateurs que dans votre propre tenant"
-            )
+    if not current_user.is_superuser and user_data.tenant_id != current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vous ne pouvez créer des utilisateurs que dans votre propre tenant"
+        )
 
     # Guard: prevent privilege escalation via role assignment at creation
     if not current_user.is_superuser and user_data.role_ids:
-        assigned_roles = db.query(Role).filter(Role.id.in_(user_data.role_ids)).all()
-        admin_permissions = current_user.get_all_permissions()
-        for role in assigned_roles:
-            if role.name == "super_admin":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Seul un super_admin peut assigner le rôle super_admin"
-                )
-            for resource, actions in (role.permissions or {}).items():
-                if "*" in actions and resource not in admin_permissions:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
-                    )
+        _check_privilege_escalation(current_user, user_data.role_ids, db)
 
-    # Créer l'utilisateur
     try:
-        new_user = crud_user.create_user(db, user_data)
+        return crud_user.create_user(db, user_data)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-    return new_user
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 @router.get("", response_model=UserList)
 def list_users(
