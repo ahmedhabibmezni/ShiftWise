@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import traceback
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
@@ -41,6 +42,53 @@ _VMRUN_CANDIDATES = [
     "/usr/bin/vmrun",
     "/Applications/VMware Fusion.app/Contents/Library/vmrun",
 ]
+
+# PowerShell script executed on the Hyper-V host to enumerate all VMs as JSON.
+# Uses Get-VM (all power states) + Get-VHD for disk size.
+_HYPERV_PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$vms = Get-VM
+$result = foreach ($vm in $vms) {
+    $net   = $vm.NetworkAdapters | Select-Object -First 1
+    $ip    = if ($net -and $net.IPAddresses)  { $net.IPAddresses[0] }  else { $null }
+    $mac   = if ($net -and $net.MacAddress)   { $net.MacAddress }       else { $null }
+
+    $diskBytes = 0
+    try {
+        $diskBytes = ($vm.HardDrives | Get-VHD -ErrorAction SilentlyContinue |
+                      Measure-Object -Property Size -Sum).Sum
+    } catch {}
+
+    $state = switch ($vm.State) {
+        'Running' { 'running'  }
+        'Off'     { 'stopped'  }
+        'Paused'  { 'paused'   }
+        default   { 'unknown'  }
+    }
+
+    [PSCustomObject]@{
+        name         = $vm.Name
+        source_uuid  = ($vm.Id.ToString() -replace '-', '').ToLower()
+        cpu_cores    = [int]$vm.ProcessorCount
+        memory_mb    = [int]($vm.MemoryAssigned / 1MB)
+        disk_gb      = [int][Math]::Round($diskBytes / 1GB, 0)
+        power_state  = $state
+        ip_address   = $ip
+        mac_address  = $mac
+        hostname     = $vm.ComputerName
+    }
+}
+$result | ConvertTo-Json -Depth 3
+"""
+
+# Remote wrapper: reads all sensitive values from env vars so that no credential
+# ever appears in a command-line argument (prevents shell/PS injection).
+_HYPERV_REMOTE_PS_WRAPPER = r"""
+$pass = ConvertTo-SecureString $env:HV_PASS -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential($env:HV_USER, $pass)
+$sb   = [scriptblock]::Create($env:HV_SCRIPT)
+Invoke-Command -ComputerName $env:HV_HOST -Credential $cred -ScriptBlock $sb
+"""
 
 
 def _find_vmrun() -> str:
@@ -191,6 +239,25 @@ def _vmx_disk_gb(vmx_path: str) -> int:
 
 
 def _vmx_os_type(guest_os: str) -> OSType:
+    # """Map VMX 'guestOS' value to our OSType enum."""
+    # guest_os = guest_os.lower()
+
+    # for kw in ["windows", "win", "longhorn", "vista", "server2"]:
+    #     if kw in guest_os:
+    #         return OSType.WINDOWS
+
+    # for kw in [
+    #     "ubuntu", "centos", "rhel", "fedora", "debian", "suse", "opensuse",
+    #     "linux", "alpine", "arch", "gentoo", "oracle", "amazon", "coreos",
+    #     "photon", "asianux",
+    # ]:
+    #     if kw in guest_os:
+    #         return OSType.LINUX
+
+    # if any(k in guest_os for k in ["freebsd", "netbsd", "openbsd", "darwin", "macos", "osx"]):
+    #     return OSType.OTHER
+
+    # return OSType.UNKNOWN
     """Map VMX 'guestOS' value to our OSType enum."""
     guest_os = guest_os.lower()
 
@@ -349,7 +416,6 @@ def _vmrun_read_variable(vmrun_path: str, vmx_path: str, var_name: str, timeout:
         pass
     return None
 
-
 def _discover_single_vmx(
     vmrun_path: str,
     vmx_path: str,
@@ -403,6 +469,9 @@ def _discover_single_vmx(
             ip_address = _get_vm_ip(vmrun_path, vmx_path)
 
             if tools_state == "running":
+                # Strategy 1: readVariable — no credentials needed, instant.
+                # VMware Tools writes guestinfo variables that are readable
+                # directly from the host without guest authentication.
                 rv_hostname = _vmrun_read_variable(vmrun_path, vmx_path, "hostname")
                 rv_os       = _vmrun_read_variable(vmrun_path, vmx_path, "os")
                 rv_kernel   = _vmrun_read_variable(vmrun_path, vmx_path, "kernelVersion")
@@ -414,6 +483,11 @@ def _discover_single_vmx(
                 if rv_kernel:
                     os_version = rv_kernel
 
+                # Strategy 2: runScriptInGuest — only when guest credentials
+                # are configured AND readVariable left some fields unfilled.
+                # runScriptInGuest requires VMware Tools guest auth service to
+                # be enabled inside the guest (disabled by default on Debian/
+                # Ubuntu); without credentials it will hang until timeout.
                 if guest_credentials:
                     if not hostname_val:
                         raw = _run_guest_script(
@@ -438,10 +512,12 @@ def _discover_single_vmx(
                         if raw:
                             os_name = raw
 
+            # Basic compatibility assessment: running VM with tools = compatible
             if os_type in (OSType.LINUX, OSType.WINDOWS):
                 compatibility_status = CompatibilityStatus.COMPATIBLE
     else:
         tools_state = _get_tools_state(vmrun_path, vmx_path)
+        # Powered-off VM with a supported OS type is still compatible
         if os_type in (OSType.LINUX, OSType.WINDOWS):
             compatibility_status = CompatibilityStatus.COMPATIBLE
 
@@ -472,119 +548,6 @@ def _discover_single_vmx(
 
 
 # ============================================================================
-# Hyper-V helpers
-# ============================================================================
-
-# PowerShell script executed on the Hyper-V host to enumerate all VMs as JSON.
-# Uses Get-VM (all power states) + Get-VHD for disk size.
-_HYPERV_PS_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
-$vms = Get-VM
-$result = foreach ($vm in $vms) {
-    $net   = $vm.NetworkAdapters | Select-Object -First 1
-    $ip    = if ($net -and $net.IPAddresses)  { $net.IPAddresses[0] }  else { $null }
-    $mac   = if ($net -and $net.MacAddress)   { $net.MacAddress }       else { $null }
-
-    $diskBytes = 0
-    try {
-        $diskBytes = ($vm.HardDrives | Get-VHD -ErrorAction SilentlyContinue |
-                      Measure-Object -Property Size -Sum).Sum
-    } catch {}
-
-    $state = switch ($vm.State) {
-        'Running' { 'running'  }
-        'Off'     { 'stopped'  }
-        'Paused'  { 'paused'   }
-        default   { 'unknown'  }
-    }
-
-    [PSCustomObject]@{
-        name         = $vm.Name
-        source_uuid  = ($vm.Id.ToString() -replace '-', '').ToLower()
-        cpu_cores    = [int]$vm.ProcessorCount
-        memory_mb    = [int]($vm.MemoryAssigned / 1MB)
-        disk_gb      = [int][Math]::Round($diskBytes / 1GB, 0)
-        power_state  = $state
-        ip_address   = $ip
-        mac_address  = $mac
-        hostname     = $vm.ComputerName
-    }
-}
-$result | ConvertTo-Json -Depth 3
-"""
-
-# Remote wrapper: reads all sensitive values from env vars so that no credential
-# ever appears in a command-line argument (prevents shell/PS injection).
-_HYPERV_REMOTE_PS_WRAPPER = r"""
-$pass = ConvertTo-SecureString $env:HV_PASS -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential($env:HV_USER, $pass)
-$sb   = [scriptblock]::Create($env:HV_SCRIPT)
-Invoke-Command -ComputerName $env:HV_HOST -Credential $cred -ScriptBlock $sb
-"""
-
-
-def _build_hyperv_command(
-    host: str,
-    auth_mode: str,
-    username: Optional[str],
-    password: Optional[str],
-) -> tuple:
-    """
-    Construit la commande PowerShell et les variables d'environnement pour la découverte Hyper-V.
-
-    Returns:
-        (cmd, extra_env) — extra_env is None for local, a dict of HV_* vars for remote.
-    """
-    is_local = (auth_mode == "local") and (host in ("localhost", "127.0.0.1"))
-    if is_local:
-        return ["powershell", "-NonInteractive", "-Command", _HYPERV_PS_SCRIPT], None
-
-    if not username or not password:
-        raise DiscoveryError(
-            f"La découverte Hyper-V distante requiert username et password (host={host})"
-        )
-    extra_env = {
-        "HV_PASS":   password,
-        "HV_USER":   username,
-        "HV_HOST":   host,
-        "HV_SCRIPT": _HYPERV_PS_SCRIPT,
-    }
-    return ["powershell", "-NonInteractive", "-Command", _HYPERV_REMOTE_PS_WRAPPER], extra_env
-
-
-def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
-    """Parse la sortie JSON de PowerShell en liste de dicts VM standardisés."""
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise DiscoveryError(f"Impossible de parser la sortie JSON PowerShell: {exc}")
-
-    # PowerShell emits a bare object (not array) when exactly one VM exists
-    if isinstance(data, dict):
-        data = [data]
-
-    vms: List[Dict[str, Any]] = []
-    for item in data:
-        vms.append({
-            "source_uuid":          item.get("source_uuid") or "",
-            "source_name":          item.get("name") or "unknown",
-            "name":                 item.get("name") or "unknown",
-            "cpu_cores":            int(item.get("cpu_cores") or 0),
-            "memory_mb":            int(item.get("memory_mb") or 0),
-            "disk_gb":              int(item.get("disk_gb") or 0),
-            "os_type":              OSType.UNKNOWN,
-            "os_version":           "N/A",
-            "os_name":              "N/A",
-            "ip_address":           item.get("ip_address"),
-            "mac_address":          item.get("mac_address"),
-            "hostname":             item.get("hostname"),
-            "power_state":          item.get("power_state") or "unknown",
-            "compatibility_status": CompatibilityStatus.UNKNOWN,
-        })
-    return vms
-
-
-# ============================================================================
 # KVM helpers
 # ============================================================================
 
@@ -610,7 +573,6 @@ def _parse_kvm_domain_xml(
     disk_sizes: Dict[str, int],
 ) -> Dict[str, Any]:
     """Parse virsh dumpxml output into a ShiftWise VM dict."""
-    import xml.etree.ElementTree as ET
     root = ET.fromstring(xml_str)
 
     name = root.findtext("name") or "unknown"
@@ -662,6 +624,71 @@ def _parse_kvm_domain_xml(
     }
 
 
+# ============================================================================
+# Hyper-V helpers
+# ============================================================================
+
+def _build_hyperv_command(
+    host: str,
+    auth_mode: str,
+    username: Optional[str],
+    password: Optional[str],
+) -> tuple:
+    """
+    Construit la commande PowerShell et les variables d'environnement pour la découverte Hyper-V.
+
+    Returns:
+        (cmd, extra_env) — extra_env is None for local, a dict of HV_* vars for remote.
+    """
+    is_local = (auth_mode == "local") and (host in ("localhost", "127.0.0.1"))
+    if is_local:
+        return ["powershell", "-NonInteractive", "-Command", _HYPERV_PS_SCRIPT], None
+
+    if not username or not password:
+        raise DiscoveryError(
+            f"La découverte Hyper-V distante requiert username et password (host={host})"
+        )
+    extra_env = {
+        "HV_PASS":   password,
+        "HV_USER":   username,
+        "HV_HOST":   host,
+        "HV_SCRIPT": _HYPERV_PS_SCRIPT,
+    }
+    return ["powershell", "-NonInteractive", "-Command", _HYPERV_REMOTE_PS_WRAPPER], extra_env
+
+
+def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
+    """Parse la sortie JSON de PowerShell en liste de dicts VM standardisés."""
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise DiscoveryError(f"Impossible de parser la sortie JSON PowerShell: {exc}")
+
+    # PowerShell emits a bare object (not array) when exactly one VM exists
+    if isinstance(data, dict):
+        data = [data]
+
+    vms: List[Dict[str, Any]] = []
+    for item in data:
+        vms.append({
+            "source_uuid":          item.get("source_uuid") or "",
+            "source_name":          item.get("name") or "unknown",
+            "name":                 item.get("name") or "unknown",
+            "cpu_cores":            int(item.get("cpu_cores") or 0),
+            "memory_mb":            int(item.get("memory_mb") or 0),
+            "disk_gb":              int(item.get("disk_gb") or 0),
+            "os_type":              OSType.UNKNOWN,  # Hyper-V n'expose pas le type d'OS sans KVP
+            "os_version":           "N/A",
+            "os_name":              "N/A",
+            "ip_address":           item.get("ip_address"),
+            "mac_address":          item.get("mac_address"),
+            "hostname":             item.get("hostname"),
+            "power_state":          item.get("power_state") or "unknown",
+            "compatibility_status": CompatibilityStatus.UNKNOWN,
+        })
+    return vms
+
+
 class DiscoveryService:
     """Service de découverte des VMs depuis les hyperviseurs"""
 
@@ -674,16 +701,16 @@ class DiscoveryService:
 
     def discover_hypervisor(self, hypervisor_id: int) -> Dict[str, Any]:
         """
-        Découvre toutes les VMs d'un hypervisor
+        Découvre toutes les VMs d'un hypervisor et synchronise la base de données.
 
         Args:
-            hypervisor_id: ID de l'hypervisor à scanner
+            hypervisor_id: ID de l'hypervisor à scanner.
 
         Returns:
-            Statistiques de découverte
+            Statistiques de découverte.
 
         Raises:
-            DiscoveryError: Si la découverte échoue
+            DiscoveryError: Si la découverte échoue.
         """
         hypervisor = self.db.query(Hypervisor).filter(
             Hypervisor.id == hypervisor_id
@@ -712,8 +739,7 @@ class DiscoveryService:
             stats = self._save_discovered_vms(hypervisor, vms_data)
 
             hypervisor.update_status(HypervisorStatus.ACTIVE)
-            hypervisor.mark_sync_completed(success=True, total_vms=stats['total_discovered'])
-            self.db.commit()
+            self.db.commit()  
 
             logger.info(f"Découverte terminée: {stats['total_discovered']} VMs trouvées")
             return stats
@@ -796,14 +822,20 @@ class DiscoveryService:
              a. Every running VMX path from step 2.
              b. Any extra VMX paths from ``hypervisor.connection_config["extra_vmx_paths"]``
                 (covers powered-off VMs explicitly registered by the user).
-             c. Directory scan of ``connection_config["vm_folder"]`` (covers all
-                powered-off VMs without explicit registration).
         4. Parse each .vmx file and query live data (IP, tools state).
         5. Return the list — _save_discovered_vms handles all DB sync.
+
+        Args:
+            hypervisor: Hypervisor instance of type VMWARE_WORKSTATION.
+
+        Returns:
+            List of VM dicts ready for _save_discovered_vms.
         """
         logger.info("Découverte VMware Workstation (vmrun réel)")
 
+        # ------------------------------------------------------------------ #
         # 1. Locate vmrun
+        # ------------------------------------------------------------------ #
         if hypervisor.host and os.path.isfile(hypervisor.host):
             vmrun_path = hypervisor.host
             logger.info(f"vmrun depuis hypervisor.host: {vmrun_path}")
@@ -811,13 +843,62 @@ class DiscoveryService:
             vmrun_path = _find_vmrun()
             logger.info(f"vmrun auto-détecté: {vmrun_path}")
 
+        # ------------------------------------------------------------------ #
         # 2. Get currently running VMX paths
+        # ------------------------------------------------------------------ #
         running_paths = _get_running_vmx_paths(vmrun_path)
         logger.info(f"VMs en cours d'exécution: {len(running_paths)}")
         for p in running_paths:
             logger.info(f"  - {p}")
 
+        # ------------------------------------------------------------------ #
         # 3. Build complete set of VMX paths to inspect
+        # ------------------------------------------------------------------ #
+        # vmx_paths_to_scan: List[str] = list(running_paths)
+
+        # # Extra VMX paths from connection_config["extra_vmx_paths"] (covers
+        # # powered-off VMs explicitly registered by the user).
+        # extra_vmx: List[str] = []
+        # try:
+        #     import json
+        #     # Priority 1: dedicated attribute (future column)
+        #     raw = getattr(hypervisor, "additional_vmx_paths", None) or ""
+        #     # Priority 2: JSON array in notes field
+        #     if not raw:
+        #         notes = getattr(hypervisor, "notes", None) or ""
+        #         if notes.startswith("["):
+        #             raw = notes
+        #     # Priority 3: connection_config["extra_vmx_paths"]
+        #     if not raw:
+        #         cfg = getattr(hypervisor, "connection_config", None) or {}
+        #         paths = cfg.get("extra_vmx_paths", []) if isinstance(cfg, dict) else []
+        #         extra_vmx = [str(p) for p in paths]
+        #         raw = None
+        #     if raw:
+        #         extra_vmx = json.loads(raw)
+        # except Exception:
+        #     pass
+
+        # for vmx in extra_vmx:
+        #     norm = vmx.replace("\\", "/").lower()
+        #     already = any(p.replace("\\", "/").lower() == norm for p in vmx_paths_to_scan)
+        #     if not already:
+        #         vmx_paths_to_scan.append(vmx)
+
+        # if not vmx_paths_to_scan:
+        #     logger.warning(
+        #         "Aucun VMX trouvé (aucune VM active et aucun chemin supplémentaire "
+        #         "enregistré). Enregistrez les chemins VMX dans "
+        #         "hypervisor.connection_config[\"extra_vmx_paths\"] sous forme de liste, "
+        #         'ex: ["C:\\\\VMs\\\\MyVM\\\\MyVM.vmx"]'
+        #     )
+        #     return []
+
+        # logger.info(f"Total VMX à scanner: {len(vmx_paths_to_scan)}")
+
+        # ------------------------------------------------------------------ #
+        # 3. Build complete set of VMX paths to inspect
+        # ------------------------------------------------------------------ #
         vmx_paths_to_scan: List[str] = list(running_paths)
 
         # Extra VMX paths from connection_config["extra_vmx_paths"]
@@ -845,13 +926,18 @@ class DiscoveryService:
             if not already:
                 vmx_paths_to_scan.append(vmx)
 
-        # Directory scan: walk vm_folder to discover ALL .vmx files
+        # ------------------------------------------------------------------ #
+        # 3c. NEW — Directory scan: walk vm_folder to discover ALL .vmx files
+        #     (covers powered-off VMs that are neither running nor explicitly
+        #     listed in extra_vmx_paths).
+        # ------------------------------------------------------------------ #
         cfg = hypervisor.connection_config or {}
         vm_folder: Optional[str] = None
         if isinstance(cfg, dict):
             vm_folder = cfg.get("vm_folder")
 
         if not vm_folder:
+            # Fallback: standard VMware Workstation default locations
             _DEFAULT_VM_FOLDERS = [
                 os.path.join(os.path.expanduser("~"), "OneDrive", "Documents", "Virtual Machines"),
                 os.path.join(os.path.expanduser("~"), "Documents", "Virtual Machines"),
@@ -882,7 +968,9 @@ class DiscoveryService:
                     'ex: {"vm_folder": "C:\\\\Users\\\\PC\\\\Documents\\\\Virtual Machines"}'
                 )
 
+        # ------------------------------------------------------------------ #
         # 4. Extract optional guest credentials for runScriptInGuest
+        # ------------------------------------------------------------------ #
         guest_creds: Optional[Dict[str, str]] = None
         cfg = hypervisor.connection_config or {}
         if isinstance(cfg, dict) and cfg.get("guest_username"):
@@ -891,7 +979,9 @@ class DiscoveryService:
                 "password": cfg.get("guest_password", ""),
             }
 
-        # 5. Parse each VMX and gather live data
+        # ------------------------------------------------------------------ #
+        # 5 & 6. Parse each VMX and gather live data
+        # ------------------------------------------------------------------ #
         vms_data: List[Dict[str, Any]] = []
 
         for vmx_path in vmx_paths_to_scan:
@@ -971,7 +1061,6 @@ class DiscoveryService:
           ssh_key_path  — path to private key (default: C:/Users/PC/.ssh/id_rsa_kvm)
         """
         import warnings as _warnings
-        import xml.etree.ElementTree as ET
         import paramiko
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
@@ -1074,88 +1163,214 @@ class DiscoveryService:
             client.close()
 
     # ========================================================================
-    # SAUVEGARDE DES VMs DÉCOUVERTES
+    # SAUVEGARDE ET SYNCHRONISATION DES VMs DÉCOUVERTES
     # ========================================================================
 
     def _save_discovered_vms(
-            self,
-            hypervisor: Hypervisor,
-            vms_data: List[Dict[str, Any]]
+        self,
+        hypervisor: Hypervisor,
+        vms_data: List[Dict[str, Any]],
     ) -> Dict[str, int]:
         """
-        Sauvegarde les VMs découvertes dans la base de données
+        Synchronise les VMs découvertes avec la base de données.
+
+        Sync rules (keyed on source_uuid):
+        ┌─────────────────────────────────────────────┬───────────────────────┐
+        │ Hypervisor          │ Database               │ Action                │
+        ├─────────────────────┼────────────────────────┼───────────────────────┤
+        │ VM present          │ Not found              │ INSERT (new discovery)│
+        │ VM present          │ Found                  │ UPDATE if changed     │
+        │ VM absent           │ Found (not protected)  │ Mark ARCHIVED         │
+        └─────────────────────┴────────────────────────┴───────────────────────┘
+
+        Also updates hypervisor.total_vms_discovered with the live count.
 
         Args:
-            hypervisor: Hypervisor source
-            vms_data: Liste des VMs découvertes
+            hypervisor: Hypervisor source.
+            vms_data:   List of VM dicts returned by the discovery method.
 
         Returns:
-            Statistiques (total, nouvelles, mises à jour)
+            Statistics dict: total_discovered, new_vms, updated_vms,
+                             archived_vms, unchanged_vms, errors.
         """
         stats = {
             "total_discovered": len(vms_data),
             "new_vms": 0,
             "updated_vms": 0,
-            "errors": 0
+            "unchanged_vms": 0,
+            "archived_vms": 0,
+            "errors": 0,
         }
+
+        # Track every UUID actually returned by the hypervisor this run.
+        discovered_uuids: set = set()
 
         for vm_data in vms_data:
             try:
-                existing_vm = self.db.query(VirtualMachine).filter(
-                    VirtualMachine.source_hypervisor_id == hypervisor.id,
-                    VirtualMachine.source_uuid == vm_data["source_uuid"]
-                ).first()
+                uuid = vm_data["source_uuid"]
+                discovered_uuids.add(uuid)
 
-                if not existing_vm:
-                    existing_vm = self.db.query(VirtualMachine).filter(
+                # ----------------------------------------------------------
+                # Lookup: find existing DB record for this VM
+                # ----------------------------------------------------------
+
+                # Pass 1 — exact match: same hypervisor + same UUID (fast path)
+                existing_vm: Optional[VirtualMachine] = (
+                    self.db.query(VirtualMachine)
+                    .filter(
                         VirtualMachine.source_hypervisor_id == hypervisor.id,
-                        VirtualMachine.name == vm_data["name"]
-                    ).first()
+                        VirtualMachine.source_uuid == uuid,
+                    )
+                    .first()
+                )
 
+                # Pass 2 — UUID global fallback: VM was orphaned (hypervisor
+                # deleted with SET NULL) or imported from another hypervisor.
+                # Re-attach to current hypervisor to avoid duplicates.
+                if not existing_vm:
+                    existing_vm = (
+                        self.db.query(VirtualMachine)
+                        .filter(
+                            VirtualMachine.tenant_id == hypervisor.tenant_id,
+                            VirtualMachine.source_uuid == uuid,
+                        )
+                        .first()
+                    )
+                    if existing_vm:
+                        old_hyp_id = existing_vm.source_hypervisor_id
+                        existing_vm.source_hypervisor_id = hypervisor.id
+                        logger.info(
+                            f"🔗 VM ré-attachée à l'hyperviseur {hypervisor.id}: "
+                            f"{existing_vm.name} (anciennement hyp={old_hyp_id})"
+                        )
+
+                # Pass 3 — name fallback within this hypervisor (legacy rows
+                # that predate UUID tracking).
+                if not existing_vm:
+                    existing_vm = (
+                        self.db.query(VirtualMachine)
+                        .filter(
+                            VirtualMachine.source_hypervisor_id == hypervisor.id,
+                            VirtualMachine.name == vm_data["name"],
+                        )
+                        .first()
+                    )
+
+                # ----------------------------------------------------------
+                # INSERT or UPDATE
+                # ----------------------------------------------------------
                 if existing_vm:
-                    self._update_vm_from_discovery(existing_vm, vm_data)
-                    stats["updated_vms"] += 1
-                    logger.info(f"✅ VM mise à jour: {vm_data['name']}")
+                    changed = self._update_vm_from_discovery(existing_vm, vm_data)
+                    if changed:
+                        stats["updated_vms"] += 1
+                        logger.info(f"✏️  VM mise à jour: {vm_data['name']}")
+                    else:
+                        stats["unchanged_vms"] += 1
+                        logger.debug(f"✔  VM inchangée: {vm_data['name']}")
                 else:
                     new_vm = self._create_vm_from_discovery(hypervisor, vm_data)
                     self.db.add(new_vm)
-                    self.db.flush()
+                    self.db.flush()   # obtain new_vm.id before logging
                     stats["new_vms"] += 1
-                    logger.info(f"✅ Nouvelle VM créée: {vm_data['name']} (ID: {new_vm.id})")
+                    logger.info(f"➕ Nouvelle VM créée: {vm_data['name']} (ID: {new_vm.id})")
 
             except (ValueError, KeyError, AttributeError, TypeError) as e:
-                logger.error(f"❌ Erreur sauvegarde VM {vm_data.get('name', 'unknown')}: {str(e)}")
+                logger.error(
+                    f"❌ Erreur sauvegarde VM {vm_data.get('name', 'unknown')}: {str(e)}"
+                )
                 logger.error(traceback.format_exc())
                 stats["errors"] += 1
 
+        # ------------------------------------------------------------------
+        # ARCHIVE — VMs in DB that are no longer reported by the hypervisor.
+        #
+        # We always run the archive query, even when discovered_uuids is empty
+        # (i.e. the hypervisor returned zero VMs this cycle), so that VMs
+        # deleted from Workstation are properly archived.
+        #
+        # Protected statuses (MIGRATING, MIGRATED) are never touched.
+        # ------------------------------------------------------------------
+        _PROTECTED = {VMStatus.MIGRATING, VMStatus.MIGRATED}
+
+        stale_query = (
+            self.db.query(VirtualMachine)
+            .filter(
+                VirtualMachine.source_hypervisor_id == hypervisor.id,
+                VirtualMachine.status != VMStatus.ARCHIVED,
+                VirtualMachine.status.notin_(_PROTECTED),
+            )
+        )
+        # Exclude UUIDs we just saw (only filter when the set is non-empty to
+        # avoid an accidental "archive everything" when notin_([]) is a no-op).
+        if discovered_uuids:
+            stale_query = stale_query.filter(
+                VirtualMachine.source_uuid.notin_(discovered_uuids)
+            )
+
+        for stale_vm in stale_query.all():
+            stale_vm.status = VMStatus.ARCHIVED
+            stats["archived_vms"] += 1
+            logger.info(f"🗄️  VM archivée (disparue de l'hyperviseur): {stale_vm.name}")
+
+        # ------------------------------------------------------------------
+        # Sync hypervisor.total_vms_discovered with the live count.
+        # We count every active (non-archived) VM attached to this hypervisor
+        # after the sync so the number is always accurate.
+        # ------------------------------------------------------------------
+        # live_count: int = (
+        #     self.db.query(VirtualMachine)
+        #     .filter(
+        #         VirtualMachine.source_hypervisor_id == hypervisor.id,
+        #         VirtualMachine.status != VMStatus.ARCHIVED,
+        #     )
+        #     .count()
+        # )
+        
+        # hypervisor.total_vms_discovered = live_count
+        # hypervisor.last_sync_at = datetime.now(timezone.utc)
+        # logger.info(f"🔢 total_vms_discovered mis à jour → {live_count}")
+
+        # Commit first so the live count query sees all flushed changes
         self.db.commit()
 
+        live_count: int = (
+            self.db.query(VirtualMachine)
+            .filter(
+                VirtualMachine.source_hypervisor_id == hypervisor.id,
+                VirtualMachine.status != VMStatus.ARCHIVED,
+            )
+            .count()
+        )
+
+        hypervisor.total_vms_discovered = live_count
+        hypervisor.last_sync_at = datetime.now(timezone.utc)
+        logger.info(f"🔢 total_vms_discovered mis à jour → {live_count}")
+        self.db.commit()
+        stats["live_count"] = live_count
         return stats
 
     def _create_vm_from_discovery(
-            self,
-            hypervisor: Hypervisor,
-            vm_data: Dict[str, Any]
+        self,
+        hypervisor: Hypervisor,
+        vm_data: Dict[str, Any],
     ) -> VirtualMachine:
         """
-        Crée une nouvelle VM depuis les données de découverte
+        Crée une nouvelle entrée VirtualMachine depuis les données de découverte.
 
-        Args:
-            hypervisor: Hypervisor source
-            vm_data: Données de la VM découverte
-
-        Returns:
-            Instance VirtualMachine
+        Sets source_hypervisor_id, source_uuid, and all hardware/OS fields
+        from vm_data.  status is set to DISCOVERED; compatibility_status
+        comes from the discovery assessment (may be refined by the analyser
+        pipeline later).
         """
         vm = VirtualMachine(
             name=vm_data["name"],
             tenant_id=hypervisor.tenant_id,
-            source_hypervisor_id=hypervisor.id,
-            source_uuid=vm_data["source_uuid"],
+            source_hypervisor_id=hypervisor.id,        # ← FK to hypervisors.id
+            source_uuid=vm_data["source_uuid"],         # ← stable identifier
             source_name=vm_data["source_name"],
             cpu_cores=vm_data.get("cpu_cores", 1),
             memory_mb=vm_data.get("memory_mb", 1024),
-            disk_gb=vm_data.get("disk_gb", 10),
+            disk_gb=vm_data.get("disk_gb", 0),
             os_type=vm_data.get("os_type"),
             os_version=vm_data.get("os_version"),
             os_name=vm_data.get("os_name"),
@@ -1163,36 +1378,114 @@ class DiscoveryService:
             mac_address=vm_data.get("mac_address"),
             hostname=vm_data.get("hostname"),
             status=VMStatus.DISCOVERED,
-            compatibility_status=CompatibilityStatus.UNKNOWN,
+            compatibility_status=vm_data.get("compatibility_status", CompatibilityStatus.UNKNOWN),
+            openshift_namespace=None,
             discovered_at=datetime.now(timezone.utc),
-            last_seen_at=datetime.now(timezone.utc)
+            last_seen_at=datetime.now(timezone.utc),
+            custom_metadata={
+                k: vm_data[k]
+                for k in ("power_state", "vmx_path", "tools_state")
+                if k in vm_data
+            } or None,
         )
-
         return vm
 
     def _update_vm_from_discovery(
-            self,
-            vm: VirtualMachine,
-            vm_data: Dict[str, Any]
-    ) -> None:
+        self,
+        vm: VirtualMachine,
+        vm_data: Dict[str, Any],
+    ) -> bool:
         """
-        Met à jour une VM existante avec les nouvelles données
+        Met à jour une VM existante avec les nouvelles données de découverte.
 
-        Args:
-            vm: VM existante à mettre à jour
-            vm_data: Nouvelles données de découverte
+        Fields updated on every sync
+        ----------------------------
+        • source_hypervisor_id  — re-attached if the VM was orphaned
+        • source_uuid           — back-fill if missing (legacy rows)
+        • source_name           — display name may be renamed inside Workstation
+        • Hardware specs        — cpu_cores, memory_mb, disk_gb are updated when
+                                   the hypervisor reports a different value; VMs
+                                   can be reconfigured without being re-created.
+        • os_type / os_version / os_name — same rationale as hardware specs
+        • ip_address / mac_address       — only when the new value is non-null
+        • hostname                        — only when the new value is non-null
+        • last_seen_at                    — always refreshed
+        • custom_metadata (power_state, vmx_path, tools_state)
+
+        Fields intentionally NOT touched
+        ---------------------------------
+        • status / compatibility_status  — managed by the analyser pipeline
+        • discovered_at                  — immutable creation timestamp
+        • openshift_* fields             — set by the migration pipeline
+
+        Returns:
+            True  — at least one field was changed (caller increments updated_vms)
+            False — nothing changed (caller increments unchanged_vms)
         """
-        vm.cpu_cores = vm_data.get("cpu_cores", vm.cpu_cores)
-        vm.memory_mb = vm_data.get("memory_mb", vm.memory_mb)
-        vm.disk_gb = vm_data.get("disk_gb", vm.disk_gb)
-        vm.ip_address = vm_data.get("ip_address", vm.ip_address)
-        vm.mac_address = vm_data.get("mac_address", vm.mac_address)
-        vm.hostname = vm_data.get("hostname", vm.hostname)
-        vm.os_version = vm_data.get("os_version", vm.os_version)
-        vm.last_seen_at = datetime.now(timezone.utc)
+        changed = False
 
-        if vm.status not in [VMStatus.MIGRATING, VMStatus.MIGRATED]:
+        # Reactivate VM if it was archived but is now seen again in the hypervisor
+        if vm.status == VMStatus.ARCHIVED:
             vm.status = VMStatus.DISCOVERED
+            changed = True
+            logger.info(f"♻️  VM réactivée (réapparue dans l'hyperviseur): {vm.name}")
+
+        def _set(attr: str, new_val: Any) -> None:
+            nonlocal changed
+            if new_val is not None and getattr(vm, attr) != new_val:
+                setattr(vm, attr, new_val)
+                changed = True
+
+        # Always ensure the FK is correct (covers re-attach path)
+        if vm.source_hypervisor_id != vm_data.get("_hypervisor_id"):
+            # _hypervisor_id is injected by _save_discovered_vms below when needed;
+            # the re-attach path already sets it directly on the object before
+            # calling this method, so we only need to handle the explicit key.
+            pass  # handled in _save_discovered_vms (direct assignment)
+
+        # Back-fill source_uuid on legacy rows that predate UUID tracking
+        if not vm.source_uuid and vm_data.get("source_uuid"):
+            vm.source_uuid = vm_data["source_uuid"]
+            changed = True
+
+        # Hardware specs — update when the hypervisor reports something different
+        _set("source_name", vm_data.get("source_name"))
+        _set("cpu_cores",   vm_data.get("cpu_cores"))
+        _set("memory_mb",   vm_data.get("memory_mb"))
+
+        new_disk = vm_data.get("disk_gb")
+        if new_disk is not None and new_disk > 0:
+            _set("disk_gb", new_disk)
+
+        # OS metadata
+        _set("os_type",    vm_data.get("os_type"))
+        _set("os_version", vm_data.get("os_version"))
+        _set("os_name",    vm_data.get("os_name"))
+
+        # Network — only overwrite when the new value is non-null so a
+        # temporarily unreachable VM doesn't lose its last-known address.
+        if vm_data.get("ip_address"):
+            _set("ip_address", vm_data["ip_address"])
+        if vm_data.get("mac_address"):
+            _set("mac_address", vm_data["mac_address"])
+        if vm_data.get("hostname"):
+            _set("hostname", vm_data["hostname"])
+
+        # Always refresh last_seen_at
+        vm.last_seen_at = datetime.now(timezone.utc)
+        changed = True   # last_seen_at is always considered a meaningful update
+
+        # Merge live hypervisor metadata
+        meta_keys = ("power_state", "vmx_path", "tools_state")
+        new_meta = {k: vm_data[k] for k in meta_keys if k in vm_data}
+        if new_meta:
+            current_meta = vm.custom_metadata or {}
+            merged = {**current_meta, **new_meta}
+            if merged != current_meta:
+                vm.custom_metadata = merged
+                changed = True
+
+        return changed
 
 
 # ============================================================================
@@ -1200,5 +1493,5 @@ class DiscoveryService:
 # ============================================================================
 
 def create_discovery_service(db: Session) -> DiscoveryService:
-    """Factory pour créer une instance du service de découverte"""
+    """Factory pour créer une instance du service de découverte."""
     return DiscoveryService(db)

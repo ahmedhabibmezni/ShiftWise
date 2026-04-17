@@ -146,6 +146,6 @@ class Hypervisor(BaseModel):
         """
         if success:
             self.last_sync_at = datetime.now(timezone.utc)
-            self.total_vms_discovered = total_vms
+            # self.total_vms_discovered = total_vms
             self.last_successful_connection = datetime.now(timezone.utc)
         # last_sync_at non mis à jour si success=False → needs_sync reste True

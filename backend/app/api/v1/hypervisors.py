@@ -23,6 +23,7 @@ from app.schemas.hypervisor import (
 from app.services.discovery import create_discovery_service, DiscoveryError
 from app.crud import hypervisor as crud_hypervisor
 from app.schemas.vm import VMResponse
+from app.models.virtual_machine import VMStatus
 
 router = APIRouter()
 
@@ -264,7 +265,12 @@ def get_hypervisor_vms(
         )
 
     # Retourner les VMs associées
-    vms = [VMResponse.model_validate(vm) for vm in hypervisor.virtual_machines]
+    # vms = [VMResponse.model_validate(vm) for vm in hypervisor.virtual_machines]*
+    vms = [
+        VMResponse.model_validate(vm)
+        for vm in hypervisor.virtual_machines
+        if vm.status != VMStatus.ARCHIVED
+    ]
 
     return {
         "hypervisor_id": hypervisor_id,
@@ -311,6 +317,7 @@ def sync_hypervisor(
                 "total_discovered": stats["total_discovered"],
                 "new_vms": stats["new_vms"],
                 "updated_vms": stats["updated_vms"],
+                "archived_vms": stats.get("archived_vms", 0),
                 "errors": stats["errors"]
             }
         }
