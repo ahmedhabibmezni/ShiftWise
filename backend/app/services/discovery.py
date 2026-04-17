@@ -472,6 +472,119 @@ def _discover_single_vmx(
 
 
 # ============================================================================
+# Hyper-V helpers
+# ============================================================================
+
+# PowerShell script executed on the Hyper-V host to enumerate all VMs as JSON.
+# Uses Get-VM (all power states) + Get-VHD for disk size.
+_HYPERV_PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$vms = Get-VM
+$result = foreach ($vm in $vms) {
+    $net   = $vm.NetworkAdapters | Select-Object -First 1
+    $ip    = if ($net -and $net.IPAddresses)  { $net.IPAddresses[0] }  else { $null }
+    $mac   = if ($net -and $net.MacAddress)   { $net.MacAddress }       else { $null }
+
+    $diskBytes = 0
+    try {
+        $diskBytes = ($vm.HardDrives | Get-VHD -ErrorAction SilentlyContinue |
+                      Measure-Object -Property Size -Sum).Sum
+    } catch {}
+
+    $state = switch ($vm.State) {
+        'Running' { 'running'  }
+        'Off'     { 'stopped'  }
+        'Paused'  { 'paused'   }
+        default   { 'unknown'  }
+    }
+
+    [PSCustomObject]@{
+        name         = $vm.Name
+        source_uuid  = ($vm.Id.ToString() -replace '-', '').ToLower()
+        cpu_cores    = [int]$vm.ProcessorCount
+        memory_mb    = [int]($vm.MemoryAssigned / 1MB)
+        disk_gb      = [int][Math]::Round($diskBytes / 1GB, 0)
+        power_state  = $state
+        ip_address   = $ip
+        mac_address  = $mac
+        hostname     = $vm.ComputerName
+    }
+}
+$result | ConvertTo-Json -Depth 3
+"""
+
+# Remote wrapper: reads all sensitive values from env vars so that no credential
+# ever appears in a command-line argument (prevents shell/PS injection).
+_HYPERV_REMOTE_PS_WRAPPER = r"""
+$pass = ConvertTo-SecureString $env:HV_PASS -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential($env:HV_USER, $pass)
+$sb   = [scriptblock]::Create($env:HV_SCRIPT)
+Invoke-Command -ComputerName $env:HV_HOST -Credential $cred -ScriptBlock $sb
+"""
+
+
+def _build_hyperv_command(
+    host: str,
+    auth_mode: str,
+    username: Optional[str],
+    password: Optional[str],
+) -> tuple:
+    """
+    Construit la commande PowerShell et les variables d'environnement pour la découverte Hyper-V.
+
+    Returns:
+        (cmd, extra_env) — extra_env is None for local, a dict of HV_* vars for remote.
+    """
+    is_local = (auth_mode == "local") and (host in ("localhost", "127.0.0.1"))
+    if is_local:
+        return ["powershell", "-NonInteractive", "-Command", _HYPERV_PS_SCRIPT], None
+
+    if not username or not password:
+        raise DiscoveryError(
+            f"La découverte Hyper-V distante requiert username et password (host={host})"
+        )
+    extra_env = {
+        "HV_PASS":   password,
+        "HV_USER":   username,
+        "HV_HOST":   host,
+        "HV_SCRIPT": _HYPERV_PS_SCRIPT,
+    }
+    return ["powershell", "-NonInteractive", "-Command", _HYPERV_REMOTE_PS_WRAPPER], extra_env
+
+
+def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
+    """Parse la sortie JSON de PowerShell en liste de dicts VM standardisés."""
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise DiscoveryError(f"Impossible de parser la sortie JSON PowerShell: {exc}")
+
+    # PowerShell emits a bare object (not array) when exactly one VM exists
+    if isinstance(data, dict):
+        data = [data]
+
+    vms: List[Dict[str, Any]] = []
+    for item in data:
+        vms.append({
+            "source_uuid":          item.get("source_uuid") or "",
+            "source_name":          item.get("name") or "unknown",
+            "name":                 item.get("name") or "unknown",
+            "cpu_cores":            int(item.get("cpu_cores") or 0),
+            "memory_mb":            int(item.get("memory_mb") or 0),
+            "disk_gb":              int(item.get("disk_gb") or 0),
+            "os_type":              OSType.UNKNOWN,
+            "os_version":           "N/A",
+            "os_name":              "N/A",
+            "ip_address":           item.get("ip_address"),
+            "mac_address":          item.get("mac_address"),
+            "hostname":             item.get("hostname"),
+            "power_state":          item.get("power_state") or "unknown",
+            "compatibility_status": CompatibilityStatus.UNKNOWN,
+        })
+    return vms
+
+
+# ============================================================================
 # KVM helpers
 # ============================================================================
 
@@ -798,40 +911,57 @@ class DiscoveryService:
         return vms_data
 
     def _discover_hyperv(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
-        """
-        Découvre les VMs depuis Hyper-V
+        """Découvre les VMs d'un hôte Hyper-V via un script PowerShell."""
+        cfg: Dict[str, Any] = hypervisor.connection_config or {}
+        host: str = hypervisor.host or "localhost"
+        auth_mode: str = cfg.get("auth_mode", "local")
 
-        Args:
-            hypervisor: Instance de l'hypervisor Hyper-V
+        logger.info(f"Découverte Hyper-V: host={host}, auth_mode={auth_mode}")
 
-        Returns:
-            Liste des VMs découvertes
-        """
-        logger.info(f"Connexion à Hyper-V: {hypervisor.host}")
+        cmd, extra_env = _build_hyperv_command(
+            host, auth_mode, hypervisor.username, hypervisor.password
+        )
+
+        run_env = None
+        if extra_env:
+            logger.warning(f"Connexion Hyper-V distante vers {host} (credentials utilisés, non journalisés)")
+            run_env = {**os.environ, **extra_env}
 
         try:
-            logger.warning("⚠️  Mode SIMULATION - PowerShell Hyper-V non encore implémenté")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=run_env,
+            )
+        except FileNotFoundError:
+            raise DiscoveryError(
+                "powershell.exe introuvable. La découverte Hyper-V nécessite Windows avec PowerShell."
+            )
+        except subprocess.TimeoutExpired:
+            raise DiscoveryError(
+                f"PowerShell timeout (120s) lors de la découverte Hyper-V id={hypervisor.id}"
+            )
 
-            mock_vms = [
-                {
-                    "source_uuid": "vm-001-hyperv",
-                    "source_name": "exchange-server",
-                    "name": "exchange-server",
-                    "cpu_cores": 4,
-                    "memory_mb": 8192,
-                    "disk_gb": 200,
-                    "os_type": OSType.WINDOWS,
-                    "os_version": "Windows Server 2022",
-                    "os_name": "Windows Server 2022 Datacenter",
-                    "ip_address": "192.168.2.10",
-                    "power_state": "Running"
-                }
-            ]
+        if result.returncode != 0:
+            raise DiscoveryError(
+                f"Erreur PowerShell (rc={result.returncode}): {result.stderr.strip()}"
+            )
 
-            return mock_vms
+        raw = result.stdout.strip()
+        if not raw:
+            logger.info("PowerShell: aucune VM retournée — retour liste vide (déclenche ARCHIVE)")
+            return []
 
-        except Exception as e:
-            raise DiscoveryError(f"Erreur connexion Hyper-V: {str(e)}")
+        vms = _parse_hyperv_output(raw)
+        for vm in vms:
+            logger.info(
+                f"  Hyper-V '{vm['name']}': cpus={vm['cpu_cores']}, "
+                f"mem={vm['memory_mb']}MB, disk={vm['disk_gb']}GB, "
+                f"power={vm['power_state']}, ip={vm['ip_address']}"
+            )
+        return vms
 
     def _discover_kvm(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """Discover KVM/QEMU VMs via SSH + virsh using paramiko.
