@@ -96,7 +96,7 @@ class VirtualMachine(BaseModel):
 
     # OpenShift Virtualization (après migration)
     openshift_vm_name = Column(String(255), nullable=True, index=True)
-    openshift_namespace = Column(String(255), nullable=True, default="default")
+    openshift_namespace = Column(String(255), nullable=True)
     openshift_node = Column(String(255), nullable=True)  # Node où tourne la VM
 
     # Métadonnées de découverte
