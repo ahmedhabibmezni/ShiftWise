@@ -471,6 +471,84 @@ def _discover_single_vmx(
     }
 
 
+# ============================================================================
+# KVM helpers
+# ============================================================================
+
+_KVM_STATE_MAP = {
+    "running":     "running",
+    "paused":      "paused",
+    "shut off":    "stopped",
+    "shutoff":     "stopped",
+    "shutdown":    "stopped",
+    "crashed":     "stopped",
+    "pmsuspended": "paused",
+}
+
+_KVM_LINUX_KEYWORDS = [
+    "linux", "ubuntu", "centos", "alpine", "debian",
+    "fedora", "rhel", "suse", "arch", "gentoo",
+]
+
+
+def _parse_kvm_domain_xml(
+    xml_str: str,
+    state_str: str,
+    disk_sizes: Dict[str, int],
+) -> Dict[str, Any]:
+    """Parse virsh dumpxml output into a ShiftWise VM dict."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(xml_str)
+
+    name = root.findtext("name") or "unknown"
+    uuid_raw = root.findtext("uuid") or ""
+    uuid = uuid_raw.replace("-", "").lower()
+
+    cpu_cores = int(root.findtext("vcpu") or 1)
+    memory_kb = int(root.findtext("memory") or 0)
+    memory_mb = memory_kb // 1024
+
+    disk_gb = 0
+    for disk_el in root.findall(".//disk[@device='disk']"):
+        src = disk_el.find("source")
+        if src is not None:
+            path = src.get("file") or src.get("dev") or ""
+            if path and path in disk_sizes:
+                disk_gb = max(disk_gb, disk_sizes[path])
+
+    name_lower = name.lower()
+    if any(k in name_lower for k in _KVM_LINUX_KEYWORDS):
+        os_type = OSType.LINUX
+    elif any(k in name_lower for k in ("windows", "win")):
+        os_type = OSType.WINDOWS
+    else:
+        os_type = OSType.UNKNOWN
+
+    power_state = _KVM_STATE_MAP.get(state_str.lower().strip(), "unknown")
+
+    mac_address = None
+    mac_el = root.find(".//interface/mac")
+    if mac_el is not None:
+        mac_address = mac_el.get("address")
+
+    return {
+        "source_uuid":          uuid,
+        "source_name":          name,
+        "name":                 name,
+        "cpu_cores":            cpu_cores,
+        "memory_mb":            memory_mb,
+        "disk_gb":              disk_gb,
+        "os_type":              os_type,
+        "os_version":           "N/A",
+        "os_name":              "N/A",
+        "ip_address":           None,
+        "mac_address":          mac_address,
+        "hostname":             None,
+        "power_state":          power_state,
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+    }
+
+
 class DiscoveryService:
     """Service de découverte des VMs depuis les hyperviseurs"""
 
@@ -756,40 +834,114 @@ class DiscoveryService:
             raise DiscoveryError(f"Erreur connexion Hyper-V: {str(e)}")
 
     def _discover_kvm(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
-        """
-        Découvre les VMs depuis KVM/QEMU
+        """Discover KVM/QEMU VMs via SSH + virsh using paramiko.
 
-        Args:
-            hypervisor: Instance de l'hypervisor KVM
-
-        Returns:
-            Liste des VMs découvertes
+        connection_config keys:
+          auth_mode     — "ssh_key" (default) | "local" (qemu:///system, no SSH)
+          ssh_key_path  — path to private key (default: C:/Users/PC/.ssh/id_rsa_kvm)
         """
-        logger.info(f"Connexion à KVM: {hypervisor.host}")
+        import warnings as _warnings
+        import xml.etree.ElementTree as ET
+        import paramiko
+
+        cfg: Dict[str, Any] = hypervisor.connection_config or {}
+        host_uri: str = hypervisor.host or "qemu:///system"
+
+        ssh_match = re.match(r"qemu\+ssh://(?:([^@]+)@)?([^/?]+)", host_uri)
+        if not ssh_match:
+            raise DiscoveryError(
+                f"KVM URI non supportée (attendu qemu+ssh://user@host/system): {host_uri}"
+            )
+
+        ssh_user: str = ssh_match.group(1) or "root"
+        ssh_host: str = ssh_match.group(2)
+        ssh_key_path: str = cfg.get("ssh_key_path") or "C:/Users/PC/.ssh/id_rsa_kvm"
+
+        logger.info(f"KVM SSH: {ssh_user}@{ssh_host}, key={ssh_key_path}")
+
+        def _run(client: paramiko.SSHClient, cmd: str):
+            _, stdout, stderr = client.exec_command(cmd)
+            rc = stdout.channel.recv_exit_status()
+            out = stdout.read().decode("utf-8", errors="replace").strip()
+            err = stderr.read().decode("utf-8", errors="replace").strip()
+            return out, err, rc
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                client.connect(
+                    ssh_host,
+                    username=ssh_user,
+                    key_filename=ssh_key_path,
+                    timeout=15,
+                    look_for_keys=True,
+                )
+            except Exception as exc:
+                raise DiscoveryError(f"SSH KVM connection failed ({ssh_user}@{ssh_host}): {exc}")
+
+        VIRSH = "virsh --connect qemu:///system"
 
         try:
-            logger.warning("⚠️  Mode SIMULATION - libvirt non encore implémenté")
+            names_out, names_err, names_rc = _run(client, f"{VIRSH} list --all --name")
+            if names_rc != 0:
+                raise DiscoveryError(f"virsh list failed: {names_err}")
 
-            mock_vms = [
-                {
-                    "source_uuid": "vm-001-kvm",
-                    "source_name": "test-fedora",
-                    "name": "test-fedora",
-                    "cpu_cores": 2,
-                    "memory_mb": 2048,
-                    "disk_gb": 30,
-                    "os_type": OSType.LINUX,
-                    "os_version": "Fedora 38",
-                    "os_name": "Fedora 38 Server",
-                    "ip_address": "192.168.122.10",
-                    "power_state": "running"
-                }
-            ]
+            domain_names = [n for n in names_out.splitlines() if n.strip()]
+            if not domain_names:
+                logger.info("KVM: no domains found")
+                return []
 
-            return mock_vms
+            vms: List[Dict[str, Any]] = []
 
-        except Exception as e:
-            raise DiscoveryError(f"Erreur connexion KVM: {str(e)}")
+            for name in domain_names:
+                try:
+                    xml_out, xml_err, xml_rc = _run(client, f"{VIRSH} dumpxml '{name}'")
+                    if xml_rc != 0:
+                        logger.error(f"KVM dumpxml failed for '{name}': {xml_err}")
+                        continue
+
+                    state_out, _, _ = _run(client, f"{VIRSH} domstate '{name}'")
+                    state_str = state_out.strip()
+
+                    root_el = ET.fromstring(xml_out)
+                    disk_paths = []
+                    for disk_el in root_el.findall(".//disk[@device='disk']"):
+                        src = disk_el.find("source")
+                        if src is not None:
+                            path = src.get("file") or src.get("dev") or ""
+                            if path:
+                                disk_paths.append(path)
+
+                    disk_sizes: Dict[str, int] = {}
+                    for path in disk_paths:
+                        img_out, _, img_rc = _run(
+                            client,
+                            f"qemu-img info --output=json '{path}' 2>/dev/null",
+                        )
+                        if img_rc == 0 and img_out:
+                            try:
+                                vsize = json.loads(img_out).get("virtual-size", 0)
+                                disk_sizes[path] = max(1, round(vsize / 1_073_741_824))
+                            except (ValueError, KeyError):
+                                disk_sizes[path] = 0
+
+                    vm_dict = _parse_kvm_domain_xml(xml_out, state_str, disk_sizes)
+                    vms.append(vm_dict)
+                    logger.info(
+                        f"  KVM '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
+                        f"mem={vm_dict['memory_mb']}MB, power={vm_dict['power_state']}, "
+                        f"disk={vm_dict['disk_gb']}GB, uuid={vm_dict['source_uuid']}"
+                    )
+                except ET.ParseError as exc:
+                    logger.error(f"KVM XML parse error for '{name}': {exc}")
+                except Exception as exc:
+                    logger.error(f"KVM error processing domain '{name}': {exc}")
+
+            return vms
+        finally:
+            client.close()
 
     # ========================================================================
     # SAUVEGARDE DES VMs DÉCOUVERTES
