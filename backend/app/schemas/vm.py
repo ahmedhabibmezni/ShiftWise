@@ -62,6 +62,10 @@ class VMUpdate(BaseModel):
 # Schéma pour la réponse (output API)
 class VMResponse(VMBase):
     """Schéma de réponse avec toutes les propriétés"""
+    # Override: discovery sets disk_gb=0 when the VMDK is not accessible from
+    # the backend host (remote hypervisor). 0 is a valid "unmeasured" sentinel.
+    disk_gb: int = Field(..., ge=0, description="Taille du disque en GB (0 = non mesurée)")
+
     id: int
     source_hypervisor_id: Optional[int] = None
     source_uuid: Optional[str] = None
