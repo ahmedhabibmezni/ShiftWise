@@ -51,3 +51,11 @@ logs/
 *.temp
 temp/
 tmp/
+
+# Claude
+.claudeignore
+CLAUDE.md
+ShiftWise_session_handoff.md
+
+# Documentations
+docs/
