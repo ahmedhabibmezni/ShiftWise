@@ -33,6 +33,14 @@ pyyaml==6.0.1
 # File operations & conversions (for future implementation)
 paramiko==3.4.0
 
+# Machine Learning (Analyzer)
+# NOTE: joblib artifacts are NOT portable across sklearn minor versions.
+#       Regenerate compatibility_model.joblib after bumping scikit-learn.
+scikit-learn==1.5.2
+joblib==1.4.2
+numpy==1.26.4
+pandas==2.2.1
+
 # Testing
 pytest==7.4.4
 pytest-asyncio==0.23.3

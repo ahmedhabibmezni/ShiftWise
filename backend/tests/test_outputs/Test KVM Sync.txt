@@ -1,0 +1,183 @@
+(.venv) PS C:\Users\PC\OneDrive\Bureau\Stage PFE\ShiftWise-Develop\backend> python .\tests\test_kvm_sync.py
+
+============================================================
+  ShiftWise — KVM Discovery Sync Test Suite
+  Server        : http://localhost:8000
+  Hypervisor ID : 36
+  KVM host      : qemu+ssh://ubuntu@10.9.21.131/system
+============================================================
+
+  ✅ Server is up — healthy
+
+============================================================
+  AUTH — Getting JWT token
+============================================================
+  ✅ Logged in as 'ahmed.mezni@nextstep.tn'
+  ℹ  Hypervisor found: id=36  name='kvm-ubuntu-vm'  type='kvm'
+
+============================================================
+  SCENARIO 1 — INSERT: VMs in KVM, not yet in DB
+============================================================
+  ℹ  State BEFORE sync:
+  ℹ    VMs in DB for this hypervisor : 1
+  ℹ    hypervisor.total_vms_discovered = 1
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-17T23:46:24.660524+01:00
+
+  ℹ  Running sync …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 36,
+  "hypervisor_name": "kvm-ubuntu-vm",
+  "status": "success",
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",
+  "statistics": {
+    "total_discovered": 1,
+    "new_vms": 0,
+    "updated_vms": 1,
+    "archived_vms": 0,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ℹ  State AFTER sync:
+  ℹ    VMs in DB for this hypervisor : 1
+  ℹ    hypervisor.total_vms_discovered = 1
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-17T23:50:37.161188+01:00
+
+  ⚠  new_vms = 0 — OK only if both KVM VMs were already in DB before this run.
+             Delete their rows and re-run for a clean INSERT test.                                                                                                                  
+  ⚠  VM count unchanged — DB was already populated (not an error).
+  ✅ hypervisor.status after sync: 'active'
+  ✅ hypervisor.last_sync_at is set: 2026-04-17T23:50:37.161188+01:00
+  ✅ hypervisor.total_vms_discovered = 1 (matches live VM count)
+  ✅ VM 'test-kvm-alpine' found in DB (id=129)
+  ✅ name: 'test-kvm-alpine'
+  ✅ cpu_cores: 1
+  ✅ memory_mb: 512
+  ✅ source_uuid format valid: '3731e3b58887431dbc45871316bf4bec'
+  ⚠  disk_gb = 0 — disk may not be registered in a libvirt storage pool.
+             Acceptable per plan risk register.                                                                                                                                     
+  ✅ os_type = 'linux' — matches name-based inference for 'test-kvm-alpine'
+  ✅ os_version: 'N/A'
+  ✅ os_name: 'N/A'
+  ✅ status: 'discovered'
+  ✅ custom_metadata.power_state = 'running'
+  ✅ VM 'test-kvm-alpine2' found in DB (id=130)
+  ✅ source_uuid format valid: '8311094ec91a4f6f8432fbbb0e5e361d'
+  ✅ custom_metadata.power_state = 'stopped'
+
+  ℹ  Discovered VMs:
+  ℹ    [ 130] 'test-kvm-alpine2'         uuid=8311094ec91a4f6f8432fbbb0e5e361d  os=linux     status=archived      power=stopped
+  ℹ    [ 129] 'test-kvm-alpine'          uuid=3731e3b58887431dbc45871316bf4bec  os=linux     status=discovered    power=running
+
+============================================================
+  SCENARIO 2 — UPDATE: VMs in KVM AND in DB
+============================================================
+  ℹ  Running a second sync immediately …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 36,                                                                                                                                                              
+  "hypervisor_name": "kvm-ubuntu-vm",                                                                                                                                               
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 1,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 1,                                                                                                                                                               
+    "archived_vms": 0,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ new_vms=0  updated_vms=1  unchanged_vms=0  archived_vms=0
+  ✅ No duplicate INSERTs on second sync — source_uuid dedup working correctly
+  ✅ All 1 existing VMs processed (updated or unchanged)
+  ✅ last_seen_at updated for 'test-kvm-alpine': 2026-04-17T23:50:37.138431+01:00 → 2026-04-17T23:50:38.699655+01:00
+  ✅ 'test-kvm-alpine' still 'discovered' after second sync
+  ✅ os_type still = 'linux' after second sync (stable, not overwritten)
+  ✅ source_uuid format still valid after second sync: '3731e3b58887431dbc45871316bf4bec'
+
+============================================================
+  SCENARIO 3 — ARCHIVE: VM in DB, gone from KVM
+============================================================
+  ℹ  Injecting a fake VM into the DB: name='ghost-kvm-vm-test'  uuid='deadbeef000000000000000000000036'
+  ℹ  This VM does NOT exist on the real KVM host.
+  ✅ Fake VM injected: id=131  uuid=deadbeef000000000000000000000036
+  ℹ  Fake VM created: id=131, status='discovered'
+
+  ℹ  Running sync — fake VM should be marked ARCHIVED …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 36,                                                                                                                                                              
+  "hypervisor_name": "kvm-ubuntu-vm",                                                                                                                                               
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 1,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 1,                                                                                                                                                               
+    "archived_vms": 1,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ archived_vms = 1 (≥1 VM was archived)
+  ✅ VM id=131 status is now 'archived' — correct behavior
+  ✅ Fake VM still exists in DB (id=131) — not deleted, only archived
+  ✅ 'test-kvm-alpine' still 'discovered' — only the ghost VM was archived
+  ✅ Archived VM no longer appears in the live VM list for this hypervisor
+  ℹ  hypervisor.total_vms_discovered after archive = 1 (should NOT count the ghost VM)
+
+============================================================
+  BONUS — Verify hypervisors ↔ virtual_machines JOIN
+============================================================
+  ℹ  Hypervisor  id               : 36
+  ℹ  Hypervisor  name             : 'kvm-ubuntu-vm'
+  ℹ  Hypervisor  type             : 'kvm'
+  ℹ  Hypervisor  host             : 'qemu+ssh://ubuntu@10.9.21.131/system'
+  ℹ  Hypervisor  total_vms_disc.  : 1
+  ℹ  Hypervisor  last_sync_at     : 2026-04-17T23:50:40.414571+01:00
+  ℹ    /hypervisors/36/vms  → total_vms = 1
+  ℹ    /vms?hypervisor_id=36 → count     = 3
+
+  ✅ All VMs from /hypervisors/36/vms have correct source_hypervisor_id
+  ✅ hypervisor.total_vms_discovered (1) matches non-archived VM count (1)
+  ✅ All VMs have a source_uuid
+  ✅ All source_uuids are 32-char lowercase no-dash (KVM UUID normalization correct)
+  ✅ All KVM VMs have os_type consistent with name-based inference (discovery.py heuristic)
+  ✅ connection_config.auth_mode = 'ssh_key'
+
+  ℹ  VM snapshot (id | name | uuid | cpu | mem | disk | os | status | power):
+  ℹ    [ 130] 'test-kvm-alpine2'         uuid=8311094ec91a4f6f8432fbbb0e5e361d  cpu= 1  mem=  512MB  disk=  0GB  os=linux     archived      power=stopped
+  ℹ    [ 129] 'test-kvm-alpine'          uuid=3731e3b58887431dbc45871316bf4bec  cpu= 1  mem=  512MB  disk=  0GB  os=linux     discovered    power=running
+  ℹ    [ 131] 'ghost-kvm-vm-test'        uuid=deadbeef000000000000000000000036  cpu= 1  mem=  512MB  disk= 10GB  os=unknown   archived      power=N/A
+
+  ℹ  'test-kvm-alpine' final state:
+  ℹ    id               : 129
+  ℹ    name             : 'test-kvm-alpine'
+  ℹ    source_uuid      : '3731e3b58887431dbc45871316bf4bec'
+  ℹ    cpu_cores        : 1
+  ℹ    memory_mb        : 512
+  ℹ    disk_gb          : 0
+  ℹ    os_type          : 'linux'
+  ℹ    os_version       : 'N/A'
+  ℹ    os_name          : 'N/A'
+  ℹ    status           : 'discovered'
+  ℹ    custom_metadata  : {'power_state': 'running'}
+  ℹ    ip_address       : None
+  ℹ    discovered_at    : 2026-04-17T23:07:11.682091+01:00
+  ℹ    last_seen_at     : 2026-04-17T23:50:40.399362+01:00
+
+============================================================
+  FINAL SUMMARY
+============================================================
+  ✅ Hypervisor status            : active
+  ✅ Hypervisor last_sync_at      : 2026-04-17T23:50:40.414571+01:00
+  ✅ Hypervisor total_vms_disc.   : 1
+  ✅ Live VMs in DB               : 1
+  ✅ Archived VMs in DB           : 2
+  ✅ /hypervisors/36/vms total : 1
+
+All KVM sync scenarios completed.

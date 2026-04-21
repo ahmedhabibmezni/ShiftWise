@@ -205,7 +205,7 @@ def _vmx_uuid(config: Dict[str, str]) -> str:
     return re.sub(r"[^a-zA-Z0-9_\-]", "_", config.get("displayname", "unknown"))
 
 
-def _vmx_disk_gb(vmx_path: str) -> int:
+def _vmx_disk_gb(vmx_path: str, config: Dict[str, str]) -> int:
     """
     Estimate total disk size in GB by summing all VMDK files in the VMX directory.
 
@@ -441,7 +441,7 @@ def _discover_single_vmx(
     uuid = _vmx_uuid(config)
     num_cpus = int(config.get("numvcpus", config.get("cpuid.corespersocket", "1")))
     memory_mb = int(config.get("memsize", "1024"))
-    disk_gb = _vmx_disk_gb(vmx_path)
+    disk_gb = _vmx_disk_gb(vmx_path, config)
     guest_os_raw = config.get("guestos", "other")
     os_type = _vmx_os_type(guest_os_raw)
     os_version = _vmx_os_version(guest_os_raw)

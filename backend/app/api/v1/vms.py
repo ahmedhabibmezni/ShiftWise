@@ -21,6 +21,7 @@ from app.schemas.vm import (
 )
 from app.schemas.migration import MigrationResponse
 from app.crud import vm as crud_vm
+from app.services.analyzer import create_analyzer_service
 
 router = APIRouter()
 
@@ -140,6 +141,54 @@ def get_vms_stats(
     return stats
 
 
+@router.get("/analyze/stats")
+def get_compatibility_stats(
+    db: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+):
+    """
+    Compatibility analysis statistics.
+
+    **Permissions requises :** vms:read
+    """
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    analyzer = create_analyzer_service()
+    return analyzer.get_stats(db, tenant_id=tenant_id)
+
+
+@router.post("/analyze/batch")
+def analyze_vms_batch(
+    vm_ids: Annotated[list[int], Query(description="VM IDs to analyze")] = [],
+    force: Annotated[bool, Query(description="Re-analyze already-classified VMs")] = False,
+    db: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
+):
+    """
+    Analyze multiple VMs (batch, synchronous, capped at 20).
+
+    Exceeding 20 IDs returns 422. For true batch async, see Phase 4 (Celery).
+
+    **Permissions requises :** vms:update
+    """
+    if len(vm_ids) > 20:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Batch cap exceeded: {len(vm_ids)} > 20 (use Celery for async batch)"
+        )
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    # Filter VM IDs by tenant (unless superuser)
+    if tenant_id:
+        accessible_ids = set(
+            db.query(VirtualMachine.id)
+            .filter(VirtualMachine.tenant_id == tenant_id, VirtualMachine.id.in_(vm_ids))
+            .all()
+        )
+        vm_ids = [vid for vid in vm_ids if vid in accessible_ids]
+    analyzer = create_analyzer_service()
+    result = analyzer.analyze_batch(db, vm_ids[:20], force=force)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Routes dynamiques /{vm_id}
 # ---------------------------------------------------------------------------
@@ -215,6 +264,42 @@ def delete_vm(
         )
 
     return None
+
+
+@router.post("/{vm_id}/analyze", response_model=dict)
+def analyze_single_vm(
+    vm_id: int,
+    force: Annotated[bool, Query(description="Re-analyze already-classified VMs")] = False,
+    db: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
+):
+    """
+    Analyze a single VM's compatibility.
+
+    By default, skips VMs already classified (status != UNKNOWN). Pass `?force=true`
+    to re-analyze regardless of current compatibility_status.
+
+    **Permissions requises :** vms:update
+    """
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    vm = crud_vm.get_vm(db, vm_id, tenant_id=tenant_id)
+
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"VM avec l'ID {vm_id} introuvable"
+        )
+
+    analyzer = create_analyzer_service()
+    result = analyzer.analyze_vm(db, vm_id, force=force)
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erreur lors de l'analyse de la VM"
+        )
+
+    return result
 
 
 @router.get("/{vm_id}/migrations")

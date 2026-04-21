@@ -59,3 +59,9 @@ ShiftWise_session_handoff.md
 
 # Documentations
 docs/
+
+# Obsidian
+.obsidian/
+*.canvas
+*.canvas~
+.obsidian.vimrc

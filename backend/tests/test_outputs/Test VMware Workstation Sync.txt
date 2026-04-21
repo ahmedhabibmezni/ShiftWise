@@ -1,0 +1,144 @@
+(.venv) PS C:\Users\PC\OneDrive\Bureau\Stage PFE\ShiftWise-Develop\backend> python .\tests\test_vmware_workstation_sync.py
+
+============================================================
+  ShiftWise — Discovery Sync Test Suite
+  Server : http://localhost:8000
+  Hypervisor ID : 10
+============================================================
+
+  ✅ Server is up — healthy
+
+============================================================
+  AUTH — Getting JWT token
+============================================================
+  ✅ Logged in as 'ahmed.mezni@nextstep.tn'
+  ℹ  Hypervisor found: id=10  name='workstation-local'  type='vmware_workstation'
+
+============================================================
+  SCENARIO 1 — INSERT: VM in hypervisor, not in DB
+============================================================
+  ℹ  State BEFORE sync:
+  ℹ    VMs in DB for this hypervisor: 1
+  ℹ    hypervisor.total_vms_discovered = 1
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-16T21:04:43.852207+01:00
+
+  ℹ  Running sync …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 10,
+  "hypervisor_name": "workstation-local",
+  "status": "success",
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",
+  "statistics": {
+    "total_discovered": 2,
+    "new_vms": 1,
+    "updated_vms": 1,
+    "archived_vms": 0,
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ℹ  State AFTER sync:
+  ℹ    VMs in DB for this hypervisor: 2
+  ℹ    hypervisor.total_vms_discovered = 2
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-17T23:55:00.620688+01:00
+
+  ✅ new_vms = 1 — at least one VM was INSERTed
+  ✅ VM count grew: 1 → 2
+  ✅ hypervisor.status after sync: 'active'
+  ✅ hypervisor.last_sync_at is set: 2026-04-17T23:55:00.620688+01:00
+  ✅ hypervisor.total_vms_discovered = 2 (matches live VM count)
+
+  ℹ  Discovered VMs:
+  ℹ    [132] 'Ubuntu 64-bit'       uuid='564d597d24bccffe865260394e9b5beb'    status='discovered'  ip='10.9.21.131'
+  ℹ    [118] 'Debian'              uuid='564d58a8d70da80ff32bf33d4daae164'    status='discovered'  ip='10.9.21.130'
+
+============================================================
+  SCENARIO 2 — UPDATE: VM in hypervisor AND in DB
+============================================================
+  ℹ  Running a second sync immediately …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 10,                                                                                                                                                              
+  "hypervisor_name": "workstation-local",                                                                                                                                           
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 2,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 2,                                                                                                                                                               
+    "archived_vms": 0,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ new_vms=0  updated_vms=2  unchanged_vms=0  archived_vms=0
+  ✅ No duplicate INSERTs on second sync — source_uuid dedup working correctly
+  ✅ All 2 existing VMs were processed (updated or unchanged)
+  ✅ last_seen_at updated for 'Ubuntu 64-bit': 2026-04-17T23:55:00.609001+01:00 → 2026-04-17T23:55:05.394962+01:00
+  ✅ last_seen_at updated for 'Debian': 2026-04-17T23:55:00.612781+01:00 → 2026-04-17T23:55:05.399179+01:00
+
+============================================================
+  SCENARIO 3 — ARCHIVE: VM in DB, gone from hypervisor
+============================================================
+  ℹ  Injecting a fake VM into the DB: name='ghost-vm-test-sync'  uuid='ffffffff-test-dead-beef-000000000000'
+  ℹ  This VM does NOT exist in the real VMware Workstation hypervisor.
+  ℹ  Cleaned up leftover ghost VM (id=120) from previous run
+  ✅ Fake VM injected: id=133  uuid=ffffffff-test-dead-beef-000000000000
+  ℹ  Fake VM created with id=133, status='discovered'
+
+  ℹ  Running sync — fake VM should be marked ARCHIVED …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 10,                                                                                                                                                              
+  "hypervisor_name": "workstation-local",                                                                                                                                           
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 2,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 2,                                                                                                                                                               
+    "archived_vms": 1,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ archived_vms = 1 (≥1 VM was archived)
+  ✅ VM id=133 status is now 'archived' — correct behavior
+  ✅ VM still exists in DB (id=133) — not deleted, only archived
+  ✅ Archived VM no longer appears in the live VM list for this hypervisor
+  ℹ  hypervisor.total_vms_discovered after archive = 2
+  ℹ  (Should NOT count the archived VM)
+
+============================================================
+  BONUS — Verify hypervisors ↔ virtual_machines JOIN
+============================================================
+  ℹ  Hypervisor  id               : 10
+  ℹ  Hypervisor  name             : 'workstation-local'
+  ℹ  Hypervisor  total_vms_disc.  : 2
+  ℹ  Hypervisor  last_sync_at     : 2026-04-17T23:55:10.421660+01:00
+  ℹ    /hypervisors/10/vms  → total_vms = 2
+  ℹ    /vms?hypervisor_id=10 → count     = 3
+
+  ✅ All VMs from /hypervisors/10/vms have correct source_hypervisor_id
+  ✅ hypervisor.total_vms_discovered (2) matches non-archived VM count (2)
+  ✅ All VMs have a source_uuid
+
+  ℹ  VM snapshot (id | name | uuid | status | ip):
+  ℹ    [ 118] 'Debian'                564d58a8d70da80ff32bf33d4daae164      discovered    10.9.21.130
+  ℹ    [ 132] 'Ubuntu 64-bit'         564d597d24bccffe865260394e9b5beb      discovered    10.9.21.131
+  ℹ    [ 133] 'ghost-vm-test-sync'    ffffffff-test-dead-beef-000000000000  archived      N/A
+
+============================================================
+  FINAL SUMMARY
+============================================================
+  ✅ Hypervisor status            : active
+  ✅ Hypervisor last_sync_at      : 2026-04-17T23:55:10.421660+01:00
+  ✅ Hypervisor total_vms_disc.   : 2
+  ✅ Live VMs in DB               : 2
+  ✅ Archived VMs in DB           : 1
+  ✅ /hypervisors/10/vms total : 2
+
+All scenarios completed.

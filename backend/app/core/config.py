@@ -133,6 +133,20 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # ============================================
+    # ANALYZER CONFIGURATION
+    # ============================================
+
+    ANALYZER_CONFIDENCE_THRESHOLD: float = 0.75
+
+    @field_validator("ANALYZER_CONFIDENCE_THRESHOLD")
+    @classmethod
+    def validate_analyzer_confidence_threshold(cls, v: float) -> float:
+        """Validate that confidence threshold is between 0 and 1."""
+        if not 0 <= v <= 1:
+            raise ValueError("ANALYZER_CONFIDENCE_THRESHOLD must be between 0 and 1")
+        return v
+
+    # ============================================
     # LOGGING
     # ============================================
 
