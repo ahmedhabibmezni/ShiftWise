@@ -6,6 +6,8 @@ Supporte :
 - VMware Workstation (via vmrun)
 - Hyper-V (via PowerShell)
 - KVM/QEMU (via libvirt)
+- Proxmox VE (via proxmoxer)
+- oVirt / RHV (via ovirt-engine-sdk-python)
 """
 
 import json
@@ -689,6 +691,259 @@ def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
     return vms
 
 
+# ============================================================================
+# Proxmox VE helpers
+# ============================================================================
+
+_PROXMOX_STATE_MAP = {
+    "running":   "running",
+    "stopped":   "stopped",
+    "paused":    "paused",
+    "suspended": "paused",
+}
+
+
+def _proxmox_os_type(ostype: str) -> OSType:
+    """Map a Proxmox ``ostype`` config shortcode to our OSType enum."""
+    s = (ostype or "").lower()
+    if s.startswith("w") or "win" in s:
+        return OSType.WINDOWS
+    if s in ("l24", "l26"):
+        return OSType.LINUX
+    if s in ("solaris", "other"):
+        return OSType.OTHER
+    return OSType.UNKNOWN
+
+
+def _proxmox_os_version(ostype: str) -> str:
+    """Human-readable version label from Proxmox ``ostype`` shortcodes."""
+    mapping = {
+        "l24":     "Linux 2.4",
+        "l26":     "Linux 2.6+ / 3.x / 4.x / 5.x / 6.x",
+        "win7":    "Windows 7",
+        "win8":    "Windows 8",
+        "win10":   "Windows 10",
+        "win11":   "Windows 11",
+        "w2k":     "Windows 2000",
+        "w2k3":    "Windows Server 2003",
+        "w2k8":    "Windows Server 2008",
+        "wvista":  "Windows Vista",
+        "wxp":     "Windows XP",
+        "w2k16":   "Windows Server 2016",
+        "w2k19":   "Windows Server 2019",
+        "w2k22":   "Windows Server 2022",
+        "solaris": "Solaris",
+        "other":   "Other",
+    }
+    return mapping.get((ostype or "").lower(), ostype or "unknown")
+
+
+def _proxmox_extract_uuid(smbios1: str) -> Optional[str]:
+    """Extract the SMBIOS UUID from a Proxmox ``smbios1`` config string.
+
+    smbios1 looks like: "uuid=abc-123-xyz,manufacturer=..."
+    Returns a normalised lowercase UUID without dashes, or None if absent.
+    """
+    if not smbios1:
+        return None
+    for part in smbios1.split(","):
+        key, _, value = part.partition("=")
+        if key.strip().lower() == "uuid" and value.strip():
+            return re.sub(r"[\s\-]", "", value.strip()).lower()
+    return None
+
+
+def _parse_proxmox_vm(
+    resource: Dict[str, Any],
+    config: Dict[str, Any],
+    agent_net: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build a ShiftWise VM dict from Proxmox cluster resource + qemu config."""
+    vmid = resource.get("vmid")
+    node = resource.get("node", "unknown")
+    name = resource.get("name") or f"vm-{vmid}"
+
+    # UUID: prefer SMBIOS, fall back to a stable synthetic key.
+    uuid = _proxmox_extract_uuid(config.get("smbios1", ""))
+    if not uuid:
+        uuid = f"proxmox-{node}-{vmid}".lower()
+
+    ostype = config.get("ostype", "") or ""
+    os_type = _proxmox_os_type(ostype)
+    os_version = _proxmox_os_version(ostype)
+    os_name = f"{os_version} (ostype={ostype})" if ostype else os_version
+
+    cores = int(config.get("cores", 0) or 0)
+    sockets = int(config.get("sockets", 1) or 1)
+    if cores:
+        cpu_cores = cores * sockets
+    else:
+        cpu_cores = int(resource.get("maxcpu") or 1)
+
+    # config.memory is in MB; resource.maxmem is in bytes.
+    memory_mb = int(config.get("memory") or 0)
+    if not memory_mb and resource.get("maxmem"):
+        memory_mb = int(resource["maxmem"]) // (1024 * 1024)
+
+    disk_bytes = int(resource.get("maxdisk") or 0)
+    disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0
+    if disk_bytes and disk_gb == 0:
+        disk_gb = 1
+
+    power_state = _PROXMOX_STATE_MAP.get(
+        (resource.get("status") or "").lower(), "unknown"
+    )
+
+    mac_address: Optional[str] = None
+    net0 = config.get("net0")
+    if net0:
+        mac_match = re.search(
+            r"([0-9a-f]{2}(?::[0-9a-f]{2}){5})", net0, flags=re.IGNORECASE
+        )
+        if mac_match:
+            mac_address = mac_match.group(1).upper()
+
+    # IP from qemu-guest-agent (only available on running VMs with agent installed).
+    ip_address: Optional[str] = None
+    if agent_net:
+        for iface in agent_net:
+            iface_name = (iface.get("name") or "").lower()
+            if iface_name in ("lo", "loopback") or iface_name.startswith(("docker", "veth", "br-")):
+                continue
+            for ipinfo in iface.get("ip-addresses") or []:
+                if ipinfo.get("ip-address-type") == "ipv4":
+                    addr = ipinfo.get("ip-address") or ""
+                    if addr and not addr.startswith("127."):
+                        ip_address = addr
+                        break
+            if ip_address:
+                break
+
+    return {
+        "source_uuid":          uuid,
+        "source_name":          name,
+        "name":                 name,
+        "cpu_cores":            cpu_cores,
+        "memory_mb":            memory_mb,
+        "disk_gb":              disk_gb,
+        "os_type":              os_type,
+        "os_version":           os_version,
+        "os_name":              os_name,
+        "ip_address":           ip_address,
+        "mac_address":          mac_address,
+        "hostname":             None,
+        "power_state":          power_state,
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+    }
+
+
+# ============================================================================
+# oVirt / RHV helpers
+# ============================================================================
+
+_OVIRT_STATE_MAP = {
+    "up":                  "running",
+    "powering_up":         "running",
+    "wait_for_launch":     "running",
+    "reboot_in_progress":  "running",
+    "restoring_state":     "running",
+    "down":                "stopped",
+    "powering_down":       "stopped",
+    "suspended":           "paused",
+    "paused":              "paused",
+    "saving_state":        "paused",
+    "not_responding":      "unknown",
+    "unknown":             "unknown",
+    "image_locked":        "unknown",
+}
+
+
+def _ovirt_os_type(os_type_str: str) -> OSType:
+    """Map an oVirt ``vm.os.type`` value (e.g. 'rhel_8x64') to our OSType enum."""
+    s = (os_type_str or "").lower()
+    if "windows" in s or s.startswith("win"):
+        return OSType.WINDOWS
+    if any(k in s for k in (
+        "rhel", "linux", "ubuntu", "centos", "fedora", "debian",
+        "suse", "sles", "opensuse", "oracle", "rocky", "alma",
+    )):
+        return OSType.LINUX
+    if s == "other":
+        return OSType.OTHER
+    return OSType.UNKNOWN
+
+
+def _parse_ovirt_vm(
+    vm: Any,
+    disk_gb: int,
+    devices: Optional[List[Any]] = None,
+) -> Dict[str, Any]:
+    """Build a ShiftWise VM dict from an ovirt-engine-sdk Vm object."""
+    uuid = (getattr(vm, "id", "") or "").replace("-", "").lower()
+    name = getattr(vm, "name", None) or "unknown"
+
+    cpu_cores = 1
+    try:
+        topo = vm.cpu.topology
+        cpu_cores = int((topo.cores or 1) * (topo.sockets or 1) * (topo.threads or 1))
+    except (AttributeError, TypeError):
+        pass
+
+    memory_mb = 0
+    try:
+        memory_mb = int(getattr(vm, "memory", 0) or 0) // (1024 * 1024)
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    status_obj = getattr(vm, "status", None)
+    status_str = getattr(status_obj, "value", None) or str(status_obj or "")
+    power_state = _OVIRT_STATE_MAP.get(status_str.lower(), "unknown")
+
+    os_type_raw = ""
+    try:
+        os_type_raw = getattr(vm.os, "type", "") or ""
+    except AttributeError:
+        pass
+    os_type = _ovirt_os_type(os_type_raw)
+    os_version = os_type_raw or "unknown"
+    os_name = os_type_raw or "unknown"
+
+    hostname = getattr(vm, "fqdn", None) or None
+
+    ip_address: Optional[str] = None
+    mac_address: Optional[str] = None
+    for dev in devices or []:
+        mac_obj = getattr(dev, "mac", None)
+        if mac_obj and not mac_address:
+            mac_address = getattr(mac_obj, "address", None)
+        for ip in getattr(dev, "ips", None) or []:
+            addr = getattr(ip, "address", None)
+            version_obj = getattr(ip, "version", None)
+            version = getattr(version_obj, "value", None) or str(version_obj or "")
+            if addr and version.lower() in ("v4", "ipv4", "") and not addr.startswith("127."):
+                ip_address = addr
+                break
+        if ip_address:
+            break
+
+    return {
+        "source_uuid":          uuid,
+        "source_name":          name,
+        "name":                 name,
+        "cpu_cores":            cpu_cores,
+        "memory_mb":            memory_mb,
+        "disk_gb":              disk_gb,
+        "os_type":              os_type,
+        "os_version":           os_version,
+        "os_name":              os_name,
+        "ip_address":           ip_address,
+        "mac_address":          mac_address,
+        "hostname":             hostname,
+        "power_state":          power_state,
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+    }
+
+
 class DiscoveryService:
     """Service de découverte des VMs depuis les hyperviseurs"""
 
@@ -733,6 +988,10 @@ class DiscoveryService:
                 vms_data = self._discover_hyperv(hypervisor)
             elif hypervisor.type == HypervisorType.KVM:
                 vms_data = self._discover_kvm(hypervisor)
+            elif hypervisor.type == HypervisorType.PROXMOX:
+                vms_data = self._discover_proxmox(hypervisor)
+            elif hypervisor.type == HypervisorType.OVIRT:
+                vms_data = self._discover_ovirt(hypervisor)
             else:
                 raise DiscoveryError(f"Type d'hypervisor non supporté: {hypervisor.type}")
 
@@ -1161,6 +1420,236 @@ class DiscoveryService:
             return vms
         finally:
             client.close()
+
+    def _discover_proxmox(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
+        """Discover VMs from a Proxmox VE cluster via the ``proxmoxer`` library.
+
+        connection_config keys (all optional):
+          auth_method  — "password" (default) | "token"
+          realm        — PVE realm (default: "pam")
+          token_name   — API token name (required when auth_method == "token")
+          token_value  — API token value (falls back to hypervisor.password)
+          port         — API port (default: 8006)
+          node_filter  — list of node names to restrict discovery to
+        """
+        try:
+            from proxmoxer import ProxmoxAPI
+        except ImportError as exc:
+            raise DiscoveryError(
+                f"proxmoxer n'est pas installé: {exc}. "
+                "Ajoutez 'proxmoxer' à requirements.txt."
+            )
+
+        cfg: Dict[str, Any] = hypervisor.connection_config or {}
+        host: str = hypervisor.host or "localhost"
+        port: int = int(hypervisor.port or cfg.get("port") or 8006)
+        realm: str = cfg.get("realm") or "pam"
+        auth_method: str = (cfg.get("auth_method") or "password").lower()
+        node_filter = cfg.get("node_filter") or None
+
+        user = hypervisor.username or "root"
+        if "@" not in user:
+            user = f"{user}@{realm}"
+
+        logger.info(f"Proxmox: host={host}:{port}, user={user}, auth={auth_method}")
+
+        try:
+            if auth_method == "token":
+                token_name = cfg.get("token_name") or ""
+                token_value = cfg.get("token_value") or hypervisor.password or ""
+                if not token_name or not token_value:
+                    raise DiscoveryError(
+                        "Authentification par token Proxmox requiert 'token_name' "
+                        "dans connection_config et une valeur de token "
+                        "('token_value' ou hypervisor.password)."
+                    )
+                proxmox = ProxmoxAPI(
+                    host,
+                    user=user,
+                    token_name=token_name,
+                    token_value=token_value,
+                    port=port,
+                    verify_ssl=bool(hypervisor.verify_ssl),
+                    timeout=30,
+                )
+            else:
+                proxmox = ProxmoxAPI(
+                    host,
+                    user=user,
+                    password=hypervisor.password or "",
+                    port=port,
+                    verify_ssl=bool(hypervisor.verify_ssl),
+                    timeout=30,
+                )
+        except Exception as exc:
+            raise DiscoveryError(f"Proxmox: échec de connexion à {host}: {exc}")
+
+        try:
+            resources = proxmox.cluster.resources.get(type="vm")
+        except Exception as exc:
+            raise DiscoveryError(f"Proxmox: cluster/resources a échoué: {exc}")
+
+        # Restrict to QEMU (KVM) VMs — LXC containers are not yet supported.
+        qemu_resources = [
+            r for r in resources
+            if r.get("type") == "qemu"
+            and (not node_filter or r.get("node") in node_filter)
+        ]
+
+        if not qemu_resources:
+            logger.info("Proxmox: aucune VM QEMU trouvée — retour liste vide (déclenche ARCHIVE)")
+            return []
+
+        vms: List[Dict[str, Any]] = []
+        for resource in qemu_resources:
+            node = resource.get("node")
+            vmid = resource.get("vmid")
+            if not node or vmid is None:
+                continue
+
+            try:
+                config = proxmox.nodes(node).qemu(vmid).config.get() or {}
+            except Exception as exc:
+                logger.warning(f"Proxmox: config indisponible pour {node}/{vmid}: {exc}")
+                config = {}
+
+            # Guest agent IP — only useful on running VMs that have qemu-guest-agent.
+            agent_net: Optional[List[Dict[str, Any]]] = None
+            if (resource.get("status") or "").lower() == "running":
+                try:
+                    agent_resp = proxmox.nodes(node).qemu(vmid).agent(
+                        "network-get-interfaces"
+                    ).get() or {}
+                    agent_net = agent_resp.get("result") or []
+                except Exception:
+                    # Guest agent not installed / not running — perfectly normal.
+                    agent_net = None
+
+            try:
+                vm_dict = _parse_proxmox_vm(resource, config, agent_net)
+            except Exception as exc:
+                logger.error(f"Proxmox: parse échoué {node}/{vmid}: {exc}")
+                continue
+
+            vms.append(vm_dict)
+            logger.info(
+                f"  Proxmox '{vm_dict['name']}' (vmid={vmid}@{node}): "
+                f"cpus={vm_dict['cpu_cores']}, mem={vm_dict['memory_mb']}MB, "
+                f"disk={vm_dict['disk_gb']}GB, power={vm_dict['power_state']}, "
+                f"ip={vm_dict['ip_address']}"
+            )
+        return vms
+
+    def _discover_ovirt(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
+        """Discover VMs from oVirt / RHV via ``ovirt-engine-sdk-python``.
+
+        connection_config keys (all optional):
+          ca_file   — PEM CA bundle for TLS verification
+          api_path  — override '/ovirt-engine/api' (default)
+        """
+        try:
+            import ovirtsdk4 as sdk
+        except ImportError as exc:
+            raise DiscoveryError(
+                f"ovirt-engine-sdk-python n'est pas installé: {exc}. "
+                "Ajoutez 'ovirt-engine-sdk-python' à requirements.txt."
+            )
+
+        cfg: Dict[str, Any] = hypervisor.connection_config or {}
+        host: str = hypervisor.host or "localhost"
+        api_path: str = cfg.get("api_path") or "/ovirt-engine/api"
+        port_str = f":{hypervisor.port}" if hypervisor.port else ""
+        url = f"https://{host}{port_str}{api_path}"
+
+        ca_file = cfg.get("ca_file") or hypervisor.ssl_cert_path or None
+        insecure = not bool(hypervisor.verify_ssl)
+
+        logger.info(
+            f"oVirt: url={url}, user={hypervisor.username}, "
+            f"insecure={insecure}, ca_file={ca_file}"
+        )
+
+        try:
+            connection = sdk.Connection(
+                url=url,
+                username=hypervisor.username or "admin@internal",
+                password=hypervisor.password or "",
+                ca_file=ca_file,
+                insecure=insecure,
+                timeout=30,
+            )
+        except Exception as exc:
+            raise DiscoveryError(f"oVirt: échec de connexion à {url}: {exc}")
+
+        try:
+            system = connection.system_service()
+            vms_service = system.vms_service()
+            disks_service = system.disks_service()
+
+            try:
+                ovirt_vms = vms_service.list(all_content=True)
+            except TypeError:
+                # Older SDKs do not expose all_content
+                ovirt_vms = vms_service.list()
+
+            if not ovirt_vms:
+                logger.info("oVirt: aucune VM trouvée — retour liste vide (déclenche ARCHIVE)")
+                return []
+
+            vms: List[Dict[str, Any]] = []
+            for vm in ovirt_vms:
+                try:
+                    vm_svc = vms_service.vm_service(vm.id)
+
+                    # Disks — sum all attached disks (provisioned size).
+                    disk_bytes = 0
+                    try:
+                        for att in vm_svc.disk_attachments_service().list() or []:
+                            if not att.disk or not att.disk.id:
+                                continue
+                            try:
+                                d = disks_service.disk_service(att.disk.id).get()
+                                disk_bytes += int(
+                                    (d.provisioned_size or d.total_size or 0)
+                                )
+                            except Exception:
+                                continue
+                    except Exception as exc:
+                        logger.debug(
+                            f"oVirt: disk attachments indisponibles pour "
+                            f"'{getattr(vm, 'name', '?')}': {exc}"
+                        )
+                    disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0
+                    if disk_bytes and disk_gb == 0:
+                        disk_gb = 1
+
+                    # Reported devices — typically only populated on running VMs
+                    # with ovirt-guest-agent / qemu-guest-agent.
+                    devices: List[Any] = []
+                    try:
+                        devices = vm_svc.reported_devices_service().list() or []
+                    except Exception:
+                        devices = []
+
+                    vm_dict = _parse_ovirt_vm(vm, disk_gb, devices)
+                except Exception as exc:
+                    logger.error(
+                        f"oVirt: parse échoué pour '{getattr(vm, 'name', '?')}': {exc}"
+                    )
+                    continue
+
+                vms.append(vm_dict)
+                logger.info(
+                    f"  oVirt '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
+                    f"mem={vm_dict['memory_mb']}MB, disk={vm_dict['disk_gb']}GB, "
+                    f"power={vm_dict['power_state']}, ip={vm_dict['ip_address']}"
+                )
+            return vms
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
     # ========================================================================
     # SAUVEGARDE ET SYNCHRONISATION DES VMs DÉCOUVERTES

@@ -21,6 +21,7 @@ class HypervisorType(str, enum.Enum):
     HYPER_V = "hyper_v"  # Microsoft Hyper-V
     KVM = "kvm"  # KVM (Kernel-based Virtual Machine)
     PROXMOX = "proxmox"  # Proxmox VE
+    OVIRT = "ovirt"  # oVirt / Red Hat Virtualization (RHV)
     VIRTUALBOX = "virtualbox"  # Oracle VirtualBox
     XEN = "xen"  # Citrix XenServer / XCP-ng
     OTHER = "other"  # Autre type

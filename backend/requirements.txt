@@ -25,6 +25,11 @@ python-dateutil==2.8.2
 # Hypervisor APIs (for future implementation)
 pyvmomi==8.0.1.0.2
 libvirt-python==10.0.0; platform_system == "Linux"
+# Proxmox VE REST API client (password + API token auth)
+proxmoxer==2.0.1
+requests==2.32.3
+# oVirt / RHV engine SDK
+ovirt-engine-sdk-python==4.6.0
 
 # Kubernetes & OpenShift (for future implementation)
 kubernetes==28.1.0
