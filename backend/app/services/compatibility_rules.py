@@ -210,6 +210,8 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
             "weight": 30,
         }
 
+    soft_hv = htype in _UNKNOWN_OS_SOFT_HYPERVISORS
+
     if os_type == "linux":
         for distro in _LINUX_DISTROS:
             if distro in combined:
@@ -230,6 +232,21 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
                     "message": f"Distribution Linux supportée: {distro}",
                     "weight": 30,
                 }
+        # Distro not recognised. On hypervisors with optional/heuristic OS reporting
+        # (Hyper-V, KVM, Proxmox, oVirt) this is commonly a generic kernel string
+        # ("Linux 2.6+ / 3.x / ...") or a missing os_name ("N/A", "") rather than
+        # an actually unsupported distro — downgrade to WARNING, same path as the
+        # unknown-os-type branch above.
+        if soft_hv:
+            hint = _UNKNOWN_OS_HINTS[htype]
+            label = combined or "non renseignée"
+            return {
+                "id": "os_supported",
+                "passed": False,
+                "severity": SEVERITY_WARNING,
+                "message": f"Distribution Linux non reconnue: {label} ({hint}) — vérification manuelle recommandée",
+                "weight": 30,
+            }
         return {
             "id": "os_supported",
             "passed": False,
@@ -253,6 +270,20 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_BLOCKER,
             "message": f"Version Windows non supportée: {combined or 'inconnue'}",
+            "weight": 30,
+        }
+
+    # os_type empty/other on a soft hypervisor — typically a VM with no guest
+    # OS installed yet (e.g. Proxmox VM created without install media) or a guest
+    # agent that hasn't reported back. Migration is still possible (blank-disk
+    # import), so downgrade to WARNING.
+    if soft_hv:
+        hint = _UNKNOWN_OS_HINTS[htype]
+        return {
+            "id": "os_supported",
+            "passed": False,
+            "severity": SEVERITY_WARNING,
+            "message": f"Type d'OS non renseigné: {os_type or 'vide'} ({hint}) — VM sans OS ou guest agent absent",
             "weight": 30,
         }
 
