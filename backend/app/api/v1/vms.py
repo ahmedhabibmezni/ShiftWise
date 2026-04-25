@@ -178,11 +178,12 @@ def analyze_vms_batch(
     tenant_id = None if current_user.is_superuser else current_user.tenant_id
     # Filter VM IDs by tenant (unless superuser)
     if tenant_id:
-        accessible_ids = set(
-            db.query(VirtualMachine.id)
+        accessible_ids = {
+            row[0]
+            for row in db.query(VirtualMachine.id)
             .filter(VirtualMachine.tenant_id == tenant_id, VirtualMachine.id.in_(vm_ids))
             .all()
-        )
+        }
         vm_ids = [vid for vid in vm_ids if vid in accessible_ids]
     analyzer = create_analyzer_service()
     result = analyzer.analyze_batch(db, vm_ids[:20], force=force)
