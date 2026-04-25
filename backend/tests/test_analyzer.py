@@ -131,12 +131,31 @@ def test_vm_partial(db_session, test_tenant, test_hypervisor):
 
 
 @pytest.fixture
-def test_vm_incompatible(db_session, test_tenant, test_hypervisor):
-    """Create a test VM with INCOMPATIBLE characteristics (unsupported OS)."""
+def test_hypervisor_vmware(db_session, test_tenant):
+    """Create a test VMware Workstation hypervisor (non-soft — OS rules are hard)."""
+    hv = Hypervisor(
+        name="test-vmware",
+        tenant_id=test_tenant,
+        type=HypervisorType.VMWARE_WORKSTATION,
+        host="local",
+        username="user",
+        password="test",
+        status=HypervisorStatus.ACTIVE,
+        total_vms_discovered=0,
+    )
+    db_session.add(hv)
+    db_session.commit()
+    return hv
+
+
+@pytest.fixture
+def test_vm_incompatible(db_session, test_tenant, test_hypervisor_vmware):
+    """Create a test VM with INCOMPATIBLE characteristics (unsupported OS on a
+    non-soft hypervisor — OS rules emit a hard BLOCKER here)."""
     vm = VirtualMachine(
         name="test-unsupported",
         tenant_id=test_tenant,
-        source_hypervisor_id=test_hypervisor.id,
+        source_hypervisor_id=test_hypervisor_vmware.id,
         source_uuid="uuid-incompat",
         source_name="test-unsupported",
         cpu_cores=1,

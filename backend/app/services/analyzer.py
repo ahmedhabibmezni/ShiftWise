@@ -125,19 +125,38 @@ class AnalyzerService:
             # Decide: model or rules?
             engine = "rules"
             confidence = 0.0
+            model_grade: Optional[str] = None
+            override_reason: Optional[str] = None
 
             if self.model:
                 features = to_vector(rules_features(vm_dict))
                 proba = self.model.predict_proba([features])[0]
-                pred_idx = np.argmax(proba)
+                pred_idx = int(np.argmax(proba))
                 confidence = float(proba[pred_idx])
+                model_grade = self.labels[pred_idx]
 
                 if confidence >= self.threshold:
                     engine = "model"
 
             if engine == "model":
-                pred_idx = np.argmax(self.model.predict_proba([to_vector(rules_features(vm_dict))])[0])
-                grade = self.labels[pred_idx]
+                # Sanity guard (Fix B1): blockers are deterministic, hard
+                # requirements (unsupported OS, ISO disk, <512MB RAM). The model
+                # may refine grades but must not contradict the blocker truth —
+                # in either direction. Defer to rules whenever the model and
+                # rules disagree on the presence of a blocker.
+                rules_has_blockers = bool(rules_agg["blockers"])
+                model_says_incompatible = model_grade == "INCOMPATIBLE"
+                if model_says_incompatible != rules_has_blockers:
+                    override_reason = (
+                        f"model predicted {model_grade} (conf={confidence:.2f}) but "
+                        f"rules report {len(rules_agg['blockers'])} blocker(s) — "
+                        f"deferring to rules"
+                    )
+                    logger.info(f"VM {vm_id}: {override_reason}")
+                    engine = "rules"
+                    grade = rules_agg["grade"]
+                else:
+                    grade = model_grade
             else:
                 grade = rules_agg["grade"]
 
@@ -151,7 +170,9 @@ class AnalyzerService:
                 "score": rules_agg["score"],
                 "grade": grade,
                 "engine": engine,
-                "confidence": confidence if engine == "model" else None,
+                "confidence": confidence if self.model else None,
+                "model_grade": model_grade,
+                "override_reason": override_reason,
                 "rules": rules,
                 "blockers": rules_agg["blockers"],
                 "warnings": rules_agg["warnings"],
