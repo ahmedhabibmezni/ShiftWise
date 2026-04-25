@@ -50,6 +50,14 @@ class AnalyzerService:
             with warnings.catch_warnings():
                 warnings.filterwarnings("error", category=UserWarning)
                 payload = joblib.load(_ARTIFACT_PATH)
+            stored_features = payload.get("feature_names") or []
+            if list(stored_features) != self.feature_names:
+                logger.warning(
+                    "Model feature space mismatch (artifact=%d cols, runtime=%d cols) — "
+                    "retrain via `python -m app.ml.train_model --save`; falling back to rules",
+                    len(stored_features), len(self.feature_names),
+                )
+                return
             self.model = payload.get("model")
             logger.info(f"Model loaded: {payload.get('model_kind', 'unknown')} "
                         f"(sklearn {payload.get('sklearn_version', 'unknown')})")

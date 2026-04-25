@@ -67,7 +67,7 @@ _WINDOWS_UNSUPPORTED = [
     ("windows", "Windows XP", "xp"),
 ]
 
-_HYPERVISORS = ("vmware_workstation", "hyper_v", "kvm", "vsphere")
+_HYPERVISORS = ("vmware_workstation", "hyper_v", "kvm", "vsphere", "proxmox", "ovirt")
 
 
 def _base_custom_metadata(hypervisor_type: str, power: str, rng: random.Random) -> Dict[str, Any]:
@@ -113,9 +113,11 @@ def _make_sample(
 
 def _gen_compatible(rng: random.Random) -> Dict[str, Any]:
     os_type, os_name, os_version = rng.choice(_LINUX_SAMPLES + _WINDOWS_SUPPORTED)
-    # KVM is the only native-format hypervisor — weight it a bit for compatible.
+    # Native-format hypervisors (KVM, Proxmox, oVirt — all default to qcow2) are
+    # weighted up for the COMPATIBLE class; VMware / Hyper-V would trigger the
+    # convertible-format warning and belong in _gen_partial instead.
     hypervisor_type = rng.choices(
-        _HYPERVISORS, weights=[1, 1, 4, 1], k=1
+        _HYPERVISORS, weights=[1, 1, 4, 1, 4, 4], k=1
     )[0]
     cpu = rng.randint(2, 16)
     memory = rng.choice([2048, 4096, 8192, 16384, 32768])
@@ -134,7 +136,8 @@ def _gen_partial(rng: random.Random) -> Dict[str, Any]:
       - disk < 10 GB (but > 0)
     """
     scenario = rng.choice(("convertible_format", "hyperv_unknown", "kvm_zero_disk",
-                            "low_memory", "small_disk", "kvm_unknown"))
+                            "low_memory", "small_disk", "kvm_unknown",
+                            "proxmox_unknown", "ovirt_unknown"))
 
     if scenario == "convertible_format":
         os_type, os_name, os_version = rng.choice(_LINUX_SAMPLES + _WINDOWS_SUPPORTED)
@@ -150,6 +153,16 @@ def _gen_partial(rng: random.Random) -> Dict[str, Any]:
 
     if scenario == "kvm_unknown":
         return _make_sample(rng, "unknown", "", "", "kvm",
+                            rng.randint(1, 8), rng.choice([2048, 4096, 8192]),
+                            rng.randint(20, 200))
+
+    if scenario == "proxmox_unknown":
+        return _make_sample(rng, "unknown", "", "", "proxmox",
+                            rng.randint(1, 8), rng.choice([2048, 4096, 8192]),
+                            rng.randint(20, 200))
+
+    if scenario == "ovirt_unknown":
+        return _make_sample(rng, "unknown", "", "", "ovirt",
                             rng.randint(1, 8), rng.choice([2048, 4096, 8192]),
                             rng.randint(20, 200))
 

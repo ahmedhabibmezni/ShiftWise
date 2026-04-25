@@ -67,9 +67,6 @@ uploads/
 temp/
 data/
 
-# Test files
-tests/
-
 # Kubernetes configs - SENSIBLES (NOUVEAU)
 config/kubeconfig*
 *.kubeconfig

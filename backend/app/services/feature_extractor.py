@@ -47,6 +47,8 @@ _HYPERVISOR_TYPES = (
     "vmware_esxi",
     "hyper_v",
     "kvm",
+    "proxmox",
+    "ovirt",
     "other",
     "unknown",
 )

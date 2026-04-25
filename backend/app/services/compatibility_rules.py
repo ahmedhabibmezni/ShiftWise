@@ -106,6 +106,24 @@ _HYPERVISOR_DEFAULT_FORMAT = {
     "vmware_esxi": "vmdk",
     "hyper_v": "vhdx",
     "kvm": "qcow2",
+    # Proxmox VE: qcow2 on file storage (dir/NFS), raw on LVM/ZFS. qcow2 is the
+    # installer default and the only format exposed by the connector today.
+    "proxmox": "qcow2",
+    # oVirt / RHV: thin-provisioned disks are qcow2, preallocated are raw. Default
+    # to qcow2 — both are native KubeVirt formats, so the grade is identical.
+    "ovirt": "qcow2",
+}
+
+# Hypervisors whose connectors may report os_type == "unknown" because the guest
+# agent / integration services are optional. Used to downgrade the OS-unsupported
+# BLOCKER to a WARNING (migration possible, manual verification recommended).
+_UNKNOWN_OS_SOFT_HYPERVISORS = ("hyper_v", "kvm", "proxmox", "ovirt")
+
+_UNKNOWN_OS_HINTS = {
+    "hyper_v": "Hyper-V n'expose pas le type d'OS sans KVP",
+    "kvm": "KVM os_type dérivé par heuristique sur le nom de domaine",
+    "proxmox": "Proxmox os_type best-effort via qemu-guest-agent",
+    "ovirt": "oVirt os_type via reported_devices — guest agent requis",
 }
 
 # ---------------------------------------------------------------------------
@@ -181,11 +199,9 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
 
     combined = f"{os_name} {os_version}".strip()
 
-    # Unknown OS on Hyper-V or KVM — soft PARTIAL, not blocker.
-    if os_type == "unknown" and htype in ("hyper_v", "kvm"):
-        hint = "Hyper-V n'expose pas le type d'OS sans KVP" if htype == "hyper_v" else (
-            "KVM os_type dérivé par heuristique sur le nom de domaine"
-        )
+    # Unknown OS on hypervisors with optional guest-agent — soft PARTIAL, not blocker.
+    if os_type == "unknown" and htype in _UNKNOWN_OS_SOFT_HYPERVISORS:
+        hint = _UNKNOWN_OS_HINTS[htype]
         return {
             "id": "os_supported",
             "passed": False,

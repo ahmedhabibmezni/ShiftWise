@@ -53,9 +53,11 @@ temp/
 tmp/
 
 # Claude
+.claude
 .claudeignore
 CLAUDE.md
 ShiftWise_session_handoff.md
+NEXT_STEPS.md
 
 # Documentations
 docs/
