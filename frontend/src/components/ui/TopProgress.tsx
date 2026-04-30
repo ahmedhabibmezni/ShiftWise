@@ -1,34 +1,18 @@
-import { cn } from "@/lib/cn";
-
-type Props = {
-  active?: boolean;
-  className?: string;
-};
-
-export function TopProgress({ active, className }: Props) {
+export function TopProgress({ active }: { active: boolean }) {
+  if (!active) return null;
   return (
     <div
       aria-hidden
-      className={cn(
-        "fixed top-0 left-0 right-0 z-50 h-px overflow-hidden pointer-events-none",
-        "transition-opacity duration-[120ms]",
-        active ? "opacity-100" : "opacity-0",
-        className,
-      )}
+      className="fixed top-0 left-0 right-0 h-px z-50 overflow-hidden"
+      style={{ backgroundColor: "color-mix(in srgb, var(--signal) 25%, transparent)" }}
     >
       <div
-        className={cn(
-          "h-full bg-signal",
-          active && "[animation:shiftwise-topbar_1.2s_ease-in-out_infinite]",
-        )}
+        className="absolute top-0 left-0 h-px w-1/3"
+        style={{
+          backgroundColor: "var(--signal)",
+          animation: "shiftwise-topbar 1.2s linear infinite",
+        }}
       />
-      <style>{`
-        @keyframes shiftwise-topbar {
-          0%   { transform: translateX(-100%); width: 30%; }
-          50%  { transform: translateX(50%);   width: 50%; }
-          100% { transform: translateX(200%);  width: 30%; }
-        }
-      `}</style>
     </div>
   );
 }

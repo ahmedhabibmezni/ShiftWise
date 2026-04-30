@@ -1,14 +1,24 @@
 import { cn } from "@/lib/cn";
 
-export function LiveIndicator({ className }: { className?: string }) {
+export function LiveIndicator({
+  label = "live",
+  className,
+}: {
+  label?: string | null;
+  className?: string;
+}) {
   return (
-    <span
-      aria-label="En cours"
-      className={cn(
-        "inline-block h-2 w-2 bg-signal align-middle",
-        "[animation:shiftwise-pulse_1.6s_ease-in-out_infinite]",
-        className,
+    <span className={cn("inline-flex items-center gap-2", className)}>
+      <span
+        aria-hidden
+        className="block h-3 w-3 bg-signal"
+        style={{ animation: "shiftwise-pulse 1.6s ease-in-out infinite" }}
+      />
+      {label && (
+        <span className="font-mono text-[12px] uppercase tracking-[0.04em] text-ink-muted">
+          {label}
+        </span>
       )}
-    />
+    </span>
   );
 }

@@ -1,32 +1,38 @@
-import { forwardRef, type SelectHTMLAttributes } from "react";
+import { forwardRef } from "react";
+import type { SelectHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
-type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & {
-  invalid?: boolean;
-};
+type Props = SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean };
 
-const base =
-  "h-8 w-full px-2 pr-7 bg-bg text-ink border rounded-none text-[13px] " +
-  "appearance-none " +
-  "bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 viewBox=%220 0 10 6%22><path fill=%22none%22 stroke=%22currentColor%22 stroke-width=%221.5%22 d=%22M1 1l4 4 4-4%22/></svg>')] " +
-  "bg-[length:10px_6px] bg-[position:right_8px_center] bg-no-repeat " +
-  "transition-[border-color] " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
-  "focus:outline-none focus-visible:outline focus-visible:outline-1 " +
-  "focus-visible:outline-signal focus-visible:outline-offset-1";
+const CHEVRON =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5'><polyline points='6 9 12 15 18 9'/></svg>\")";
 
-export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ invalid, className, children, ...rest }, ref) => {
-    return (
-      <select
-        ref={ref}
-        aria-invalid={invalid || undefined}
-        className={cn(base, invalid ? "border-err" : "border-line", className)}
-        {...rest}
-      >
-        {children}
-      </select>
-    );
-  },
-);
-Select.displayName = "Select";
+export const Select = forwardRef<HTMLSelectElement, Props>(function Select(
+  { className, invalid, children, ...rest },
+  ref,
+) {
+  return (
+    <select
+      ref={ref}
+      aria-invalid={invalid || undefined}
+      style={{
+        backgroundImage: CHEVRON,
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "right 12px center",
+        backgroundSize: "12px 12px",
+      }}
+      className={cn(
+        "w-full h-10 pl-3 pr-9 rounded-sm border bg-bg-elev text-ink appearance-none",
+        "font-sans text-[14px]",
+        "transition-[border-color] duration-150",
+        invalid ? "border-err" : "border-line hover:border-line-strong",
+        "focus:outline-none focus-visible:outline-1 focus-visible:outline-signal",
+        "disabled:opacity-50 disabled:cursor-not-allowed",
+        className,
+      )}
+      {...rest}
+    >
+      {children}
+    </select>
+  );
+});

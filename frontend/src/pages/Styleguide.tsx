@@ -1,12 +1,29 @@
 import { useState } from "react";
-import { Activity, Database, Server } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Cpu,
+  Database,
+  HardDrive,
+  Plus,
+  Server,
+} from "lucide-react";
+import { Sidebar } from "@/components/shell/Sidebar";
+import { Header } from "@/components/shell/Header";
+import { Footer } from "@/components/shell/Footer";
 import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Badge } from "@/components/ui/Badge";
-import { Panel } from "@/components/ui/Panel";
+import { KPIPrimary } from "@/components/ui/KPIPrimary";
+import { KPISecondary } from "@/components/ui/KPISecondary";
+import { StatBlock } from "@/components/ui/StatBlock";
+import { MiniRow } from "@/components/ui/MiniRow";
+import { AlertRow } from "@/components/ui/AlertRow";
 import { Table, THead, TR, TH, TD } from "@/components/ui/Table";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -14,356 +31,503 @@ import { LiveIndicator } from "@/components/ui/LiveIndicator";
 import { TopProgress } from "@/components/ui/TopProgress";
 import { Tabs } from "@/components/ui/Tabs";
 import { Icon } from "@/components/ui/Icon";
-import { Header } from "@/components/shell/Header";
 
-const TOKENS = [
-  ["bg", "var(--bg)"],
-  ["bg-elev", "var(--bg-elev)"],
-  ["ink", "var(--ink)"],
-  ["ink-muted", "var(--ink-muted)"],
-  ["line", "var(--line)"],
-  ["line-soft", "var(--line-soft)"],
-  ["signal", "var(--signal)"],
-  ["info", "var(--info)"],
-  ["ok", "var(--ok)"],
-  ["warn", "var(--warn)"],
-  ["err", "var(--err)"],
+const TOKEN_GROUPS: { title: string; tokens: [string, string][] }[] = [
+  {
+    title: "surfaces",
+    tokens: [
+      ["bg", "var(--bg)"],
+      ["bg-elev", "var(--bg-elev)"],
+      ["bg-elev-2", "var(--bg-elev-2)"],
+    ],
+  },
+  {
+    title: "ink + lines",
+    tokens: [
+      ["ink", "var(--ink)"],
+      ["ink-muted", "var(--ink-muted)"],
+      ["line", "var(--line)"],
+      ["line-strong", "var(--line-strong)"],
+    ],
+  },
+  {
+    title: "semantic",
+    tokens: [
+      ["signal", "var(--signal)"],
+      ["info", "var(--info)"],
+      ["ok", "var(--ok)"],
+      ["warn", "var(--warn)"],
+      ["err", "var(--err)"],
+    ],
+  },
 ];
 
-const TYPE_SCALE = [11, 12, 13, 14, 16, 20, 28];
+const MIGRATIONS = [
+  { source: "LYO-HV-02", target: "PAR-HV-01", vmId: "vm-312", pct: 68, size: "2.1 TB", duration: "2m 14s" },
+  { source: "LON-HV-01", target: "LON-HV-02", vmId: "vm-198", pct: 41, size: "980 GB", duration: "4m 08s" },
+  { source: "PAR-HV-02", target: "PAR-HV-01", vmId: "vm-256", pct: 22, size: "1.2 TB", duration: "6m 51s" },
+  { source: "LYO-HV-01", target: "LYO-HV-02", vmId: "vm-172", pct: 12, size: "320 GB", duration: "9m 33s" },
+];
+
+const ALERTS: { time: string; message: string; severity: "critical" | "high" | "medium" | "low" }[] = [
+  { time: "14:21", message: "ha storage latency > 200ms on PAR-HV-02", severity: "critical" },
+  { time: "14:19", message: "migration stuck > 10m on vm-198", severity: "high" },
+  { time: "14:18", message: "cpu usage > 85% on LYO-HV-01", severity: "medium" },
+  { time: "14:12", message: "backup delayed on 2 nodes", severity: "low" },
+  { time: "14:07", message: "certificate expires in 7 days (3)", severity: "low" },
+];
+
+const QUEUE = [
+  { pos: "01", src: "LYO-HV-01", dst: "LYO-HV-02", vm: "vm-442", size: "1.8 TB", added: "14:21:58" },
+  { pos: "02", src: "PAR-HV-02", dst: "PAR-HV-01", vm: "vm-309", size: "980 GB", added: "14:21:43" },
+  { pos: "03", src: "LON-HV-01", dst: "LON-HV-02", vm: "vm-201", size: "320 GB", added: "14:21:31" },
+  { pos: "04", src: "PAR-HV-01", dst: "PAR-HV-02", vm: "vm-118", size: "256 GB", added: "14:21:02" },
+  { pos: "05", src: "LYO-HV-02", dst: "LYO-HV-01", vm: "vm-531", size: "1.2 TB", added: "14:20:47" },
+];
+
+const TYPE_SAMPLES: { token: string; cls: string; mono?: boolean; sample: string }[] = [
+  { token: "display", cls: "text-display", sample: "23" },
+  { token: "major", cls: "text-major", sample: "1.289" },
+  { token: "h1", cls: "text-h1 lowercase", sample: "overview" },
+  { token: "h2", cls: "text-h2 lowercase", sample: "tout est opérationnel" },
+  { token: "h3", cls: "text-h3 lowercase", sample: "migrations en cours" },
+  { token: "body", cls: "text-body", sample: "Le cluster fonctionne nominalement." },
+  { token: "meta", cls: "text-meta text-ink-muted", sample: "il y a 14 minutes" },
+  { token: "mono-lg", cls: "text-mono-lg font-mono tabular", mono: true, sample: "1,234,567" },
+  { token: "mono", cls: "text-mono font-mono tabular", mono: true, sample: "vm-312 · 14:22:01 · 2.1 TB" },
+  { token: "mono-sm", cls: "text-mono-sm font-mono uppercase", mono: true, sample: "MIG-7F3A · COMPATIBLE" },
+];
 
 export default function Styleguide() {
   const [open, setOpen] = useState(false);
   const [topActive, setTopActive] = useState(false);
-  const [progress, setProgress] = useState(42);
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
+    <div className="min-h-screen bg-bg text-ink flex flex-col">
       <TopProgress active={topActive} />
-      <Header />
+      <div className="flex flex-1 min-h-0">
+        <Sidebar active="overview" />
 
-      <main className="max-w-[1440px] mx-auto px-6 py-8 space-y-12">
-        <section>
-          <SectionLabel>STYLEGUIDE — DESIGN SYSTEM v1</SectionLabel>
-          <p className="text-ink-muted text-[13px] mt-2 max-w-2xl">
-            Restraint. Density. Borders, not shadows. Mono for numbers. Single
-            accent (signal). Toggle the theme in the header to verify both modes.
-          </p>
-        </section>
+        <div className="flex-1 flex flex-col min-w-0">
+          <Header title="overview" />
 
-        {/* Tokens ---------------------------------------------------------- */}
-        <section>
-          <SectionLabel>TOKENS</SectionLabel>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 mt-3">
-            {TOKENS.map(([name, val]) => (
-              <div key={name} className="border border-line">
-                <div
-                  className="h-12 border-b border-line"
-                  style={{ background: val }}
-                />
-                <div className="px-2 py-1.5 flex items-center justify-between">
-                  <span className="font-mono text-[11px] text-ink">{name}</span>
-                  <span className="font-mono text-[11px] text-ink-muted tabular-nums">
-                    {val}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Type scale ------------------------------------------------------ */}
-        <section>
-          <SectionLabel>TYPE</SectionLabel>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-3">
-            <div className="border border-line p-4 space-y-2">
-              <div className="font-mono text-[11px] uppercase text-ink-muted">
-                Sans — Inter Tight
-              </div>
-              {TYPE_SCALE.map((s) => (
-                <div key={s} className="flex items-baseline gap-3">
-                  <span className="font-mono text-[11px] text-ink-muted tabular-nums w-8">
-                    {s}px
-                  </span>
-                  <span style={{ fontSize: `${s}px` }}>Migration en cours</span>
-                </div>
-              ))}
-            </div>
-            <div className="border border-line p-4 space-y-2">
-              <div className="font-mono text-[11px] uppercase text-ink-muted">
-                Mono — JetBrains Mono · tabular-nums
-              </div>
-              {TYPE_SCALE.map((s) => (
-                <div key={s} className="flex items-baseline gap-3">
-                  <span className="font-mono text-[11px] text-ink-muted tabular-nums w-8">
-                    {s}px
-                  </span>
-                  <span
-                    className="font-mono tabular-nums"
-                    style={{ fontSize: `${s}px` }}
+          <main className="flex-1 overflow-auto">
+            <div className="max-w-[1440px] mx-auto p-8 space-y-12">
+              {/* DASHBOARD HERO --------------------------------------------------- */}
+              <section className="grid gap-6 grid-cols-12">
+                <div className="col-span-12 lg:col-span-7">
+                  <KPIPrimary
+                    label="migrations en cours"
+                    value="23"
+                    tone="signal"
+                    cta="voir toutes les migrations"
+                    onCta={() => setTopActive((v) => !v)}
                   >
-                    1,234,567 · 99.4%
-                  </span>
+                    <div>
+                      {MIGRATIONS.map((m) => (
+                        <MiniRow key={m.vmId} {...m} />
+                      ))}
+                    </div>
+                  </KPIPrimary>
                 </div>
-              ))}
+                <div className="col-span-12 lg:col-span-5 grid grid-cols-1 sm:grid-cols-3 gap-4 lg:grid-cols-1 xl:grid-cols-3 content-start">
+                  <KPISecondary
+                    label="hyperviseurs actifs"
+                    value="07"
+                    suffix="/ 12"
+                    delta={{ dir: "up", value: "↑ 2", tone: "ok" }}
+                  />
+                  <KPISecondary
+                    label="machines virtuelles"
+                    value="1.289"
+                    delta={{ dir: "up", value: "↑ 93", tone: "ok" }}
+                  />
+                  <KPISecondary
+                    label="disponibilité globale"
+                    value="93.6%"
+                    delta={{ dir: "down", value: "↓ 0.4%", tone: "err" }}
+                  />
+                </div>
+              </section>
+
+              {/* INFRASTRUCTURE BLOCK --------------------------------------------- */}
+              <section>
+                <KPIPrimary
+                  label="infrastructure"
+                  tone="info"
+                  headline="tout est opérationnel"
+                  cta="voir détails"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 mt-2">
+                    <StatBlock
+                      icon={Cpu}
+                      label="cpu moyen"
+                      value="31%"
+                      delta={{ dir: "down", value: "↓ 4%", tone: "ok" }}
+                    />
+                    <StatBlock
+                      icon={Database}
+                      label="mémoire utilisée"
+                      value="46%"
+                      delta={{ dir: "down", value: "↓ 3%", tone: "ok" }}
+                    />
+                    <StatBlock
+                      icon={HardDrive}
+                      label="stockage libre"
+                      value="1.2 TB"
+                      delta={{ dir: "up", value: "↑ 120 GB", tone: "ok" }}
+                    />
+                  </div>
+                </KPIPrimary>
+              </section>
+
+              {/* ALERTS + QUEUE --------------------------------------------------- */}
+              <section className="grid gap-6 grid-cols-12">
+                <div className="col-span-12 lg:col-span-5 border border-line bg-bg-elev">
+                  <div className="h-12 px-4 flex items-center justify-between border-b border-line">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-h3 lowercase">alerts</h2>
+                      <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-signal text-signal-ink font-mono text-[11px] font-medium tabular">
+                        12
+                      </span>
+                    </div>
+                    <Button variant="ghost" trailingIcon={<Icon icon={ArrowRight} size={16} />}>
+                      voir tout
+                    </Button>
+                  </div>
+                  <div>
+                    {ALERTS.map((a) => (
+                      <AlertRow key={a.time + a.message} {...a} />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="col-span-12 lg:col-span-7 border border-line bg-bg-elev">
+                  <div className="h-12 px-4 flex items-center justify-between border-b border-line">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-h3 lowercase">migration queue</h2>
+                      <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-bg-elev-2 text-ink font-mono text-[11px] font-medium tabular border border-line-strong">
+                        8
+                      </span>
+                    </div>
+                    <Button variant="ghost" trailingIcon={<Icon icon={ArrowRight} size={16} />}>
+                      voir la queue
+                    </Button>
+                  </div>
+                  <Table className="border-0">
+                    <THead>
+                      <TR>
+                        <TH>position</TH>
+                        <TH>source</TH>
+                        <TH>cible</TH>
+                        <TH>vm</TH>
+                        <TH numeric>taille</TH>
+                        <TH numeric>ajouté</TH>
+                        <TH>statut</TH>
+                      </TR>
+                    </THead>
+                    <tbody>
+                      {QUEUE.map((q) => (
+                        <TR key={q.pos} interactive>
+                          <TD mono muted>{q.pos}</TD>
+                          <TD mono>{q.src}</TD>
+                          <TD mono>{q.dst}</TD>
+                          <TD mono>{q.vm}</TD>
+                          <TD numeric>{q.size}</TD>
+                          <TD numeric muted>{q.added}</TD>
+                          <TD>
+                            <span className="font-mono text-[12px] uppercase text-signal tabular">
+                              en attente
+                            </span>
+                          </TD>
+                        </TR>
+                      ))}
+                    </tbody>
+                  </Table>
+                </div>
+              </section>
+
+              {/* TOKENS ---------------------------------------------------------- */}
+              <Section label="tokens">
+                <div className="grid gap-8 md:grid-cols-3">
+                  {TOKEN_GROUPS.map((g) => (
+                    <div key={g.title}>
+                      <div className="font-mono text-[11px] uppercase text-ink-muted mb-2">
+                        {g.title}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {g.tokens.map(([name, val]) => (
+                          <div key={name} className="border border-line">
+                            <div className="h-16" style={{ background: val }} />
+                            <div className="px-2 py-1.5">
+                              <div className="font-mono text-[11px] text-ink">{name}</div>
+                              <div className="font-mono text-[10px] text-ink-muted truncate">
+                                {val}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+
+              {/* TYPE ------------------------------------------------------------ */}
+              <Section label="typography">
+                <div className="border border-line divide-y divide-line">
+                  {TYPE_SAMPLES.map((t) => (
+                    <div
+                      key={t.token}
+                      className="grid grid-cols-[120px_1fr] gap-6 items-baseline px-4 py-3"
+                    >
+                      <div className="font-mono text-[11px] uppercase text-ink-muted">
+                        {t.token}
+                      </div>
+                      <div className={t.cls}>{t.sample}</div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+
+              {/* BUTTONS --------------------------------------------------------- */}
+              <Section label="buttons">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <ButtonRow label="primary" variant="primary" />
+                  <ButtonRow label="secondary" variant="secondary" />
+                  <ButtonRow label="danger" variant="danger" />
+                  <ButtonRow label="ghost" variant="ghost" />
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <span className="font-mono text-[11px] uppercase text-ink-muted w-24">
+                    icon-only
+                  </span>
+                  <IconButton aria-label="Ajouter" variant="primary">
+                    <Icon icon={Plus} size={20} />
+                  </IconButton>
+                  <IconButton aria-label="Serveur">
+                    <Icon icon={Server} size={20} />
+                  </IconButton>
+                  <IconButton aria-label="Alerte">
+                    <Icon icon={AlertTriangle} size={20} />
+                  </IconButton>
+                </div>
+              </Section>
+
+              {/* INPUTS ---------------------------------------------------------- */}
+              <Section label="inputs">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
+                  <Field label="hyperviseur — nom">
+                    <Input placeholder="vsphere-prod-01" />
+                  </Field>
+                  <Field label="environnement">
+                    <Select defaultValue="prod">
+                      <option value="prod">production</option>
+                      <option value="staging">staging</option>
+                      <option value="lab">lab</option>
+                    </Select>
+                  </Field>
+                  <Field label="adresse — invalide">
+                    <Input invalid defaultValue="10.9.21." />
+                    <FieldError>adresse ip incomplète.</FieldError>
+                  </Field>
+                  <Field label="désactivé">
+                    <Input disabled placeholder="lecture seule" />
+                  </Field>
+                  <Field label="description" className="md:col-span-2">
+                    <Textarea placeholder="Note interne pour l'équipe ops…" />
+                  </Field>
+                  <Field label="options">
+                    <label className="inline-flex items-center gap-2 text-[14px]">
+                      <Checkbox defaultChecked /> activer la découverte automatique
+                    </label>
+                  </Field>
+                </div>
+              </Section>
+
+              {/* BADGES ---------------------------------------------------------- */}
+              <Section label="badges">
+                <div className="space-y-3">
+                  <Row label="compatibilité">
+                    <Badge variant="ok">compatible</Badge>
+                    <Badge variant="partial">partial</Badge>
+                    <Badge variant="incompatible">incompatible</Badge>
+                    <Badge variant="info">info</Badge>
+                    <Badge variant="neutral">unknown</Badge>
+                  </Row>
+                  <Row label="severity">
+                    <Badge variant="critical" dot={false}>critical</Badge>
+                    <Badge variant="high" dot={false}>high</Badge>
+                    <Badge variant="medium" dot={false}>medium</Badge>
+                    <Badge variant="low" dot={false}>low</Badge>
+                  </Row>
+                </div>
+              </Section>
+
+              {/* PROGRESS / LIVE / TOP ------------------------------------------- */}
+              <Section label="progress · live · top-bar">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
+                  <div className="border border-line bg-bg-elev p-6 space-y-4">
+                    <div className="font-mono text-[11px] uppercase text-ink-muted">
+                      progress bar
+                    </div>
+                    <ProgressBar value={68} showPct />
+                    <ProgressBar value={94} showPct variant="ok" />
+                    <ProgressBar value={22} showPct />
+                  </div>
+                  <div className="border border-line bg-bg-elev p-6 space-y-4">
+                    <div className="font-mono text-[11px] uppercase text-ink-muted">
+                      live + top bar
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <LiveIndicator />
+                      <span className="text-[14px]">migration mig-7f3a en cours…</span>
+                    </div>
+                    <Button variant="secondary" onClick={() => setTopActive((v) => !v)}>
+                      {topActive ? "arrêter top-bar" : "démarrer top-bar"}
+                    </Button>
+                  </div>
+                </div>
+              </Section>
+
+              {/* SLIDE OVER ------------------------------------------------------ */}
+              <Section label="slide-over (480px)">
+                <Button variant="primary" onClick={() => setOpen(true)}>
+                  ouvrir le panneau
+                </Button>
+              </Section>
+
+              {/* TABS ------------------------------------------------------------ */}
+              <Section label="tabs">
+                <div className="max-w-2xl">
+                  <Tabs
+                    tabs={[
+                      {
+                        id: "profil",
+                        label: "profil",
+                        content: (
+                          <p className="text-[14px] text-ink-muted">
+                            Informations utilisateur courantes — nom, rôle, fuseau, langue.
+                          </p>
+                        ),
+                      },
+                      {
+                        id: "utilisateurs",
+                        label: "utilisateurs",
+                        content: (
+                          <p className="text-[14px] text-ink-muted">
+                            Gestion des utilisateurs (admin uniquement).
+                          </p>
+                        ),
+                      },
+                      {
+                        id: "roles",
+                        label: "rôles",
+                        content: (
+                          <p className="text-[14px] text-ink-muted">
+                            Rôles système en lecture seule, rôles personnalisés modifiables.
+                          </p>
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              </Section>
+
+              {/* ICONS ----------------------------------------------------------- */}
+              <Section label="icons — lucide stroke 1.5 · 16/20">
+                <div className="flex items-center gap-6">
+                  {[Server, Database, Activity, AlertTriangle, Plus].map((I, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Icon icon={I} size={16} />
+                      <Icon icon={I} size={20} />
+                    </div>
+                  ))}
+                </div>
+              </Section>
             </div>
-          </div>
-        </section>
+          </main>
 
-        {/* Buttons --------------------------------------------------------- */}
-        <section>
-          <SectionLabel>BUTTONS</SectionLabel>
-          <div className="grid grid-cols-3 gap-3 mt-3 max-w-3xl">
-            <ButtonRow label="primary" variant="primary" />
-            <ButtonRow label="secondary" variant="secondary" />
-            <ButtonRow label="danger" variant="danger" />
-          </div>
-        </section>
+          <Footer />
+        </div>
+      </div>
 
-        {/* Inputs ---------------------------------------------------------- */}
-        <section>
-          <SectionLabel>INPUTS</SectionLabel>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 max-w-3xl">
-            <Field label="DEFAULT">
-              <Input placeholder="vsphere-prod-01" />
-            </Field>
-            <Field label="FOCUSED — TAB INTO IT">
-              <Input placeholder="cliquez ou tab" />
-            </Field>
-            <Field label="DISABLED">
-              <Input placeholder="non-modifiable" disabled />
-            </Field>
-            <Field label="INVALID">
-              <Input invalid defaultValue="bad-value" />
-              <FieldError>Le champ est requis.</FieldError>
-            </Field>
-            <Field label="SELECT">
-              <Select defaultValue="vsphere">
-                <option value="vsphere">vSphere</option>
-                <option value="kvm">KVM</option>
-                <option value="hyperv">Hyper-V</option>
-              </Select>
-            </Field>
-            <Field label="TEXTAREA">
-              <Textarea placeholder="Description courte…" />
-            </Field>
-            <Field label="CHECKBOX">
-              <label className="inline-flex items-center gap-2 text-[13px]">
-                <Checkbox defaultChecked /> Activer la découverte automatique
-              </label>
-            </Field>
-          </div>
-        </section>
-
-        {/* Badges ---------------------------------------------------------- */}
-        <section>
-          <SectionLabel>STATUS BADGES</SectionLabel>
-          <div className="flex flex-wrap items-center gap-2 mt-3">
-            <Badge variant="ok">COMPATIBLE</Badge>
-            <Badge variant="partial">PARTIAL</Badge>
-            <Badge variant="incompatible">INCOMPATIBLE</Badge>
-            <Badge variant="info">INFO</Badge>
-            <Badge variant="warn">WARN</Badge>
-            <Badge variant="neutral">UNKNOWN</Badge>
-          </div>
-        </section>
-
-        {/* Panel ----------------------------------------------------------- */}
-        <section>
-          <SectionLabel>PANEL</SectionLabel>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-            <Panel label="MIGRATION QUEUE — 03 ACTIVE" meta="UPDATED 14:22:01">
-              <p className="text-[13px] text-ink-muted">
-                Panneaux SCADA — coin haut-gauche réservé au libellé en mono
-                majuscules.
-              </p>
-            </Panel>
-            <Panel label="HYPERVISORS" meta="07 / 12">
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <KPI value="07" label="ACTIVE" />
-                <KPI value="03" label="UNREACHABLE" />
-                <KPI value="02" label="INACTIVE" />
-              </div>
-            </Panel>
-          </div>
-        </section>
-
-        {/* Table ----------------------------------------------------------- */}
-        <section>
-          <SectionLabel>TABLE — DENSE 32PX ROWS</SectionLabel>
-          <div className="mt-3">
-            <Table>
-              <THead>
-                <TR>
-                  <TH>NAME</TH>
-                  <TH>TYPE</TH>
-                  <TH>STATUS</TH>
-                  <TH numeric>VMS</TH>
-                  <TH numeric>RAM (GB)</TH>
-                </TR>
-              </THead>
-              <tbody>
-                <TR interactive>
-                  <TD>vsphere-prod-01</TD>
-                  <TD mono>VSPHERE</TD>
-                  <TD>
-                    <Badge variant="ok">ACTIVE</Badge>
-                  </TD>
-                  <TD numeric>247</TD>
-                  <TD numeric>1,024.0</TD>
-                </TR>
-                <TR interactive>
-                  <TD>kvm-lab-02</TD>
-                  <TD mono>KVM</TD>
-                  <TD>
-                    <Badge variant="warn">UNREACHABLE</Badge>
-                  </TD>
-                  <TD numeric>32</TD>
-                  <TD numeric>128.0</TD>
-                </TR>
-                <TR interactive>
-                  <TD>hyperv-edge-03</TD>
-                  <TD mono>HYPER_V</TD>
-                  <TD>
-                    <Badge variant="incompatible">ERROR</Badge>
-                  </TD>
-                  <TD numeric>8</TD>
-                  <TD numeric>32.0</TD>
-                </TR>
-              </tbody>
-            </Table>
-          </div>
-        </section>
-
-        {/* Progress + live ------------------------------------------------- */}
-        <section>
-          <SectionLabel>PROGRESS · LIVE INDICATOR · TOP BAR</SectionLabel>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-3">
-            <Panel label="PROGRESS BAR (4PX)">
-              <ProgressBar value={progress} showPct className="mb-3" />
-              <div className="flex items-center gap-2">
-                <Button onClick={() => setProgress((p) => Math.max(0, p - 10))}>
-                  -10
-                </Button>
-                <Button onClick={() => setProgress((p) => Math.min(100, p + 10))}>
-                  +10
-                </Button>
-                <Button variant="primary" onClick={() => setProgress(0)}>
-                  RESET
-                </Button>
-              </div>
-            </Panel>
-
-            <Panel label="LIVE + TOP PROGRESS">
-              <div className="flex items-center gap-3 text-[13px] mb-3">
-                <LiveIndicator />
-                <span>Migration mig-7f3a en cours…</span>
-              </div>
-              <Button onClick={() => setTopActive((v) => !v)}>
-                {topActive ? "ARRÊTER TOP-BAR" : "DÉMARRER TOP-BAR"}
-              </Button>
-            </Panel>
-          </div>
-        </section>
-
-        {/* SlideOver ------------------------------------------------------- */}
-        <section>
-          <SectionLabel>SLIDE-OVER (480PX)</SectionLabel>
-          <div className="mt-3">
-            <Button variant="primary" onClick={() => setOpen(true)}>
-              OUVRIR LE PANNEAU
-            </Button>
-          </div>
-        </section>
-
-        {/* Tabs ------------------------------------------------------------ */}
-        <section>
-          <SectionLabel>TABS</SectionLabel>
-          <div className="mt-3 max-w-2xl">
-            <Tabs
-              tabs={[
-                {
-                  id: "profile",
-                  label: "PROFIL",
-                  content: (
-                    <p className="text-[13px] text-ink-muted">
-                      Onglet profil — informations utilisateur courantes.
-                    </p>
-                  ),
-                },
-                {
-                  id: "users",
-                  label: "UTILISATEURS",
-                  content: (
-                    <p className="text-[13px] text-ink-muted">
-                      Onglet gestion des utilisateurs (admin uniquement).
-                    </p>
-                  ),
-                },
-                {
-                  id: "roles",
-                  label: "RÔLES",
-                  content: (
-                    <p className="text-[13px] text-ink-muted">
-                      Rôles système en lecture seule, rôles personnalisés
-                      modifiables.
-                    </p>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </section>
-
-        {/* Icons ----------------------------------------------------------- */}
-        <section>
-          <SectionLabel>ICONS — LUCIDE 1.5 STROKE · 16/20</SectionLabel>
-          <div className="mt-3 flex items-center gap-4">
-            <Icon icon={Server} size={16} />
-            <Icon icon={Database} size={16} />
-            <Icon icon={Activity} size={20} />
-          </div>
-        </section>
-      </main>
+      {/* Persistent CTA — bottom right */}
+      <div className="fixed bottom-6 right-6 z-30">
+        <Button
+          variant="primary"
+          leadingIcon={<Icon icon={Plus} size={20} />}
+          trailingIcon={<Icon icon={ArrowRight} size={20} />}
+          className="h-12 px-6"
+        >
+          nouvelle migration
+        </Button>
+      </div>
 
       <SlideOver
         open={open}
         onClose={() => setOpen(false)}
-        title="DÉTAILS — vsphere-prod-01"
+        title="détails — vsphere-prod-01"
         footer={
           <>
-            <Button onClick={() => setOpen(false)}>ANNULER</Button>
-            <Button variant="primary">ENREGISTRER</Button>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              annuler
+            </Button>
+            <Button variant="primary">enregistrer</Button>
           </>
         }
       >
-        <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-[13px]">
-          <dt className="font-mono text-[11px] uppercase text-ink-muted">HOST</dt>
-          <dd className="font-mono">10.9.21.151</dd>
-          <dt className="font-mono text-[11px] uppercase text-ink-muted">TYPE</dt>
-          <dd className="font-mono">VSPHERE</dd>
-          <dt className="font-mono text-[11px] uppercase text-ink-muted">VMS</dt>
-          <dd className="font-mono tabular-nums">247</dd>
+        <dl className="grid grid-cols-[140px_1fr] gap-y-3 text-[14px]">
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">host</dt>
+          <dd className="font-mono tabular">10.9.21.151</dd>
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">type</dt>
+          <dd className="font-mono uppercase">vsphere</dd>
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">vms</dt>
+          <dd className="font-mono tabular">247</dd>
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">ram</dt>
+          <dd className="font-mono tabular">1,024.0 GB</dd>
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">statut</dt>
+          <dd>
+            <Badge variant="ok">active</Badge>
+          </dd>
+          <dt className="font-mono text-[11px] uppercase text-ink-muted">dernière sync</dt>
+          <dd className="font-mono tabular">14:21:03 UTC</dd>
         </dl>
+        <div className="h-px bg-line my-6" />
+        <p className="text-[13px] text-ink-muted">
+          Le panneau coulisse depuis la droite en 200ms. Esc ferme. Le backdrop
+          est solide, sans flou.
+        </p>
       </SlideOver>
     </div>
   );
 }
 
-// ---- helpers ---------------------------------------------------------------
+// helpers --------------------------------------------------------------------
 
-function SectionLabel({ children }: { children: string }) {
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <h2 className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted border-b border-line pb-1">
+    <section>
+      <h2 className="font-mono text-[11px] uppercase tracking-[0.04em] text-ink-muted border-b border-line pb-2 mb-4">
+        {label}
+      </h2>
       {children}
-    </h2>
+    </section>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <label className="block">
-      <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted block mb-1">
+    <label className={`block ${className ?? ""}`}>
+      <span className="font-mono text-[11px] uppercase tracking-[0.04em] text-ink-muted block mb-2">
         {label}
       </span>
       {children}
@@ -373,7 +537,18 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function FieldError({ children }: { children: React.ReactNode }) {
   return (
-    <span className="block mt-1 font-mono text-[11px] text-err">{children}</span>
+    <span className="block mt-1.5 font-mono text-[12px] text-err">{children}</span>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-4">
+      <span className="font-mono text-[11px] uppercase text-ink-muted w-32">
+        {label}
+      </span>
+      <div className="flex flex-wrap items-center gap-2">{children}</div>
+    </div>
   );
 }
 
@@ -382,29 +557,23 @@ function ButtonRow({
   variant,
 }: {
   label: string;
-  variant: "primary" | "secondary" | "danger";
+  variant: "primary" | "secondary" | "danger" | "ghost";
 }) {
   return (
-    <div className="border border-line p-3 space-y-2">
+    <div className="border border-line p-4 space-y-3">
       <div className="font-mono text-[11px] uppercase text-ink-muted">{label}</div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant={variant}>DEFAULT</Button>
+        <Button variant={variant}>action</Button>
         <Button variant={variant} disabled>
-          DISABLED
+          disabled
         </Button>
         <Button variant={variant} loading>
-          LOADING
+          loading
+        </Button>
+        <Button variant={variant} uppercase>
+          UPPERCASE
         </Button>
       </div>
-    </div>
-  );
-}
-
-function KPI({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="border border-line-soft p-2">
-      <div className="font-mono tabular-nums text-[20px] text-ink">{value}</div>
-      <div className="font-mono text-[11px] uppercase text-ink-muted">{label}</div>
     </div>
   );
 }

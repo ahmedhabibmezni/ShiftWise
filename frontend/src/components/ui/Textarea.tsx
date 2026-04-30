@@ -1,25 +1,27 @@
-import { forwardRef, type TextareaHTMLAttributes } from "react";
+import { forwardRef } from "react";
+import type { TextareaHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 type Props = TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean };
 
-const base =
-  "block w-full px-2 py-1 bg-bg text-ink border rounded-none text-[13px] " +
-  "placeholder:text-ink-muted " +
-  "transition-[border-color] " +
-  "disabled:opacity-50 " +
-  "focus:outline-none focus-visible:outline focus-visible:outline-1 " +
-  "focus-visible:outline-signal focus-visible:outline-offset-1";
-
-export const Textarea = forwardRef<HTMLTextAreaElement, Props>(
-  ({ invalid, className, rows = 3, ...rest }, ref) => (
+export const Textarea = forwardRef<HTMLTextAreaElement, Props>(function Textarea(
+  { className, invalid, ...rest },
+  ref,
+) {
+  return (
     <textarea
       ref={ref}
-      rows={rows}
       aria-invalid={invalid || undefined}
-      className={cn(base, invalid ? "border-err" : "border-line", className)}
+      className={cn(
+        "w-full min-h-[80px] px-3 py-2 rounded-sm border bg-bg-elev text-ink",
+        "font-sans text-[14px] placeholder:text-ink-muted",
+        "transition-[border-color] duration-150",
+        invalid ? "border-err" : "border-line hover:border-line-strong",
+        "focus:outline-none focus-visible:outline-1 focus-visible:outline-signal",
+        "disabled:opacity-50 disabled:cursor-not-allowed",
+        className,
+      )}
       {...rest}
     />
-  ),
-);
-Textarea.displayName = "Textarea";
+  );
+});

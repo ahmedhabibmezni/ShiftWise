@@ -3,15 +3,18 @@ import { cn } from "@/lib/cn";
 
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("border border-line overflow-auto", className)}>
-      <table className="w-full border-collapse text-[13px]">{children}</table>
+    <div className={cn("border border-line", className)}>
+      <table className="w-full border-collapse">{children}</table>
     </div>
   );
 }
 
 export function THead({ children }: { children: ReactNode }) {
   return (
-    <thead className="sticky top-0 bg-bg-elev">
+    <thead
+      className="bg-bg-elev"
+      style={{ boxShadow: "inset 0 -1px 0 var(--line-strong)" }}
+    >
       {children}
     </thead>
   );
@@ -21,39 +24,31 @@ export function TR({
   children,
   interactive,
   className,
-  ...rest
 }: {
   children: ReactNode;
   interactive?: boolean;
   className?: string;
-  onClick?: () => void;
 }) {
   return (
     <tr
       className={cn(
-        "border-b border-line-soft last:border-b-0 h-8",
-        interactive && "cursor-pointer hover:bg-bg-elev transition-[background-color]",
+        "border-b border-line last:border-b-0 h-10",
+        interactive && "transition-[background-color] duration-150 hover:bg-bg-elev-2 cursor-pointer",
         className,
       )}
-      {...rest}
     >
       {children}
     </tr>
   );
 }
 
-type ThProps = ThHTMLAttributes<HTMLTableCellElement> & {
-  numeric?: boolean;
-};
+type ThProps = ThHTMLAttributes<HTMLTableCellElement> & { numeric?: boolean };
 export function TH({ numeric, className, children, ...rest }: ThProps) {
   return (
     <th
       className={cn(
-        "h-8 px-3 font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted",
-        "text-left border-b border-line",
-        // double bottom border via pseudo
-        "shadow-[inset_0_-1px_0_var(--line-soft)]",
-        numeric && "text-right",
+        "px-3 h-8 font-mono uppercase text-[11px] font-medium tracking-[0.04em] text-ink-muted",
+        numeric ? "text-right tabular" : "text-left",
         className,
       )}
       {...rest}
@@ -66,14 +61,16 @@ export function TH({ numeric, className, children, ...rest }: ThProps) {
 type TdProps = TdHTMLAttributes<HTMLTableCellElement> & {
   numeric?: boolean;
   mono?: boolean;
+  muted?: boolean;
 };
-export function TD({ numeric, mono, className, children, ...rest }: TdProps) {
+export function TD({ numeric, mono, muted, className, children, ...rest }: TdProps) {
   return (
     <td
       className={cn(
-        "px-3 align-middle text-ink",
-        (numeric || mono) && "font-mono tabular-nums",
+        "px-3 align-middle text-[13px]",
+        (numeric || mono) && "font-mono tabular",
         numeric && "text-right",
+        muted && "text-ink-muted",
         className,
       )}
       {...rest}

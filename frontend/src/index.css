@@ -1,20 +1,23 @@
-@import "@fontsource-variable/inter-tight";
+@import "@fontsource-variable/inter/index.css";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 
 @import "./styles/tokens.css";
-
 @import "tailwindcss";
+@import "./styles/base.css";
 
 @theme {
   --color-bg: var(--bg);
   --color-bg-elev: var(--bg-elev);
+  --color-bg-elev-2: var(--bg-elev-2);
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-line: var(--line);
-  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
   --color-signal: var(--signal);
+  --color-signal-ink: var(--signal-ink);
   --color-info: var(--info);
+  --color-info-ink: var(--info-ink);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-err: var(--err);
@@ -24,11 +27,55 @@
 
   --radius-*: initial;
   --radius-sm: 2px;
+  --radius-md: 4px;
 
   --shadow-*: initial;
 
-  --default-transition-duration: 120ms;
+  --default-transition-duration: 150ms;
   --default-transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
+
+  --text-display: 80px;
+  --text-display--line-height: 0.95;
+  --text-display--font-weight: 800;
+
+  --text-major: 56px;
+  --text-major--line-height: 1;
+  --text-major--font-weight: 700;
+
+  --text-h1: 32px;
+  --text-h1--line-height: 1.1;
+  --text-h1--font-weight: 700;
+
+  --text-h2: 24px;
+  --text-h2--line-height: 1.2;
+  --text-h2--font-weight: 600;
+
+  --text-h3: 16px;
+  --text-h3--line-height: 1.3;
+  --text-h3--font-weight: 600;
+
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-body--font-weight: 400;
+
+  --text-meta: 12px;
+  --text-meta--line-height: 1.4;
+  --text-meta--font-weight: 400;
+
+  --text-mono-lg: 18px;
+  --text-mono-lg--line-height: 1.3;
+  --text-mono-lg--font-weight: 500;
+
+  --text-mono: 13px;
+  --text-mono--line-height: 1.4;
+  --text-mono--font-weight: 400;
+
+  --text-mono-sm: 11px;
+  --text-mono-sm--line-height: 1.3;
+  --text-mono-sm--font-weight: 500;
 }
 
-@import "./styles/base.css";
+.font-mono,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

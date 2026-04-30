@@ -1,45 +1,65 @@
-import { forwardRef, type ButtonHTMLAttributes } from "react";
+import { forwardRef } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-type Variant = "primary" | "secondary" | "danger";
+type Variant = "primary" | "secondary" | "danger" | "ghost";
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant;
   loading?: boolean;
+  uppercase?: boolean;
+  leadingIcon?: ReactNode;
+  trailingIcon?: ReactNode;
 };
 
-const base =
-  "inline-flex h-8 items-center justify-center gap-2 px-3 border rounded-sm " +
-  "font-mono text-[11px] uppercase tracking-[0.05em] " +
-  "transition-[background-color,border-color,color,opacity] " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
-  "focus:outline-none focus-visible:outline focus-visible:outline-1 " +
-  "focus-visible:outline-signal focus-visible:outline-offset-1";
-
-const variants: Record<Variant, string> = {
+const VARIANTS: Record<Variant, string> = {
   primary:
-    "bg-signal text-white border-signal hover:bg-[color-mix(in_srgb,var(--signal)_88%,black)] " +
-    "hover:border-[color-mix(in_srgb,var(--signal)_88%,black)] active:opacity-90",
+    "bg-signal text-signal-ink border-transparent hover:brightness-95 active:brightness-90",
   secondary:
-    "bg-transparent text-ink border-line hover:bg-bg-elev active:bg-bg-elev",
+    "bg-transparent text-ink border-line-strong hover:bg-bg-elev active:bg-bg-elev-2",
   danger:
-    "bg-err text-white border-err hover:bg-[color-mix(in_srgb,var(--err)_88%,black)] " +
-    "hover:border-[color-mix(in_srgb,var(--err)_88%,black)]",
+    "bg-err text-white border-transparent hover:brightness-95 active:brightness-90",
+  ghost:
+    "bg-transparent text-ink-muted border-transparent hover:bg-bg-elev hover:text-ink",
 };
 
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = "secondary", loading, className, disabled, children, ...rest }, ref) => {
-    return (
-      <button
-        ref={ref}
-        className={cn(base, variants[variant], className)}
-        disabled={disabled || loading}
-        data-loading={loading || undefined}
-        {...rest}
-      >
-        {loading ? <span className="opacity-60">…</span> : children}
-      </button>
-    );
+export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
+  {
+    variant = "secondary",
+    loading,
+    uppercase,
+    leadingIcon,
+    trailingIcon,
+    className,
+    children,
+    disabled,
+    ...rest
   },
-);
-Button.displayName = "Button";
+  ref,
+) {
+  return (
+    <button
+      ref={ref}
+      disabled={disabled || loading}
+      className={cn(
+        "inline-flex h-10 items-center justify-center gap-2 px-4 rounded-sm border",
+        "font-sans text-[14px] font-semibold",
+        "transition-[background-color,color,border-color,opacity] duration-150",
+        "disabled:opacity-50 disabled:cursor-not-allowed",
+        "focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1",
+        uppercase && "uppercase tracking-[0.04em]",
+        VARIANTS[variant],
+        className,
+      )}
+      {...rest}
+    >
+      {loading ? (
+        <span className="font-mono tabular text-[12px]">…</span>
+      ) : (
+        leadingIcon
+      )}
+      {children}
+      {!loading && trailingIcon}
+    </button>
+  );
+});

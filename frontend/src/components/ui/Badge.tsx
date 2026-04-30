@@ -1,33 +1,63 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-export type BadgeVariant = "ok" | "partial" | "incompatible" | "info" | "warn" | "neutral";
+export type BadgeVariant =
+  | "ok"
+  | "partial"
+  | "incompatible"
+  | "info"
+  | "warn"
+  | "neutral"
+  | "critical"
+  | "high"
+  | "medium"
+  | "low";
 
-const dotColor: Record<BadgeVariant, string> = {
-  ok: "bg-ok",
-  partial: "bg-warn",
-  incompatible: "bg-err",
-  info: "bg-info",
-  warn: "bg-warn",
-  neutral: "bg-ink-muted",
+const COLOR: Record<BadgeVariant, string> = {
+  ok: "var(--ok)",
+  partial: "var(--warn)",
+  incompatible: "var(--err)",
+  info: "var(--info)",
+  warn: "var(--warn)",
+  neutral: "var(--ink-muted)",
+  critical: "var(--err)",
+  high: "var(--signal)",
+  medium: "var(--warn)",
+  low: "var(--info)",
 };
 
-type Props = {
+export function Badge({
+  variant = "neutral",
+  children,
+  dot = true,
+  className,
+}: {
   variant?: BadgeVariant;
   children: ReactNode;
+  dot?: boolean;
   className?: string;
-};
-
-export function Badge({ variant = "neutral", children, className }: Props) {
+}) {
+  const c = COLOR[variant];
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 h-5 px-1.5 border border-line rounded-sm",
-        "font-mono text-[11px] uppercase tracking-[0.05em] leading-none text-ink",
+        "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5",
+        "font-mono uppercase text-[11px] font-medium tracking-[0.04em] tabular",
         className,
       )}
+      style={{
+        color: c,
+        borderColor: "transparent",
+        backgroundColor: `color-mix(in srgb, ${c} calc(var(--tint-pct) * 100%), transparent)`,
+      }}
     >
-      <span className={cn("inline-block h-1.5 w-1.5", dotColor[variant])} />
+      {dot && (
+        <span
+          aria-hidden
+          className="block h-1.5 w-1.5"
+          style={{ backgroundColor: c }}
+        />
+      )}
       {children}
     </span>
   );

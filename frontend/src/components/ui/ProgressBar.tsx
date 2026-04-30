@@ -1,30 +1,52 @@
 import { cn } from "@/lib/cn";
 
-type Props = {
+export function ProgressBar({
+  value,
+  showPct,
+  variant = "signal",
+  trackColor,
+  className,
+}: {
   value: number;
   showPct?: boolean;
+  variant?: "signal" | "ok" | "white";
+  trackColor?: string;
   className?: string;
-};
+}) {
+  const v = Math.max(0, Math.min(100, value));
+  const fill =
+    variant === "white"
+      ? "rgba(255,255,255,0.95)"
+      : variant === "ok"
+        ? "var(--ok)"
+        : "var(--signal)";
+  const track =
+    trackColor ??
+    (variant === "white"
+      ? "rgba(255,255,255,0.25)"
+      : `color-mix(in srgb, ${fill} 20%, transparent)`);
 
-export function ProgressBar({ value, showPct = false, className }: Props) {
-  const pct = Math.max(0, Math.min(100, value));
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <div className={cn("flex items-center gap-3", className)}>
       <div
+        className="relative h-1 flex-1"
+        style={{ backgroundColor: track }}
         role="progressbar"
-        aria-valuenow={pct}
+        aria-valuenow={v}
         aria-valuemin={0}
         aria-valuemax={100}
-        className="h-1 flex-1 bg-bg-elev relative overflow-hidden"
       >
         <div
-          className="absolute inset-y-0 left-0 bg-signal transition-[width] duration-[120ms]"
-          style={{ width: `${pct}%` }}
+          className="absolute inset-y-0 left-0 transition-[width] duration-150"
+          style={{ width: `${v}%`, backgroundColor: fill }}
         />
       </div>
       {showPct && (
-        <span className="font-mono tabular-nums text-[11px] text-ink-muted w-9 text-right">
-          {pct.toFixed(0)}%
+        <span
+          className="font-mono text-[12px] tabular w-10 text-right"
+          style={{ color: variant === "white" ? "rgba(255,255,255,0.95)" : "var(--ink-muted)" }}
+        >
+          {v}%
         </span>
       )}
     </div>
