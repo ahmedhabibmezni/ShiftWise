@@ -52,12 +52,14 @@ logs/
 temp/
 tmp/
 
-# Claude
-.claude
+# Internal tooling (never commit)
+.claude/
 .claudeignore
 CLAUDE.md
-ShiftWise_session_handoff.md
 NEXT_STEPS.md
+Shiftwise_session_handoff.md
+ShiftWise_session_handoff.md
+*_session_handoff.md
 
 # Documentations
 docs/
