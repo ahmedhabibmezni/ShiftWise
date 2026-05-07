@@ -40,6 +40,7 @@ from app.models.conversion import ConversionGroupStatus, ConversionJob
 from app.models.migration import Migration, MigrationStatus
 from app.models.virtual_machine import VirtualMachine
 from app.services.migrator.errors import MigratorError
+from app.services.migrator.namespace import ensure_tenant_namespace
 from app.services.migrator.populator_job import (
     PopulatorOutcome,
     delete_populator,
@@ -75,6 +76,11 @@ class MigratorService:
         migration, vm, group = self._load_context(db, migration_id)
         target_namespace = migration.target_namespace
         target_vm_name = self._resolve_target_vm_name(migration, vm)
+
+        # Ensure the tenant namespace exists before anything else.
+        # Creates shiftwise-{tenant_id} with standard labels if absent.
+        kv = get_kubevirt_client()
+        ensure_tenant_namespace(kv, target_namespace, migration.tenant_id)
 
         # Cache the resolved VM name on the row so the UI sees it.
         if migration.target_vm_name != target_vm_name:

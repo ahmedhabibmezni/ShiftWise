@@ -38,6 +38,7 @@ from kubernetes.client.rest import ApiException
 from app.core.config import settings
 from app.core.kubevirt_client import get_kubevirt_client
 from app.services.migrator.errors import MigratorError
+from app.services.migrator.transit_discovery import discover_transit_nfs
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ def submit_populator_job(
     existing Job's name).
     """
     kv = get_kubevirt_client()
+    nfs_server, nfs_path = discover_transit_nfs(kv)
     manifest = _build_manifest(
         namespace=namespace,
         job_name=job_name,
@@ -84,6 +86,8 @@ def submit_populator_job(
         src_relative_path=src_relative_path,
         backoff_limit=backoff_limit,
         active_deadline_seconds=active_deadline_seconds,
+        nfs_server=nfs_server,
+        nfs_path=nfs_path,
     )
     try:
         kv.batch_api.create_namespaced_job(namespace=namespace, body=manifest)
@@ -206,6 +210,8 @@ def _build_manifest(
     src_relative_path: str,
     backoff_limit: int,
     active_deadline_seconds: int,
+    nfs_server: str,
+    nfs_path: str,
 ) -> dict:
     labels = {
         _LABEL_APP: _LABEL_APP_VAL,
@@ -255,16 +261,18 @@ def _build_manifest(
                         },
                     }],
                     "volumes": [
-                        # Source = NFS direct. Pas de PVC parce que le PVC
-                        # de transit vit dans un autre namespace et que
-                        # PVC ⇄ namespace n'est pas franchissable. Cette
-                        # même donnée NFS est exposée via le PVC du
-                        # converter dans son namespace d'origine.
+                        # Source = NFS direct. PVCs are namespace-scoped, so
+                        # the transit-pvc (converter namespace) is not
+                        # reachable from the tenant namespace. volumes.nfs is
+                        # the built-in K8s type that works from any namespace.
+                        # Server + path are resolved at manifest build time:
+                        # explicit env vars take priority, otherwise the PV
+                        # backing transit-pvc is inspected at runtime.
                         {
                             "name": "src",
                             "nfs": {
-                                "server": settings.MIGRATOR_NFS_SERVER,
-                                "path": settings.MIGRATOR_NFS_PATH,
+                                "server": nfs_server,
+                                "path": nfs_path,
                                 "readOnly": True,
                             },
                         },

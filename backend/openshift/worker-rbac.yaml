@@ -53,6 +53,18 @@ rules:
     resources: ["virtualmachineinstances", "virtualmachineinstances/status"]
     verbs: ["get", "list", "watch"]
 
+  # Transit NFS auto-discovery: read the PV backing transit-pvc.
+  # Required by transit_discovery.py when MIGRATOR_NFS_SERVER is not set.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list"]
+
+  # Tenant namespace auto-create: check existence + create if absent.
+  # Required by namespace.py at the start of each migration.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create"]
+
   # Discovery / utility.
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]

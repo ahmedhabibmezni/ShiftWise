@@ -313,6 +313,9 @@ def _patch_k8s_layer(monkeypatch):
     monkeypatch.setattr(pop_mod, "wait_for_populator", captured["wait_populator"])
     monkeypatch.setattr(svc_mod, "wait_for_populator", captured["wait_populator"])
 
+    captured["ensure_ns"] = MagicMock()
+    monkeypatch.setattr(svc_mod, "ensure_tenant_namespace", captured["ensure_ns"])
+
     fake_kv = MagicMock()
     fake_kv.create_vm_from_manifest.side_effect = captured["create_vm"]
     fake_kv.set_vm_run_strategy.side_effect = captured["set_run_strategy"]

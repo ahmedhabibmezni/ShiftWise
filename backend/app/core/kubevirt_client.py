@@ -417,9 +417,28 @@ class KubeVirtClient:
             logger.error(f"❌ Error deleting VM '{name}': {e}")
             raise KubeVirtClientError(f"Failed to delete VM: {e}") from e
 
-     
+    # ------------------------------------------------------------------
+    # Low-level helpers used by transit_discovery + namespace modules
+    # ------------------------------------------------------------------
+
+    def get_pvc(self, *, name: str, namespace: str):
+        """Return a V1PersistentVolumeClaim object.
+
+        Raises ApiException on any error (callers handle 404 themselves).
+        """
+        return self.core_api.read_namespaced_persistent_volume_claim(
+            name=name, namespace=namespace,
+        )
+
+    def get_pv(self, *, name: str):
+        """Return a V1PersistentVolume object.
+
+        Raises ApiException on any error.
+        """
+        return self.core_api.read_persistent_volume(name=name)
+
     # GESTION DES VIRTUALMACHINEINSTANCES
-     
+
 
     def list_vmis(
         self,
