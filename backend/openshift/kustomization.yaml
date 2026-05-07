@@ -10,6 +10,7 @@ namespace: shiftwise
 resources:
   - postgresql-deployment.yaml
   - redis-deployment.yaml
+  - transit-pvc.yaml
   - worker-rbac.yaml
   - backend-deployment.yaml
   - celery-worker-deployment.yaml

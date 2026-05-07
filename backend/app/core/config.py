@@ -168,8 +168,11 @@ class Settings(BaseSettings):
     # Cap par tenant des jobs in-flight
     CONVERTER_MAX_INFLIGHT_PER_TENANT: int = 3
 
-    # Namespace OpenShift pour les Jobs in-cluster (qemu-img / virt-v2v)
-    CONVERTER_K8S_NAMESPACE: str = "shiftwise-converter"
+    # Namespace OpenShift pour les Jobs in-cluster (qemu-img / virt-v2v).
+    # Doit être le namespace où la transit-pvc est déployée, parce que les
+    # Jobs converter montent cette PVC. Le migrator lit aussi cette PVC ici
+    # pour découvrir le NFS (transit_discovery.discover_transit_nfs).
+    CONVERTER_K8S_NAMESPACE: str = "shiftwise"
 
     # Image conteneur pour les Jobs de conversion
     CONVERTER_CONTAINER_IMAGE: str = "quay.io/shiftwise/converter:latest"

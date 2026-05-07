@@ -41,11 +41,13 @@ spec:
             - {name: CELERY_BROKER_URL,     value: "redis://redis:6379/0"}
             - {name: CELERY_RESULT_BACKEND, value: "redis://redis:6379/0"}
             - {name: CONVERTER_TRANSIT_ROOT, value: "/mnt/shiftwise-transit"}
-            # Migrator: source NFS coordinates pour le populator Job
-            # (cf. services/migrator/populator_job.py). Doivent matcher le
-            # PV qui sous-tend transit-pvc.
-            - {name: MIGRATOR_NFS_SERVER, valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_SERVER}}}
-            - {name: MIGRATOR_NFS_PATH,   valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_PATH}}}
+            # Le migrator découvre automatiquement le NFS au runtime à
+            # partir du PV qui backe transit-pvc (cf. transit_discovery.py).
+            # Pour override d'urgence, set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH
+            # via `oc set env` ou décommenter ci-dessous (les DEUX, sinon
+            # warning + fallback auto-discovery).
+            # - {name: MIGRATOR_NFS_SERVER, valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_SERVER}}}
+            # - {name: MIGRATOR_NFS_PATH,   valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_PATH}}}
           volumeMounts:
             - {name: transit, mountPath: /mnt/shiftwise-transit}
           resources:
