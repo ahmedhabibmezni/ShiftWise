@@ -228,6 +228,59 @@ class TestTransitDiscovery:
             discover_transit_nfs(fake_kv)
         assert exc.value.code == "ERR_MIG_INTERNAL"
 
+    def test_503_on_pvc_read_is_classified_as_k8s_timeout(self, monkeypatch):
+        """5xx during PVC lookup → ERR_MIG_K8S_TIMEOUT (transient, retryable)."""
+        from kubernetes.client.rest import ApiException
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_SERVER", "")
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_PATH", "")
+
+        fake_kv = MagicMock()
+        fake_kv.get_pvc.side_effect = ApiException(status=503)
+
+        from app.services.migrator.transit_discovery import discover_transit_nfs
+        with pytest.raises(MigratorError) as exc:
+            discover_transit_nfs(fake_kv)
+        assert exc.value.code == "ERR_MIG_K8S_TIMEOUT"
+        assert exc.value.is_retryable is True
+
+    def test_403_on_pvc_read_is_classified_as_internal(self, monkeypatch):
+        """403 on PVC lookup → ERR_MIG_INTERNAL with RBAC hint in message."""
+        from kubernetes.client.rest import ApiException
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_SERVER", "")
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_PATH", "")
+
+        fake_kv = MagicMock()
+        fake_kv.get_pvc.side_effect = ApiException(status=403)
+
+        from app.services.migrator.transit_discovery import discover_transit_nfs
+        with pytest.raises(MigratorError) as exc:
+            discover_transit_nfs(fake_kv)
+        assert exc.value.code == "ERR_MIG_INTERNAL"
+        assert "pvc/get" in exc.value.message
+
+    def test_partial_env_var_override_warns(self, monkeypatch, caplog):
+        """If only one of SERVER/PATH is set, warn and fall back to lookup."""
+        import logging
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_SERVER", "10.0.0.1")
+        monkeypatch.setattr("app.core.config.settings.MIGRATOR_NFS_PATH", "")
+
+        fake_pvc = MagicMock(); fake_pvc.spec.volume_name = "pv-transit"
+        fake_nfs = MagicMock(); fake_nfs.server = "auto.discovered"; fake_nfs.path = "/auto"
+        fake_pv = MagicMock(); fake_pv.spec.nfs = fake_nfs
+        fake_kv = MagicMock()
+        fake_kv.get_pvc.return_value = fake_pvc
+        fake_kv.get_pv.return_value = fake_pv
+
+        from app.services.migrator.transit_discovery import discover_transit_nfs
+        with caplog.at_level(logging.WARNING, logger="app.services.migrator.transit_discovery"):
+            server, path = discover_transit_nfs(fake_kv)
+
+        # Fallback to live lookup happened
+        assert server == "auto.discovered"
+        assert path == "/auto"
+        # Warning was emitted
+        assert any("Partial MIGRATOR_NFS_*" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # Tenant namespace auto-create
@@ -289,6 +342,42 @@ class TestEnsureTenantNamespace:
         with pytest.raises(MigratorError) as exc:
             ensure_tenant_namespace(fake_kv, "shiftwise-tnt1", "tnt1")
         assert exc.value.code == "ERR_MIG_NAMESPACE_FORBIDDEN"
+
+    def test_503_on_read_is_classified_as_k8s_timeout(self):
+        """5xx during namespace read → ERR_MIG_K8S_TIMEOUT (retryable)."""
+        from kubernetes.client.rest import ApiException
+        from app.services.migrator.namespace import ensure_tenant_namespace
+        fake_kv = MagicMock()
+        fake_kv.core_api.read_namespace.side_effect = ApiException(status=503)
+
+        with pytest.raises(MigratorError) as exc:
+            ensure_tenant_namespace(fake_kv, "shiftwise-tnt1", "tnt1")
+        assert exc.value.code == "ERR_MIG_K8S_TIMEOUT"
+        assert exc.value.is_retryable is True
+
+    def test_503_on_create_is_classified_as_k8s_timeout(self):
+        """5xx during namespace create → ERR_MIG_K8S_TIMEOUT (retryable)."""
+        from kubernetes.client.rest import ApiException
+        from app.services.migrator.namespace import ensure_tenant_namespace
+        fake_kv = MagicMock()
+        fake_kv.core_api.read_namespace.side_effect = ApiException(status=404)
+        fake_kv.core_api.create_namespace.side_effect = ApiException(status=503)
+
+        with pytest.raises(MigratorError) as exc:
+            ensure_tenant_namespace(fake_kv, "shiftwise-tnt1", "tnt1")
+        assert exc.value.code == "ERR_MIG_K8S_TIMEOUT"
+        assert exc.value.is_retryable is True
+
+    def test_408_on_read_is_classified_as_k8s_timeout(self):
+        """408 Request Timeout is also transient."""
+        from kubernetes.client.rest import ApiException
+        from app.services.migrator.namespace import ensure_tenant_namespace
+        fake_kv = MagicMock()
+        fake_kv.core_api.read_namespace.side_effect = ApiException(status=408)
+
+        with pytest.raises(MigratorError) as exc:
+            ensure_tenant_namespace(fake_kv, "shiftwise-tnt1", "tnt1")
+        assert exc.value.code == "ERR_MIG_K8S_TIMEOUT"
 
     def test_orchestrator_calls_ensure_ns_before_first_pvc(
         self, db_session, seeded, monkeypatch,

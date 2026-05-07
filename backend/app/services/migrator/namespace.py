@@ -12,7 +12,7 @@ so operators never need to create tenant namespaces manually.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
@@ -29,6 +29,40 @@ _LABEL_TENANT = "app.shiftwise.io/tenant"
 _LABEL_PURPOSE = "app.shiftwise.io/purpose"
 
 
+def _raise_classified(e: ApiException, action: str, name: str) -> NoReturn:
+    """Map a kubernetes ApiException to the correct typed MigratorError.
+
+    401/403 → NAMESPACE_FORBIDDEN (configurable, op needs to fix RBAC).
+    408/5xx → K8S_TIMEOUT (transient, orchestrator may retry).
+    other   → INTERNAL (permanent, fail loudly).
+
+    Avoids the previous footgun where a 503 from the API server was
+    reported as "grant the worker SA namespaces/get" and marked
+    non-retryable.
+    """
+    status = e.status
+    if status in (401, 403):
+        raise MigratorError(
+            "ERR_MIG_NAMESPACE_FORBIDDEN",
+            f"Cannot {action} namespace {name!r}: HTTP {status} — "
+            f"grant the worker SA namespaces/{action}.",
+            cause=e,
+        ) from e
+    if status == 408 or (status is not None and status >= 500):
+        raise MigratorError(
+            "ERR_MIG_K8S_TIMEOUT",
+            f"Kubernetes API returned HTTP {status} while trying to "
+            f"{action} namespace {name!r} — transient, retryable.",
+            cause=e,
+        ) from e
+    raise MigratorError(
+        "ERR_MIG_INTERNAL",
+        f"Unexpected error while trying to {action} namespace "
+        f"{name!r}: HTTP {status}",
+        cause=e,
+    ) from e
+
+
 def ensure_tenant_namespace(
     kv_client: "KubeVirtClient",
     name: str,
@@ -42,7 +76,7 @@ def ensure_tenant_namespace(
         tenant_id: Tenant identifier, stored in the namespace label.
 
     Raises:
-        MigratorError: On unexpected API errors (not 404/409).
+        MigratorError: classified by HTTP status — see ``_raise_classified``.
     """
     try:
         kv_client.core_api.read_namespace(name=name)
@@ -50,14 +84,9 @@ def ensure_tenant_namespace(
         return
     except ApiException as e:
         if e.status != 404:
-            raise MigratorError(
-                "ERR_MIG_NAMESPACE_FORBIDDEN",
-                f"Cannot check namespace {name!r}: HTTP {e.status} — "
-                f"grant the worker SA namespaces/get.",
-                cause=e,
-            ) from e
+            _raise_classified(e, action="get", name=name)
+        # 404 — fall through to create
 
-    # 404 — namespace does not exist, create it.
     labels = {
         _LABEL_MANAGED_BY: "shiftwise",
         _LABEL_TENANT: tenant_id,
@@ -74,9 +103,4 @@ def ensure_tenant_namespace(
             # Race: another worker created it between our read and write.
             logger.debug("Tenant namespace %r created concurrently — OK", name)
             return
-        raise MigratorError(
-            "ERR_MIG_NAMESPACE_FORBIDDEN",
-            f"Cannot create namespace {name!r}: HTTP {e.status} — "
-            f"grant the worker SA namespaces/create.",
-            cause=e,
-        ) from e
+        _raise_classified(e, action="create", name=name)
