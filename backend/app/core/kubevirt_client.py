@@ -20,6 +20,7 @@ Usage:
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -79,6 +80,7 @@ class KubeVirtClient:
             self.api = client.CustomObjectsApi(self._api_client)
             self.core_api = client.CoreV1Api(self._api_client)
             self.storage_api = client.StorageV1Api(self._api_client)
+            self.batch_api = client.BatchV1Api(self._api_client)  # Jobs (converter)
 
             logger.info("✅ KubeVirt client initialized successfully")
 
@@ -270,6 +272,115 @@ class KubeVirtClient:
         except ApiException as e:
             logger.error(f"❌ Error creating VM '{name}': {e}")
             raise KubeVirtClientError(f"Failed to create VM: {e}") from e
+
+    def create_vm_from_manifest(
+        self,
+        manifest: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Crée une VirtualMachine à partir d'un manifeste fourni par l'appelant.
+
+        Utilisé par le migrator qui construit son propre manifeste (multi-disk
+        PVC-backed, runStrategy Halted, labels custom). Contrairement à
+        :meth:`create_vm`, ne fabrique RIEN — le manifeste est posé tel quel.
+
+        Args:
+            manifest: VirtualMachine custom resource complète (dict).
+
+        Raises:
+            KubeVirtClientError: Si le manifeste est rejeté par l'API.
+        """
+        meta = manifest.get("metadata", {})
+        namespace = meta.get("namespace") or settings.KUBERNETES_DEFAULT_NAMESPACE
+        name = meta.get("name", "<unnamed>")
+        try:
+            vm = self.api.create_namespaced_custom_object(
+                group=self.GROUP,
+                version=self.VERSION,
+                namespace=namespace,
+                plural=self.VM_PLURAL,
+                body=manifest,
+            )
+            logger.info(f"✅ Created VM '{name}' in namespace '{namespace}' (from manifest)")
+            return vm
+        except ApiException as e:
+            logger.error(f"❌ Error creating VM '{name}': {e}")
+            raise KubeVirtClientError(f"Failed to create VM: {e}") from e
+
+    def set_vm_run_strategy(
+        self,
+        name: str,
+        run_strategy: str,
+        namespace: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Patche ``spec.runStrategy`` (Halted | Always | Manual | RerunOnFailure).
+
+        Utilisé par le migrator pour démarrer la VM (Halted -> Always) après
+        que le manifeste de création a été accepté.
+        """
+        namespace = namespace or settings.KUBERNETES_DEFAULT_NAMESPACE
+        body = {"spec": {"runStrategy": run_strategy}}
+        try:
+            vm = self.api.patch_namespaced_custom_object(
+                group=self.GROUP,
+                version=self.VERSION,
+                namespace=namespace,
+                plural=self.VM_PLURAL,
+                name=name,
+                body=body,
+            )
+            logger.info(f"🔧 VM '{name}' runStrategy -> {run_strategy}")
+            return vm
+        except ApiException as e:
+            logger.error(f"❌ Error patching runStrategy on VM '{name}': {e}")
+            raise KubeVirtClientError(f"Failed to patch runStrategy: {e}") from e
+
+    def wait_vmi_running(
+        self,
+        name: str,
+        namespace: str | None = None,
+        timeout_seconds: int = 600,
+        poll_interval_seconds: float = 5.0,
+    ) -> Dict[str, Any]:
+        """
+        Bloque jusqu'à ce que la VirtualMachineInstance atteigne ``phase=Running``.
+
+        Returns:
+            La VMI à l'état Running.
+
+        Raises:
+            KubeVirtClientError: Si la VMI échoue ou si le timeout expire.
+        """
+        namespace = namespace or settings.KUBERNETES_DEFAULT_NAMESPACE
+        start = time.monotonic()
+        last_phase: str | None = None
+        while True:
+            vmi = self.get_vmi(name, namespace)
+            phase = (vmi or {}).get("status", {}).get("phase")
+            if phase != last_phase:
+                logger.info(f"⏳ VMI '{name}' phase: {phase}")
+                last_phase = phase
+
+            if phase == "Running":
+                return vmi  # type: ignore[return-value]
+            if phase == "Failed":
+                raise KubeVirtClientError(
+                    f"VMI '{name}' entered Failed phase before reaching Running"
+                )
+            if phase == "Succeeded":
+                # Means the guest exited normally — for a freshly created VM
+                # this should not happen during the verification window.
+                raise KubeVirtClientError(
+                    f"VMI '{name}' reached Succeeded phase unexpectedly"
+                )
+
+            if (time.monotonic() - start) > timeout_seconds:
+                raise KubeVirtClientError(
+                    f"VMI '{name}' did not reach Running within {timeout_seconds}s "
+                    f"(last phase: {phase})"
+                )
+            time.sleep(poll_interval_seconds)
 
     def delete_vm(
         self,

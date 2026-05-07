@@ -108,7 +108,7 @@ class Settings(BaseSettings):
         )
 
     # Security & JWT
-    SECRET_KEY: str
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-only-secret-not-for-production")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -145,6 +145,113 @@ class Settings(BaseSettings):
         if not 0 <= v <= 1:
             raise ValueError("ANALYZER_CONFIDENCE_THRESHOLD must be between 0 and 1")
         return v
+
+    # ============================================
+    # CONVERTER CONFIGURATION
+    # ============================================
+
+    # Racine NFS de la zone de transit (vu depuis le worker / pod)
+    CONVERTER_TRANSIT_ROOT: str = "/mnt/shiftwise-transit" # if it fails try /nfs-storage/openshift-vms
+
+    # Multiplicateur d'espace requis sur NFS avant staging (sécurité)
+    CONVERTER_FREE_SPACE_FACTOR: float = 2.2
+
+    # TTL des outputs READY avant cleanup (en jours)
+    CONVERTER_OUTPUT_TTL_DAYS: int = 7
+
+    # TTL du dossier work/ après terminaison du job (en heures)
+    CONVERTER_WORK_TTL_HOURS: int = 24
+
+    # Concurrence Celery pour la file converter
+    CONVERTER_WORKER_CONCURRENCY: int = 2
+
+    # Cap par tenant des jobs in-flight
+    CONVERTER_MAX_INFLIGHT_PER_TENANT: int = 3
+
+    # Namespace OpenShift pour les Jobs in-cluster (qemu-img / virt-v2v)
+    CONVERTER_K8S_NAMESPACE: str = "shiftwise-converter"
+
+    # Image conteneur pour les Jobs de conversion
+    CONVERTER_CONTAINER_IMAGE: str = "quay.io/shiftwise/converter:latest"
+
+    # PVC RWX backed par NFS, monté dans les Jobs
+    CONVERTER_TRANSIT_PVC: str = "transit-pvc"
+
+    # ============================================
+    # MIGRATOR CONFIGURATION
+    # ============================================
+
+    # StorageClass utilisée pour les PVC cibles dans les namespaces tenants.
+    MIGRATOR_TARGET_STORAGE_CLASS: str = "nfs-client"
+
+    # Image conteneur du populator Job (doit contenir qemu-img >= 6.0).
+    # Par défaut : la même image que le converter, qui embarque déjà qemu-img.
+    MIGRATOR_POPULATOR_IMAGE: str = "quay.io/shiftwise/converter:latest"
+
+    # ServiceAccount avec lequel le populator Job est lancé dans le namespace
+    # tenant. Par défaut, le SA "default" du namespace.
+    MIGRATOR_POPULATOR_SA: str = "default"
+
+    # Source NFS pour le populator Job (pas de PVC cross-namespace possible).
+    # Le populator tourne dans le namespace tenant, donc on monte le NFS en
+    # direct via volumes.nfs (built-in K8s, pas de driver CSI requis). Doit
+    # être surchargé par variable d'environnement ; pas de défaut hardcodé.
+    MIGRATOR_NFS_SERVER: str = ""
+    MIGRATOR_NFS_PATH: str = ""
+
+    # Timeout d'attente du Bound d'un PVC cible (secondes).
+    MIGRATOR_PVC_BIND_TIMEOUT: int = 300
+
+    # Timeout d'attente d'un populator Job (secondes). Cap haut pour disques
+    # de 100+ GB sur NFS lent.
+    MIGRATOR_POPULATOR_TIMEOUT: int = 4 * 3600
+
+    # Timeout d'attente du passage VMI -> Running (secondes).
+    MIGRATOR_VMI_RUNNING_TIMEOUT: int = 600
+
+    # ============================================
+    # ADAPTER CONFIGURATION
+    # ============================================
+
+    # Image conteneur du Job adapter. Doit fournir libguestfs-tools
+    # (virt-customize, virt-inspector, virt-ls). Par défaut on utilise la
+    # même image que le backend, qui inclut libguestfs depuis le Dockerfile.
+    ADAPTER_IMAGE: str = "docker.io/dida1609/shiftwise-backend:latest"
+
+    # Timeout d'attente du Job adapter (secondes). virt-customize sur 5 GB
+    # avec KVM = ~30 s ; sans KVM (TCG) jusqu'à 5 min.
+    ADAPTER_TIMEOUT: int = 30 * 60
+
+    # Mode privileged sur le pod adapter — requis pour accéder à /dev/kvm
+    # (accélération hardware de libguestfs). Si False, libguestfs tombe sur
+    # TCG (émulation pure) — ~5x plus lent mais fonctionne sans escalation
+    # de privilège ni SCC custom. Recommandé en prod : False, sauf si vous
+    # avez configuré le KubeVirt device plugin pour /dev/kvm.
+    ADAPTER_PRIVILEGED: bool = False
+
+    # ============================================
+    # CELERY / REDIS (orchestration des migrations)
+    # ============================================
+
+    # URL du broker Redis. Format : redis://[:password@]host:port/db
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+
+    # Backend de résultats — même Redis par défaut, peut etre None pour
+    # désactiver complètement le stockage des résultats.
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+
+    # Sérialiseur — json est obligatoire en production (sécurité, portabilité).
+    CELERY_TASK_SERIALIZER: str = "json"
+    CELERY_RESULT_SERIALIZER: str = "json"
+
+    # Mode eager (synchrone) : les tâches s'exécutent dans le process appelant.
+    # Indispensable pour les tests unitaires sans broker.
+    CELERY_TASK_ALWAYS_EAGER: bool = False
+
+    # Durée max d'une tâche avant kill (en secondes). Une migration peut etre
+    # longue : on prend large. Le SOFT signale, le HARD kill.
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 3 * 60 * 60   # 3h
+    CELERY_TASK_TIME_LIMIT: int = 4 * 60 * 60        # 4h
 
     # ============================================
     # LOGGING

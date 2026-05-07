@@ -8,6 +8,7 @@ et retournent des objets du modèle Migration.
 Filtrage multi-tenancy via tenant_id optionnel.
 """
 
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy.orm import Session
 
@@ -216,3 +217,80 @@ def delete_migration(
     db.commit()
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Privileged worker setters — bypass _MIGRATION_PROTECTED_FIELDS.
+# These functions are called from Celery tasks, never from the API layer.
+# ---------------------------------------------------------------------------
+
+def set_migration_status(
+    db: Session,
+    migration_id: int,
+    status: MigrationStatus,
+) -> Optional[Migration]:
+    """Privileged status setter for the orchestrator worker."""
+    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    if not migration:
+        return None
+
+    now = datetime.now(timezone.utc)
+    migration.status = status
+
+    if status == MigrationStatus.VALIDATING and not migration.started_at:
+        migration.started_at = now
+    if status in (
+        MigrationStatus.COMPLETED,
+        MigrationStatus.FAILED,
+        MigrationStatus.CANCELLED,
+        MigrationStatus.ROLLED_BACK,
+    ):
+        migration.completed_at = now
+        migration.success = (status == MigrationStatus.COMPLETED)
+
+    db.commit()
+    db.refresh(migration)
+    return migration
+
+
+def update_migration_progress(
+    db: Session,
+    migration_id: int,
+    *,
+    progress: float,
+    current_step: Optional[str] = None,
+    step_number: Optional[int] = None,
+) -> Optional[Migration]:
+    """Update the progress fields without touching status."""
+    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    if not migration:
+        return None
+
+    migration.progress_percentage = max(0.0, min(100.0, progress))
+    if current_step is not None:
+        migration.current_step = current_step
+    if step_number is not None:
+        migration.current_step_number = step_number
+
+    db.commit()
+    db.refresh(migration)
+    return migration
+
+
+def fail_migration(
+    db: Session,
+    migration_id: int,
+    *,
+    error_code: str,
+    error_message: str,
+) -> Optional[Migration]:
+    """Stamp error fields. Caller should also call set_migration_status(FAILED)."""
+    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    if not migration:
+        return None
+
+    migration.error_code = error_code
+    migration.error_message = error_message
+    db.commit()
+    db.refresh(migration)
+    return migration

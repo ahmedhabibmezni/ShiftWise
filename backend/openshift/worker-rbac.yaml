@@ -1,0 +1,72 @@
+# ServiceAccount + RBAC for the Celery workers.
+#
+# Why ClusterRole + ClusterRoleBinding (not namespace-scoped Role)?
+# Tenant namespaces are dynamic (`shiftwise-{tenant_id}`) — created per
+# tenant. The worker needs to operate in any of them: create PVCs, submit
+# populator Jobs, create KubeVirt VirtualMachines, watch the resulting VMIs.
+# Namespace-scoped Roles would force us to provision a RoleBinding for every
+# new tenant — a Cluster-scoped Binding scales to N tenants without
+# operator action.
+#
+# Trade-off: the worker SA gets cluster-wide reach on these resources. To
+# bound the blast radius, the ClusterRole is restricted to the resource
+# kinds the migrator actually touches (PVCs, Jobs, Pods, VMs, VMIs) and
+# does NOT grant `*` verbs.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shiftwise-worker
+  namespace: shiftwise
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shiftwise-worker
+rules:
+  # Migrator: PVC provisioning in tenant namespaces.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+
+  # Migrator + Converter: Jobs (populator + qemu-img/virt-v2v converter).
+  # jobs/status est une sous-ressource distincte — l'API client.kubernetes
+  # appelle /jobs/{name}/status pour read_namespaced_job_status, ce qui
+  # exige `get` sur jobs/status indépendamment de jobs.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "jobs/status"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+
+  # Both stages: pods + logs (status surfacing).
+  # pods/status pour read_namespaced_pod_status si on l'utilise un jour.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Migrator: KubeVirt VirtualMachine create/patch/delete.
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachines/status"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Migrator: VirtualMachineInstance read-only (status verification).
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances", "virtualmachineinstances/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Discovery / utility.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shiftwise-worker
+subjects:
+  - kind: ServiceAccount
+    name: shiftwise-worker
+    namespace: shiftwise
+roleRef:
+  kind: ClusterRole
+  name: shiftwise-worker
+  apiGroup: rbac.authorization.k8s.io

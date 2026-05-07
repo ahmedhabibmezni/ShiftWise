@@ -112,28 +112,32 @@ ROLE_PERMISSIONS = {
         "hypervisors": ["*"],
         "vms": ["*"],
         "migrations": ["*"],
+        "conversions": ["*"],
         "reports": ["*"],
         "settings": ["*"],
     },
     "admin": {
         # Gestion complète de son tenant
         "users": ["read", "create", "update"],
-        "roles": ["read"],  # ← AJOUTER CETTE LIGNE
+        "roles": ["read"],
         "hypervisors": ["*"],
         "vms": ["*"],
         "migrations": ["*"],
+        "conversions": ["*"],
         "reports": ["*"],
     },
     "user": {
         # Accès aux ressources assignées
         "vms": ["read", "create", "update"],
         "migrations": ["read", "create"],
+        "conversions": ["read", "create"],
         "reports": ["read"],
     },
     "viewer": {
         # Lecture seule
         "vms": ["read"],
         "migrations": ["read"],
+        "conversions": ["read"],
         "reports": ["read"],
     },
 }

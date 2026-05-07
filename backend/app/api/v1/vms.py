@@ -21,7 +21,11 @@ from app.schemas.vm import (
 )
 from app.schemas.migration import MigrationResponse
 from app.crud import vm as crud_vm
+from app.schemas.conversion import ConversionCreate, ConversionGroupResponse
 from app.services.analyzer import create_analyzer_service
+from app.services.converter.errors import ConversionError
+from app.services.converter.service import create_converter_service
+from app.crud import conversion as crud_conversion
 
 router = APIRouter()
 
@@ -301,6 +305,73 @@ def analyze_single_vm(
         )
 
     return result
+
+
+@router.post(
+    "/{vm_id}/convert",
+    response_model=ConversionGroupResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def convert_vm(
+    vm_id: int,
+    payload: ConversionCreate,
+    db: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[User, Depends(check_permission("conversions", "create"))] = None,
+):
+    """Crée un groupe de conversion pour une VM (un job par disque source).
+
+    Le travail effectif (pull + qemu-img/virt-v2v) est déclenché par le worker
+    Celery — cet endpoint retourne 202 Accepted avec le groupe et ses jobs en
+    statut PENDING.
+
+    **Permissions requises :** conversions:create
+    """
+    if payload.vm_id != vm_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "vm_id in path and body must match",
+        )
+
+    tenant_id = current_user.tenant_id
+    if not tenant_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "User has no tenant_id",
+        )
+
+    vm = crud_vm.get_vm(
+        db, vm_id, tenant_id=None if current_user.is_superuser else tenant_id,
+    )
+    if vm is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"VM {vm_id} not found")
+
+    converter = create_converter_service()
+    try:
+        group_id = converter.create_group_for_vm(
+            db,
+            tenant_id=vm.tenant_id,
+            vm_id=vm_id,
+            target_format=payload.target_format,
+            cold=payload.cold,
+            max_attempts=payload.max_attempts,
+            migration_id=payload.migration_id,
+        )
+    except ConversionError as e:
+        # Map permanent/configurable errors onto 4xx, transient onto 503.
+        http_status = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if e.bucket.value == "transient"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(http_status, f"{e.code}: {e.message}") from e
+
+    # Enqueue one Celery task per disk job. Workers pull from the
+    # ``conversions`` queue and drive each job to a terminal state.
+    from app.tasks.conversion import run_conversion_job
+    group = crud_conversion.get_group(db, group_id)
+    for job in group.jobs:
+        run_conversion_job.delay(job.id)
+
+    return ConversionGroupResponse.model_validate(group)
 
 
 @router.get("/{vm_id}/migrations")

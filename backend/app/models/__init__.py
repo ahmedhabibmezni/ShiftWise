@@ -34,6 +34,18 @@ from app.models.migration import (
     MigrationStrategy
 )
 
+# 6. Conversion (dépend de VirtualMachine et Migration)
+from app.models.conversion import (
+    ConversionGroup,
+    ConversionJob,
+    ConversionAttempt,
+    ConversionGroupStatus,
+    ConversionStatus,
+    SourceFormat,
+    TargetFormat,
+    ConversionTool,
+)
+
 # Export explicite
 __all__ = [
     # Base
@@ -57,4 +69,13 @@ __all__ = [
     "Migration",
     "MigrationStatus",
     "MigrationStrategy",
+    # Conversion
+    "ConversionGroup",
+    "ConversionJob",
+    "ConversionAttempt",
+    "ConversionGroupStatus",
+    "ConversionStatus",
+    "SourceFormat",
+    "TargetFormat",
+    "ConversionTool",
 ]

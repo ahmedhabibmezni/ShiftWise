@@ -1,0 +1,49 @@
+# Job d'initialisation BDD — exécute alembic upgrade head + seed des rôles
+# système. Idempotent : peut être relancé sans dommage.
+#
+# Pour créer un superuser au premier déploiement, ajoute les vars
+# BOOTSTRAP_SUPERUSER_* au Secret avant d'appliquer ce Job.
+#
+# Lancer :
+#   oc apply -f db-init-job.yaml
+#   oc wait --for=condition=complete job/db-init -n shiftwise --timeout=120s
+#   oc logs job/db-init -n shiftwise
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: shiftwise
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400        # auto-cleanup après 24h
+  template:
+    metadata:
+      labels: {app: db-init, component: bootstrap}
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgresql -p 5432 -U "$DATABASE_USER"; do
+                echo "waiting for postgres..."; sleep 2
+              done
+          env:
+            - {name: DATABASE_USER, valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_USER}}}
+      containers:
+        - name: bootstrap
+          image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: [python, bootstrap.py]
+          envFrom:
+            - secretRef:    {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+          env:
+            - {name: DATABASE_HOST, value: postgresql}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: 500m, memory: 512Mi}

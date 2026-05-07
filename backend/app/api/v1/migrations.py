@@ -313,7 +313,10 @@ def start_migration(
     db.commit()
     db.refresh(migration)
 
-    # TODO: Déclencher le processus de migration asynchrone
+    # Enqueue l'orchestrateur Celery — la migration tourne en arrière-plan.
+    # L'API retourne immédiatement avec le statut VALIDATING.
+    from app.tasks.migration import run_migration
+    run_migration.delay(migration.id)
 
     return MigrationResponse.model_validate(migration)
 

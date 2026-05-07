@@ -1,0 +1,73 @@
+# PostgreSQL — métadonnées ShiftWise (users, roles, hypervisors, vms,
+# migrations, conversions). NE contient PAS les disques convertis (NFS).
+#
+# Single-replica avec PVC nfs-client. Pas de réplication intégrée — un dump
+# nightly via CronJob suffit pour la phase actuelle.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-data
+  namespace: shiftwise
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  namespace: shiftwise
+  labels: {app: postgresql, component: database}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: postgresql}
+  template:
+    metadata:
+      labels: {app: postgresql, component: database}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB,       valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_NAME}}}
+            - {name: POSTGRES_USER,     valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_USER}}}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_PASSWORD}}}
+            - {name: PGDATA,            value: /var/lib/postgresql/data/pgdata}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits:   {cpu: 1000m, memory: 1Gi}
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, shiftwise]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, shiftwise]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: postgresql-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: shiftwise
+spec:
+  selector: {app: postgresql}
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}
+  type: ClusterIP

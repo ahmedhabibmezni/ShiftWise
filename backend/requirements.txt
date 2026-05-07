@@ -24,12 +24,12 @@ python-dateutil==2.8.2
 
 # Hypervisor APIs (for future implementation)
 pyvmomi==8.0.1.0.2
-libvirt-python==10.0.0; platform_system == "Linux"
+libvirt-python==11.3.0; platform_system == "Linux"
 # Proxmox VE REST API client (password + API token auth)
 proxmoxer==2.0.1
 requests==2.32.3
 # oVirt / RHV engine SDK
-ovirt-engine-sdk-python==4.6.0
+ovirt-engine-sdk-python==4.6.3
 
 # Kubernetes & OpenShift (for future implementation)
 kubernetes==28.1.0
@@ -37,6 +37,11 @@ pyyaml==6.0.1
 
 # File operations & conversions (for future implementation)
 paramiko==3.4.0
+
+# Async task orchestration (migrations parallèles + durables)
+celery[redis]==5.3.6
+redis==5.0.1
+flower==2.0.1
 
 # Machine Learning (Analyzer)
 # NOTE: joblib artifacts are NOT portable across sklearn minor versions.

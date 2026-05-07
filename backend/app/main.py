@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt
+from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -181,6 +181,12 @@ app.include_router(
     kubevirt.router,
     prefix=f"{settings.API_V1_PREFIX}/kubevirt",
     tags=["KubeVirt / OpenShift"],
+)
+
+app.include_router(
+    conversions.router,
+    prefix=f"{settings.API_V1_PREFIX}/conversions",
+    tags=["Conversions"],
 )
 
 

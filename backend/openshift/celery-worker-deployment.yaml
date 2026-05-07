@@ -1,0 +1,67 @@
+# Celery workers — drain the migrations and conversions queues.
+#
+# 3 replicas × concurrency=4 = 12 in-flight tasks. The transit-pvc (RWX, NFS) is
+# mounted so workers can stage hypervisor pulls onto the same volume the
+# in-cluster qemu-img/virt-v2v Jobs read from.
+#
+# Secrets (DB + JWT) come from the existing `shiftwise-secrets` Secret.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: shiftwise
+  labels: {app: celery-worker, component: orchestration}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: celery-worker}
+  template:
+    metadata:
+      labels: {app: celery-worker, component: orchestration}
+    spec:
+      serviceAccountName: shiftwise-worker   # needs RBAC to create K8s Jobs
+      containers:
+        - name: worker
+          image: docker.io/dida1609/shiftwise-backend:latest
+          command:
+            - celery
+            - -A
+            - app.core.celery_app
+            - worker
+            - --loglevel=info
+            - --queues=migrations,conversions
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --max-tasks-per-child=50
+          envFrom:
+            - secretRef: {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+          env:
+            - {name: CELERY_BROKER_URL,     value: "redis://redis:6379/0"}
+            - {name: CELERY_RESULT_BACKEND, value: "redis://redis:6379/0"}
+            - {name: CONVERTER_TRANSIT_ROOT, value: "/mnt/shiftwise-transit"}
+            # Migrator: source NFS coordinates pour le populator Job
+            # (cf. services/migrator/populator_job.py). Doivent matcher le
+            # PV qui sous-tend transit-pvc.
+            - {name: MIGRATOR_NFS_SERVER, valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_SERVER}}}
+            - {name: MIGRATOR_NFS_PATH,   valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_PATH}}}
+          volumeMounts:
+            - {name: transit, mountPath: /mnt/shiftwise-transit}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits:   {cpu: 1000m, memory: 1Gi}
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.core.celery_app
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+      volumes:
+        - name: transit
+          persistentVolumeClaim: {claimName: transit-pvc}
