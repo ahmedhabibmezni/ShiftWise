@@ -1,9 +1,13 @@
-# Ordre d'application — kustomize respecte l'ordre déclaré.
+# Une seule commande pour tout déployer :
 #
-#   oc apply -k openshift/
+#   ./deploy.sh
 #
-# Ne contient PAS db-init-job.yaml : ce Job doit tourner UNE seule fois et
-# être appliqué manuellement après le déploiement de PostgreSQL.
+# Le script enchaîne : oc apply -k . → wait postgres → db-init Job →
+# wait db-init → wait backend/worker/flower. Idempotent.
+#
+# Si tu préfères piloter à la main : `oc apply -k .` puis `oc apply -f
+# db-init-job.yaml` une fois Postgres prêt. db-init n'est PAS dans la
+# kustomization parce qu'un Job est immutable et casserait au re-apply.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: shiftwise
@@ -12,6 +16,7 @@ resources:
   - redis-deployment.yaml
   - transit-pvc.yaml
   - worker-rbac.yaml
+  - populator-scc.yaml
   - backend-deployment.yaml
   - celery-worker-deployment.yaml
   - flower-deployment.yaml
