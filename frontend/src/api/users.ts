@@ -12,6 +12,8 @@ export type UserListItem = {
   is_active: boolean;
   is_verified: boolean;
   is_superuser: boolean;
+  last_login_at: string | null;
+  last_login_ip: string | null;
   created_at: string;
   updated_at: string;
 };

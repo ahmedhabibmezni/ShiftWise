@@ -13,10 +13,10 @@ Modèle :
 Stockage des refresh tokens : voir app.core.refresh_token_store.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -123,14 +123,29 @@ def _rotate_refresh(family_id: str, jti: str, user_id: int) -> str:
     )
 
 
+def _client_ip(request: Request) -> str | None:
+    """Return the client IP for audit-trail purposes.
+
+    Uses `request.client.host` as the single source. In production behind
+    a reverse proxy this is set correctly when uvicorn is launched with
+    `--proxy-headers --forwarded-allow-ips=<proxy CIDR>` — that's where
+    the trust decision belongs, not in this handler.
+    """
+    return request.client.host if request.client else None
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(
     login_data: LoginRequest,
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
 ):
     """
     Authentifie l'utilisateur et émet la paire (access body + refresh cookie).
+
+    Stamps `last_login_at` + `last_login_ip` for the audit trail on every
+    successful authentication.
     """
     user = crud_user.authenticate_user(
         db,
@@ -148,6 +163,15 @@ def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ACCOUNT_INACTIVE_MSG,
         )
+
+    # Stamp the audit fields BEFORE minting tokens — we want the trail
+    # to be persisted even if the cookie write below somehow fails. The
+    # IP is truncated at 45 chars (IPv6 max) so a forged absurdly-long
+    # header from a misconfigured proxy can't blow up the column.
+    user.last_login_at = datetime.now(timezone.utc)
+    ip = _client_ip(request)
+    user.last_login_ip = ip[:45] if ip else None
+    db.commit()
 
     refresh_jwt = _mint_refresh(user.id)
     _set_refresh_cookie(response, refresh_jwt)

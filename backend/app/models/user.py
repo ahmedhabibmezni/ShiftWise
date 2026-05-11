@@ -10,7 +10,7 @@ Chaque utilisateur :
 - Peut partager des VMs avec d'autres utilisateurs
 """
 
-from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table
+from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table, DateTime
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -110,6 +110,21 @@ class User(BaseModel):
         default=False,
         nullable=False,
         comment="True si super administrateur (accès complet)"
+    )
+
+    # Audit trail — populated by /auth/login on every successful auth.
+    # Nullable for two reasons: brand-new accounts that haven't logged in
+    # yet, and existing rows on databases predating this column.
+    last_login_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Horodatage UTC de la dernière authentification réussie",
+    )
+
+    last_login_ip = Column(
+        String(45),  # IPv6 max textual length
+        nullable=True,
+        comment="Adresse IP du dernier login (depuis request.client.host)",
     )
 
     # Relations

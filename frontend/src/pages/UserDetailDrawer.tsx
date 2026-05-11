@@ -292,6 +292,14 @@ function Facts({ user }: { user: User }) {
       <div>
         <MetricRow label="username" value={user.username} />
         <MetricRow label="tenant" value={user.tenant_id} />
+        <MetricRow
+          label="last login"
+          value={
+            user.last_login_at
+              ? `${formatRelativeTime(user.last_login_at)}${user.last_login_ip ? ` · ${user.last_login_ip}` : ""}`
+              : "never"
+          }
+        />
         <MetricRow label="created" value={formatRelativeTime(user.created_at)} />
         <MetricRow label="updated" value={formatRelativeTime(user.updated_at)} />
       </div>

@@ -250,6 +250,8 @@ class UserRead(BaseModel):
     is_active: bool
     is_verified: bool
     is_superuser: bool
+    last_login_at: Optional[datetime] = None
+    last_login_ip: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
