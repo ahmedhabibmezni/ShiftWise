@@ -237,6 +237,31 @@ class Settings(BaseSettings):
     MIGRATOR_VMI_RUNNING_TIMEOUT: int = 600
 
     # ============================================
+    # TENANT RESOURCE QUOTA (opt-in)
+    # ============================================
+    #
+    # Limites par défaut appliquées au namespace tenant via une
+    # ResourceQuota nommée `shiftwise-default-quota`. Toutes les
+    # dimensions sont opt-in : laisser la chaîne vide désactive la
+    # contrainte sur cette dimension. Si TOUTES sont vides, aucune
+    # ResourceQuota n'est créée (rétro-compatible avec les déploiements
+    # existants — les tenants sans quota restent illimités).
+    #
+    # Exemples pour un tenant de taille moyenne :
+    #   MIGRATOR_QUOTA_REQUESTS_CPU="10"
+    #   MIGRATOR_QUOTA_REQUESTS_MEMORY="32Gi"
+    #   MIGRATOR_QUOTA_REQUESTS_STORAGE="500Gi"
+    #   MIGRATOR_QUOTA_PVC_COUNT="20"
+    #   MIGRATOR_QUOTA_POD_COUNT="30"
+    MIGRATOR_QUOTA_REQUESTS_CPU: str = ""
+    MIGRATOR_QUOTA_REQUESTS_MEMORY: str = ""
+    MIGRATOR_QUOTA_LIMITS_CPU: str = ""
+    MIGRATOR_QUOTA_LIMITS_MEMORY: str = ""
+    MIGRATOR_QUOTA_REQUESTS_STORAGE: str = ""
+    MIGRATOR_QUOTA_PVC_COUNT: str = ""
+    MIGRATOR_QUOTA_POD_COUNT: str = ""
+
+    # ============================================
     # ADAPTER CONFIGURATION
     # ============================================
 

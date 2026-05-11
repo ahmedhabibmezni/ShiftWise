@@ -3,7 +3,10 @@ Tenant namespace lifecycle helper.
 
 Each tenant maps to an OpenShift namespace `shiftwise-{tenant_id}`.
 `ensure_tenant_namespace` creates that namespace (with standard labels)
-if it does not already exist, and is a no-op if it does.
+if it does not already exist, and is a no-op if it does. It additionally
+applies a default ResourceQuota when any quota dimension is configured
+in `settings`. The quota application is idempotent — re-running against
+an already-quotaed namespace is a cheap GET + skip.
 
 The function is called at the start of every MigratorService.run() call
 so operators never need to create tenant namespaces manually.
@@ -17,6 +20,7 @@ from typing import TYPE_CHECKING, NoReturn
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 
+from app.core.config import settings
 from app.services.migrator.errors import MigratorError
 
 if TYPE_CHECKING:
@@ -27,6 +31,10 @@ logger = logging.getLogger(__name__)
 _LABEL_MANAGED_BY = "app.kubernetes.io/managed-by"
 _LABEL_TENANT = "app.shiftwise.io/tenant"
 _LABEL_PURPOSE = "app.shiftwise.io/purpose"
+
+# Single quota object per tenant namespace. Fixed name so an operator
+# tweaking quotas by hand can find it in one place.
+_QUOTA_NAME = "shiftwise-default-quota"
 
 
 def _raise_classified(e: ApiException, action: str, name: str) -> NoReturn:
@@ -63,12 +71,100 @@ def _raise_classified(e: ApiException, action: str, name: str) -> NoReturn:
     ) from e
 
 
+def _build_quota_spec() -> dict[str, str]:
+    """Translate the MIGRATOR_QUOTA_* settings into a `hard` dict.
+
+    Only populated dimensions appear in the dict — empty strings mean
+    "no limit on this dimension". Returns an empty dict when no
+    dimension is configured (caller then skips the quota apply).
+    """
+    candidates = {
+        "requests.cpu": settings.MIGRATOR_QUOTA_REQUESTS_CPU,
+        "requests.memory": settings.MIGRATOR_QUOTA_REQUESTS_MEMORY,
+        "limits.cpu": settings.MIGRATOR_QUOTA_LIMITS_CPU,
+        "limits.memory": settings.MIGRATOR_QUOTA_LIMITS_MEMORY,
+        "requests.storage": settings.MIGRATOR_QUOTA_REQUESTS_STORAGE,
+        "persistentvolumeclaims": settings.MIGRATOR_QUOTA_PVC_COUNT,
+        "pods": settings.MIGRATOR_QUOTA_POD_COUNT,
+    }
+    return {key: value for key, value in candidates.items() if value}
+
+
+def apply_default_resource_quota(
+    kv_client: "KubeVirtClient",
+    namespace: str,
+    tenant_id: str,
+) -> None:
+    """Idempotently apply ``shiftwise-default-quota`` to the namespace.
+
+    Skips entirely when no MIGRATOR_QUOTA_* dimension is configured —
+    keeps backwards compatibility with deployments that did not opt in
+    to per-tenant quotas (the previous behaviour).
+
+    Idempotency strategy: GET first, skip if already present. Mirrors
+    the namespace flow above and avoids relying on 409-on-create as a
+    success signal (which makes logs noisier).
+    """
+    hard = _build_quota_spec()
+    if not hard:
+        logger.debug(
+            "No MIGRATOR_QUOTA_* dimension configured — skipping quota for %r",
+            namespace,
+        )
+        return
+
+    try:
+        kv_client.core_api.read_namespaced_resource_quota(
+            name=_QUOTA_NAME, namespace=namespace
+        )
+        logger.debug(
+            "ResourceQuota %r already exists in %r — leaving untouched",
+            _QUOTA_NAME, namespace,
+        )
+        return
+    except ApiException as e:
+        if e.status != 404:
+            _raise_classified(e, action="get-quota", name=namespace)
+        # 404 — fall through to create
+
+    labels = {
+        _LABEL_MANAGED_BY: "shiftwise",
+        _LABEL_TENANT: tenant_id,
+    }
+    quota_body = k8s_client.V1ResourceQuota(
+        metadata=k8s_client.V1ObjectMeta(name=_QUOTA_NAME, labels=labels),
+        spec=k8s_client.V1ResourceQuotaSpec(hard=hard),
+    )
+    try:
+        kv_client.core_api.create_namespaced_resource_quota(
+            namespace=namespace, body=quota_body
+        )
+        logger.info(
+            "Applied default ResourceQuota to %r (tenant=%s, dimensions=%s)",
+            namespace, tenant_id, sorted(hard.keys()),
+        )
+    except ApiException as e:
+        if e.status == 409:
+            # Race: another worker beat us to the create. The peer
+            # presumably wrote the same body — accept and move on.
+            logger.debug(
+                "ResourceQuota %r in %r created concurrently — OK",
+                _QUOTA_NAME, namespace,
+            )
+            return
+        _raise_classified(e, action="create-quota", name=namespace)
+
+
 def ensure_tenant_namespace(
     kv_client: "KubeVirtClient",
     name: str,
     tenant_id: str,
 ) -> None:
-    """Create the tenant namespace if absent. Idempotent.
+    """Create the tenant namespace if absent and apply its default quota.
+
+    Both calls are idempotent so an existing tenant namespace (created
+    before quotas were configured) gets retroactively quotaed on the
+    next migration — no separate migration needed.
 
     Args:
         kv_client: Initialised KubeVirtClient (carries the API clients).
@@ -81,6 +177,7 @@ def ensure_tenant_namespace(
     try:
         kv_client.core_api.read_namespace(name=name)
         logger.debug("Tenant namespace %r already exists", name)
+        apply_default_resource_quota(kv_client, name, tenant_id)
         return
     except ApiException as e:
         if e.status != 404:
@@ -102,5 +199,8 @@ def ensure_tenant_namespace(
         if e.status == 409:
             # Race: another worker created it between our read and write.
             logger.debug("Tenant namespace %r created concurrently — OK", name)
+            apply_default_resource_quota(kv_client, name, tenant_id)
             return
         _raise_classified(e, action="create", name=name)
+
+    apply_default_resource_quota(kv_client, name, tenant_id)

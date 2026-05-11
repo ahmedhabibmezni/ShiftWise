@@ -88,4 +88,5 @@ jobs:
             tests/test_converter.py \
             tests/test_migrator.py \
             tests/test_migrator_p1.py \
+            tests/test_namespace_quota.py \
             --tb=short -v
