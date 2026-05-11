@@ -5,12 +5,15 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 import { router } from "./routes";
 import { queryClient } from "./lib/queryClient";
+import { AuthGate } from "./app/AuthGate";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <AuthGate>
+        <RouterProvider router={router} />
+      </AuthGate>
       <Toaster
         position="bottom-right"
         toastOptions={{

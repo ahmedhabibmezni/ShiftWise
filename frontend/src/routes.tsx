@@ -1,5 +1,8 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import Styleguide from "@/pages/Styleguide";
+import Login from "@/pages/Login";
+import { ProtectedRoute } from "@/routes/ProtectedRoute";
+import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
 
 function NotFound() {
   return (
@@ -21,7 +24,16 @@ function NotFound() {
 }
 
 export const router = createBrowserRouter([
-  { path: "/", element: <Navigate to="/styleguide" replace /> },
-  { path: "/styleguide", element: <Styleguide /> },
+  {
+    element: <PublicOnlyRoute />,
+    children: [{ path: "/login", element: <Login /> }],
+  },
+  {
+    element: <ProtectedRoute />,
+    children: [
+      { path: "/", element: <Navigate to="/styleguide" replace /> },
+      { path: "/styleguide", element: <Styleguide /> },
+    ],
+  },
   { path: "*", element: <NotFound /> },
 ]);

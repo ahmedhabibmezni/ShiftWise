@@ -6,11 +6,14 @@ import {
   AlertTriangle,
   FileBarChart,
   Settings as SettingsIcon,
-  ChevronUp,
+  LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
 import { Icon } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
+import { useAuthStore } from "@/store/auth";
+import { logout as logoutRequest } from "@/api/auth";
 
 type NavItem = { id: string; label: string; icon: LucideIcon; badge?: number };
 
@@ -76,27 +79,73 @@ export function Sidebar({ active = "overview" }: { active?: string }) {
         </ul>
       </nav>
 
-      <button
-        type="button"
-        className="h-20 px-3 flex items-center gap-3 border-t border-line hover:bg-bg-elev-2 transition-colors duration-150 text-left"
+      <ProfileFooter />
+    </aside>
+  );
+}
+
+function getInitials(fullName: string | null | undefined, username: string): string {
+  const source = (fullName ?? "").trim() || username;
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function primaryRole(roleNames: string[]): string {
+  // Display the highest-privilege role assigned to the user.
+  const order = ["super_admin", "admin", "user", "viewer"];
+  for (const r of order) if (roleNames.includes(r)) return r;
+  return roleNames[0] ?? "—";
+}
+
+function ProfileFooter() {
+  const user = useAuthStore((s) => s.user);
+  const clearSession = useAuthStore((s) => s.clearSession);
+
+  const logoutMutation = useMutation({
+    mutationFn: logoutRequest,
+    onSettled: () => clearSession(),
+  });
+
+  if (!user) return null;
+
+  const initials = getInitials(user.full_name, user.username);
+  const role = user.is_superuser
+    ? "super_admin"
+    : primaryRole(user.roles.map((r) => r.name));
+
+  return (
+    <div className="border-t border-line">
+      <div
+        className="h-20 px-3 flex items-center gap-3"
         aria-label="Profil utilisateur"
       >
         <span
           aria-hidden
           className="h-8 w-8 rounded-sm bg-bg-elev-2 border border-line-strong flex items-center justify-center font-mono text-[12px] font-semibold text-ink"
         >
-          AH
+          {initials}
         </span>
         <span className="flex-1 min-w-0">
           <span className="block font-mono text-[11px] uppercase text-ink truncate">
-            sysop
+            {user.username}
           </span>
           <span className="block font-mono text-[10px] uppercase text-ink-muted truncate">
-            admin
+            {role}
           </span>
         </span>
-        <Icon icon={ChevronUp} size={16} className="text-ink-muted" />
-      </button>
-    </aside>
+        <button
+          type="button"
+          onClick={() => logoutMutation.mutate()}
+          disabled={logoutMutation.isPending}
+          className="text-ink-muted hover:text-ink disabled:opacity-50 transition-colors duration-150"
+          aria-label="Se déconnecter"
+          title="Se déconnecter"
+        >
+          <Icon icon={LogOut} size={16} />
+        </button>
+      </div>
+    </div>
   );
 }
