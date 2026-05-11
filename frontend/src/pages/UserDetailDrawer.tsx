@@ -127,6 +127,8 @@ export function UserDetailDrawer({
     if (!open) setEditing(false);
   }, [open]);
 
+  const setAuthUser = useAuthStore((s) => s.setUser);
+
   const updateMutation = useMutation({
     mutationFn: () => {
       const payload = diffPayload(detailQuery.data!, draft);
@@ -135,15 +137,17 @@ export function UserDetailDrawer({
       }
       return updateUser(id!, payload);
     },
-    onSuccess: () => {
+    onSuccess: (next) => {
       toast.success("user updated");
       queryClient.invalidateQueries({ queryKey: ["user", id] });
       queryClient.invalidateQueries({ queryKey: ["users"] });
-      // The currently-signed-in user is special: refresh /auth/me so the
-      // sidebar, RoleStripe, and route guards reflect the new state right
-      // away instead of waiting for the next access-token refresh.
+      // If the operator just edited their own profile, push the new user
+      // object straight into the auth store. /me is read once by AuthGate
+      // at boot — there's no React Query for it — so invalidating a
+      // synthetic "auth/me" key wouldn't actually refresh anything. The
+      // sidebar / RoleStripe / route guards all read from the store.
       if (isSelf) {
-        queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+        setAuthUser(next);
       }
       setEditing(false);
     },

@@ -161,10 +161,11 @@ function ProfileSection({ user }: { user: User }) {
     },
     onSuccess: (next) => {
       toast.success("profile saved");
-      // Reflect the change in the auth store + any cached /me query so the
-      // sidebar/RoleStripe/header pick it up without a hard refresh.
+      // Push the new user object into the auth store so the sidebar,
+      // RoleStripe, and header pick it up without a hard refresh. /me is
+      // read once at boot by AuthGate (no React Query), so there's nothing
+      // to invalidate — the store is the authoritative source.
       setUser(next);
-      queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       queryClient.invalidateQueries({ queryKey: ["users"] });
       reset({
         email: next.email,

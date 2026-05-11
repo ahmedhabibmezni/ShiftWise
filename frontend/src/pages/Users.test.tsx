@@ -279,6 +279,79 @@ describe("Users page", () => {
     });
   });
 
+  it("pushes the updated user into the auth store when self-editing", async () => {
+    // The signed-in user (id=1) opens their own row from the directory
+    // and renames themselves. After save, the auth store's user must
+    // carry the new username — otherwise the sidebar / RoleStripe stay
+    // stale until the next page refresh.
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({
+          items: [makeUserItem({ id: 1, username: "admin" })],
+          total: 1,
+          page: 1,
+          page_size: 25,
+          pages: 1,
+        }),
+      ),
+      http.get("/api/v1/users/1", () =>
+        HttpResponse.json({
+          id: 1,
+          email: "admin@shiftwise.local",
+          username: "admin",
+          first_name: null,
+          last_name: null,
+          full_name: "admin",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: false,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          roles: [],
+          permissions: { users: ["*"] },
+        }),
+      ),
+      http.get("/api/v1/roles", () => HttpResponse.json([])),
+      http.put("/api/v1/users/1", () =>
+        HttpResponse.json({
+          id: 1,
+          email: "admin@shiftwise.local",
+          username: "ahmedm",
+          first_name: null,
+          last_name: null,
+          full_name: "Ahmed Mezni",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: false,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-05-11T00:00:00Z",
+          roles: [],
+          permissions: { users: ["*"] },
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "admin" }));
+    const dialog = await screen.findByRole("dialog", { name: /admin/i });
+    await user.click(within(dialog).getByRole("button", { name: /^edit$/i }));
+
+    const usernameInput = within(dialog).getByLabelText(/^username$/i);
+    await user.clear(usernameInput);
+    await user.type(usernameInput, "ahmedm");
+
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().user?.username).toBe("ahmedm");
+      expect(useAuthStore.getState().user?.full_name).toBe("Ahmed Mezni");
+    });
+  });
+
   it("hides the delete button on the current user's own account", async () => {
     // The drawer is opened for the signed-in user (id=1). Self-delete is
     // blocked client-side; the backend also enforces this.
