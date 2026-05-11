@@ -99,6 +99,7 @@ const SECTIONS: NavSection[] = [
         id: "roles",
         label: "roles",
         icon: ShieldIcon,
+        to: "/roles",
         requires: { resource: "roles", action: "read" },
       },
     ],

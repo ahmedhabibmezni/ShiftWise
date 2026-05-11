@@ -5,6 +5,7 @@ import Dashboard from "@/pages/Dashboard";
 import Hypervisors from "@/pages/Hypervisors";
 import Vms from "@/pages/Vms";
 import Migrations from "@/pages/Migrations";
+import Roles from "@/pages/Roles";
 import Users from "@/pages/Users";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
@@ -48,6 +49,7 @@ export const router = createBrowserRouter([
           { path: "/vms", element: <Vms /> },
           { path: "/migrations", element: <Migrations /> },
           { path: "/users", element: <Users /> },
+          { path: "/roles", element: <Roles /> },
         ],
       },
     ],
