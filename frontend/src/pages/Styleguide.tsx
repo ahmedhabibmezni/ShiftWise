@@ -106,7 +106,7 @@ export default function Styleguide() {
     <div className="min-h-screen bg-bg text-ink flex flex-col">
       <TopProgress active={topActive} />
       <div className="flex flex-1 min-h-0">
-        <Sidebar active="overview" />
+        <Sidebar />
 
         <div className="flex-1 flex flex-col min-w-0">
           <Header title="overview" />

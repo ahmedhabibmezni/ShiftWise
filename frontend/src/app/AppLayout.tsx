@@ -4,9 +4,10 @@ import { Sidebar } from "@/components/shell/Sidebar";
 import { Header } from "@/components/shell/Header";
 import { Footer } from "@/components/shell/Footer";
 
-const ROUTE_TITLES: Record<string, { title: string; sidebarKey: string }> = {
-  "/": { title: "overview", sidebarKey: "overview" },
-  "/styleguide": { title: "styleguide", sidebarKey: "overview" },
+const ROUTE_TITLES: Record<string, string> = {
+  "/": "overview",
+  "/hypervisors": "hypervisors",
+  "/styleguide": "styleguide",
 };
 
 function useCurrentTime() {
@@ -25,18 +26,16 @@ function formatTime(d: Date): string {
 
 export function AppLayout() {
   const location = useLocation();
-  const route = ROUTE_TITLES[location.pathname] ?? {
-    title: location.pathname.replace(/^\//, "") || "overview",
-    sidebarKey: "overview",
-  };
+  const title =
+    ROUTE_TITLES[location.pathname] ?? (location.pathname.replace(/^\//, "") || "overview");
   const timestamp = useCurrentTime();
 
   return (
     <div className="min-h-screen bg-bg text-ink flex flex-col">
       <div className="flex flex-1 min-h-0">
-        <Sidebar active={route.sidebarKey} />
+        <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
-          <Header title={route.title} timestamp={timestamp} />
+          <Header title={title} timestamp={timestamp} />
           <main className="flex-1 overflow-auto">
             <Outlet />
           </main>

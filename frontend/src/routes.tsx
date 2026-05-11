@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import Styleguide from "@/pages/Styleguide";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
+import Hypervisors from "@/pages/Hypervisors";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
 import { AppLayout } from "@/app/AppLayout";
@@ -38,7 +39,10 @@ export const router = createBrowserRouter([
       { path: "/styleguide", element: <Styleguide /> },
       {
         element: <AppLayout />,
-        children: [{ path: "/", element: <Dashboard /> }],
+        children: [
+          { path: "/", element: <Dashboard /> },
+          { path: "/hypervisors", element: <Hypervisors /> },
+        ],
       },
     ],
   },

@@ -10,16 +10,23 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
+import { NavLink } from "react-router-dom";
 import { Icon } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/store/auth";
 import { logout as logoutRequest } from "@/api/auth";
 
-type NavItem = { id: string; label: string; icon: LucideIcon; badge?: number };
+type NavItem = {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  to?: string;
+  badge?: number;
+};
 
 const ITEMS: NavItem[] = [
-  { id: "overview", label: "overview", icon: Home },
-  { id: "hypervisors", label: "hypervisors", icon: Server },
+  { id: "overview", label: "overview", icon: Home, to: "/" },
+  { id: "hypervisors", label: "hypervisors", icon: Server, to: "/hypervisors" },
   { id: "migrations", label: "migrations", icon: ArrowLeftRight },
   { id: "infrastructure", label: "infrastructure", icon: Network },
   { id: "alerts", label: "alerts", icon: AlertTriangle, badge: 12 },
@@ -27,7 +34,10 @@ const ITEMS: NavItem[] = [
   { id: "settings", label: "settings", icon: SettingsIcon },
 ];
 
-export function Sidebar({ active = "overview" }: { active?: string }) {
+const ITEM_CLASSES =
+  "relative w-full h-16 flex flex-col items-center justify-center gap-1.5 transition-colors duration-150";
+
+export function Sidebar() {
   return (
     <aside
       aria-label="Navigation principale"
@@ -43,37 +53,35 @@ export function Sidebar({ active = "overview" }: { active?: string }) {
         <ul>
           {ITEMS.map((item) => (
             <li key={item.id}>
-              <button
-                type="button"
-                aria-current={item.id === active ? "page" : undefined}
-                className={cn(
-                  "relative w-full h-16 flex flex-col items-center justify-center gap-1.5 transition-colors duration-150",
-                  item.id === active
-                    ? "text-signal"
-                    : "text-ink-muted hover:bg-bg-elev-2 hover:text-ink",
-                )}
-              >
-                {item.id === active && (
-                  <span
-                    aria-hidden
-                    className="absolute left-0 top-2 bottom-2 w-0.5 bg-signal"
-                  />
-                )}
-                <span className="relative">
-                  <Icon icon={item.icon} size={20} />
-                  {item.badge && (
-                    <span
-                      className="absolute -top-1.5 -right-2.5 min-w-[18px] h-[18px] px-1 rounded-full bg-signal text-signal-ink font-mono text-[10px] font-medium tabular flex items-center justify-center"
-                      aria-label={`${item.badge} alertes`}
-                    >
-                      {item.badge}
-                    </span>
+              {item.to ? (
+                <NavLink
+                  to={item.to}
+                  end={item.to === "/"}
+                  className={({ isActive }) =>
+                    cn(
+                      ITEM_CLASSES,
+                      isActive
+                        ? "text-signal"
+                        : "text-ink-muted hover:bg-bg-elev-2 hover:text-ink",
+                    )
+                  }
+                >
+                  {({ isActive }) => <NavItemInner item={item} active={isActive} />}
+                </NavLink>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled
+                  title="Bientôt disponible"
+                  className={cn(
+                    ITEM_CLASSES,
+                    "text-ink-muted opacity-50 cursor-not-allowed",
                   )}
-                </span>
-                <span className="font-mono text-[10px] uppercase tracking-[0.04em]">
-                  {item.label}
-                </span>
-              </button>
+                >
+                  <NavItemInner item={item} active={false} />
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -81,6 +89,33 @@ export function Sidebar({ active = "overview" }: { active?: string }) {
 
       <ProfileFooter />
     </aside>
+  );
+}
+
+function NavItemInner({ item, active }: { item: NavItem; active: boolean }) {
+  return (
+    <>
+      {active && (
+        <span
+          aria-hidden
+          className="absolute left-0 top-2 bottom-2 w-0.5 bg-signal"
+        />
+      )}
+      <span className="relative">
+        <Icon icon={item.icon} size={20} />
+        {item.badge && (
+          <span
+            className="absolute -top-1.5 -right-2.5 min-w-[18px] h-[18px] px-1 rounded-full bg-signal text-signal-ink font-mono text-[10px] font-medium tabular flex items-center justify-center"
+            aria-label={`${item.badge} alertes`}
+          >
+            {item.badge}
+          </span>
+        )}
+      </span>
+      <span className="font-mono text-[10px] uppercase tracking-[0.04em]">
+        {item.label}
+      </span>
+    </>
   );
 }
 
@@ -93,7 +128,6 @@ function getInitials(fullName: string | null | undefined, username: string): str
 }
 
 function primaryRole(roleNames: string[]): string {
-  // Display the highest-privilege role assigned to the user.
   const order = ["super_admin", "admin", "user", "viewer"];
   for (const r of order) if (roleNames.includes(r)) return r;
   return roleNames[0] ?? "—";
@@ -117,10 +151,7 @@ function ProfileFooter() {
 
   return (
     <div className="border-t border-line">
-      <div
-        className="h-20 px-3 flex items-center gap-3"
-        aria-label="Profil utilisateur"
-      >
+      <div className="h-20 px-3 flex items-center gap-3" aria-label="Profil utilisateur">
         <span
           aria-hidden
           className="h-8 w-8 rounded-sm bg-bg-elev-2 border border-line-strong flex items-center justify-center font-mono text-[12px] font-semibold text-ink"

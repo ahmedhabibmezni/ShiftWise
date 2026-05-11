@@ -1,0 +1,181 @@
+import { describe, expect, it } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { http, HttpResponse } from "msw";
+import { Toaster } from "react-hot-toast";
+import { server } from "@/test/msw/server";
+import type { Hypervisor } from "@/api/hypervisors";
+import Hypervisors from "./Hypervisors";
+
+function makeHypervisor(over: Partial<Hypervisor> = {}): Hypervisor {
+  return {
+    id: 1,
+    name: "vsphere-prod",
+    description: null,
+    type: "vsphere",
+    host: "10.0.0.10",
+    port: 443,
+    username: "administrator@vsphere.local",
+    verify_ssl: false,
+    status: "active",
+    is_active: true,
+    last_sync_at: "2026-05-11T01:00:00Z",
+    last_successful_connection: "2026-05-11T01:00:00Z",
+    last_error: null,
+    total_vms_discovered: 42,
+    total_vms_migrated: 5,
+    connection_config: null,
+    tags: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-05-11T01:00:00Z",
+    is_reachable: true,
+    connection_url: "https://10.0.0.10:443",
+    needs_sync: false,
+    ...over,
+  };
+}
+
+function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/hypervisors"]}>
+        <Hypervisors />
+      </MemoryRouter>
+      <Toaster />
+    </QueryClientProvider>,
+  );
+}
+
+describe("Hypervisors page", () => {
+  it("renders the list returned by the API", async () => {
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({
+          total: 2,
+          page: 1,
+          page_size: 25,
+          items: [
+            makeHypervisor({ id: 1, name: "vsphere-prod", type: "vsphere", host: "10.0.0.10" }),
+            makeHypervisor({
+              id: 2,
+              name: "kvm-lab",
+              type: "kvm",
+              host: "10.0.0.20",
+              status: "error",
+              total_vms_discovered: 3,
+            }),
+          ],
+        }),
+      ),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("vsphere-prod")).toBeInTheDocument();
+    expect(screen.getByText("kvm-lab")).toBeInTheDocument();
+    expect(screen.getAllByText(/active/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/1–2 \/ 2/)).toBeInTheDocument();
+  });
+
+  it("forwards filters to the API and re-queries", async () => {
+    const recorded: string[] = [];
+    server.use(
+      http.get("/api/v1/hypervisors", ({ request }) => {
+        const url = new URL(request.url);
+        recorded.push(url.search);
+        return HttpResponse.json({
+          total: 0,
+          page: 1,
+          page_size: 25,
+          items: [],
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(recorded.length).toBeGreaterThan(0));
+
+    const typeSelect = screen.getByLabelText(/filtrer par type/i);
+    await user.selectOptions(typeSelect, "kvm");
+
+    await waitFor(() => {
+      expect(recorded.some((s) => s.includes("type=kvm"))).toBe(true);
+    });
+  });
+
+  it("opens the detail drawer and triggers sync", async () => {
+    const target = makeHypervisor({ id: 7, name: "kvm-east" });
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({
+          total: 1,
+          page: 1,
+          page_size: 25,
+          items: [target],
+        }),
+      ),
+      http.get("/api/v1/hypervisors/7", () => HttpResponse.json(target)),
+      http.get("/api/v1/hypervisors/7/vms", () =>
+        HttpResponse.json({
+          hypervisor_id: 7,
+          hypervisor_name: "kvm-east",
+          total_vms: 0,
+          vms: [],
+        }),
+      ),
+      http.post("/api/v1/hypervisors/7/sync", () =>
+        HttpResponse.json({
+          hypervisor_id: 7,
+          hypervisor_name: "kvm-east",
+          status: "success",
+          message: "ok",
+          statistics: {
+            total_discovered: 12,
+            new_vms: 4,
+            updated_vms: 8,
+            archived_vms: 0,
+            errors: [],
+          },
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    const trigger = await screen.findByRole("button", { name: "kvm-east" });
+    await user.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: /kvm-east/i });
+    expect(within(dialog).getByText("administrator@vsphere.local")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /synchroniser/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/sync ok/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/12 découvertes/)).toBeInTheDocument();
+    expect(screen.getByText(/4 nouvelles/)).toBeInTheDocument();
+  });
+
+  it("surfaces an error banner when the list fails", async () => {
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+      ),
+    );
+
+    renderPage();
+
+    expect(
+      await screen.findByText(/erreur lors du chargement des hyperviseurs/i),
+    ).toBeInTheDocument();
+  });
+});
