@@ -183,12 +183,18 @@ export function Sidebar() {
 }
 
 function BrandHeader() {
+  // The SW brand box swaps to the active role's accent. Subtle but the
+  // colour change is on every page, so a viewer (blue) vs. an admin
+  // (orange) vs. a super-admin (red) is recognisable from a peripheral
+  // glance even when the role stripe is scrolled out of view on a
+  // hypothetical full-screen page.
   return (
     <div className="h-14 px-4 flex items-center justify-between border-b border-line">
       <div className="flex items-center gap-2.5">
         <span
           aria-hidden
-          className="relative inline-flex h-6 w-6 items-center justify-center bg-signal text-signal-ink font-mono font-bold text-[11px]"
+          className="relative inline-flex h-6 w-6 items-center justify-center text-signal-ink font-mono font-bold text-[11px]"
+          style={{ backgroundColor: "var(--role-accent, var(--signal))" }}
         >
           SW
           <span
