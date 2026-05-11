@@ -1,7 +1,18 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { AlertTriangle, ChevronLeft, ChevronRight, Search, Sparkles, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Cpu,
+  HardDrive,
+  Layers,
+  Monitor,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/Badge";
 import type { BadgeVariant } from "@/components/ui/Badge";
@@ -11,6 +22,15 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Table, TD, TH, THead, TR } from "@/components/ui/Table";
+import { Panel } from "@/components/ui/Panel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { MetricRow } from "@/components/ui/MetricRow";
+import { Gauge } from "@/components/ui/Gauge";
+import { StackedBar } from "@/components/ui/StackedBar";
+import { Callout } from "@/components/ui/Callout";
+import { fetchVmStats, type VmStats } from "@/api/stats";
 import {
   COMPATIBILITY_STATUSES,
   VM_STATUSES,
@@ -24,6 +44,7 @@ import {
 } from "@/api/vms";
 import { listHypervisors, type Hypervisor } from "@/api/hypervisors";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
+import { useHasPermission } from "@/lib/permissions";
 import type { ApiError } from "@/api/types";
 
 const PAGE_SIZE = 25;
@@ -94,6 +115,12 @@ export default function Vms() {
     placeholderData: (prev) => prev,
   });
 
+  const statsQuery = useQuery<VmStats>({
+    queryKey: ["stats", "vms"],
+    queryFn: fetchVmStats,
+    refetchInterval: REFETCH_INTERVAL_MS,
+  });
+
   const hypervisorsQuery = useQuery({
     queryKey: ["hypervisors", "all-light"],
     queryFn: () => listHypervisors({ skip: 0, limit: 100 }),
@@ -104,40 +131,62 @@ export default function Vms() {
     ? Math.max(1, Math.ceil(listQuery.data.total / PAGE_SIZE))
     : 1;
   const items = listQuery.data?.items ?? [];
+  const filtersActive = !!(search || statusFilter || compatFilter || hypervisorFilter !== "");
 
   return (
-    <div className="max-w-[1440px] mx-auto p-8 space-y-6">
-      <Toolbar
-        search={search}
-        onSearch={(v) => {
-          setSearch(v);
-          setPage(1);
-        }}
-        statusFilter={statusFilter}
-        onStatusFilter={(v) => {
-          setStatusFilter(v);
-          setPage(1);
-        }}
-        compatFilter={compatFilter}
-        onCompatFilter={(v) => {
-          setCompatFilter(v);
-          setPage(1);
-        }}
-        hypervisorFilter={hypervisorFilter}
-        onHypervisorFilter={(v) => {
-          setHypervisorFilter(v);
-          setPage(1);
-        }}
-        hypervisors={hypervisorsQuery.data?.items ?? []}
+    <div className="max-w-[1440px] mx-auto p-6 md:p-8 space-y-6">
+      <PageHeader
+        kicker="inventory"
+        title="virtual machines"
+        breadcrumbs={[{ label: "console" }, { label: "inventory" }, { label: "vms" }]}
+        description="Discovered vms, migration state, and kubevirt compatibility scoring."
       />
 
-      <VmTable
-        items={items}
-        isLoading={listQuery.isPending}
-        isError={listQuery.isError}
-        onRowClick={(id) => setSelectedId(id)}
-        hypervisors={hypervisorsQuery.data?.items ?? []}
-      />
+      <CompatStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
+
+      <Panel
+        density="compact"
+        kicker={
+          filtersActive
+            ? `filters active · ${listQuery.data?.total ?? 0} results`
+            : `${listQuery.data?.total ?? 0} vms discovered`
+        }
+        title="vm catalogue"
+        action={
+          <Toolbar
+            search={search}
+            onSearch={(v) => {
+              setSearch(v);
+              setPage(1);
+            }}
+            statusFilter={statusFilter}
+            onStatusFilter={(v) => {
+              setStatusFilter(v);
+              setPage(1);
+            }}
+            compatFilter={compatFilter}
+            onCompatFilter={(v) => {
+              setCompatFilter(v);
+              setPage(1);
+            }}
+            hypervisorFilter={hypervisorFilter}
+            onHypervisorFilter={(v) => {
+              setHypervisorFilter(v);
+              setPage(1);
+            }}
+            hypervisors={hypervisorsQuery.data?.items ?? []}
+          />
+        }
+        bodyClassName="px-0"
+      >
+        <VmTable
+          items={items}
+          isLoading={listQuery.isPending}
+          isError={listQuery.isError}
+          onRowClick={(id) => setSelectedId(id)}
+          hypervisors={hypervisorsQuery.data?.items ?? []}
+        />
+      </Panel>
 
       <Pagination
         page={page}
@@ -151,6 +200,97 @@ export default function Vms() {
     </div>
   );
 }
+
+/* ------------------------------ compat strip ------------------------------ */
+
+function CompatStrip({ stats, isLoading }: { stats: VmStats | undefined; isLoading: boolean }) {
+  const compatible = stats?.by_compatibility.COMPATIBLE ?? 0;
+  const partial = stats?.by_compatibility.PARTIAL ?? 0;
+  const incompatible = stats?.by_compatibility.INCOMPATIBLE ?? 0;
+  const unknown = stats?.by_compatibility.UNKNOWN ?? 0;
+  const migrated = stats?.by_status.MIGRATED ?? 0;
+  const migrating = stats?.by_status.MIGRATING ?? 0;
+  const failed = stats?.by_status.FAILED ?? 0;
+  const total = stats?.total ?? 0;
+  const adoption = total > 0 ? (migrated / total) * 100 : 0;
+
+  const segments = [
+    { key: "ok", label: "compatible", value: compatible, color: "var(--ok)" },
+    { key: "partial", label: "partial", value: partial, color: "var(--warn)" },
+    { key: "ko", label: "incompatible", value: incompatible, color: "var(--err)" },
+    { key: "unknown", label: "unknown", value: unknown, color: "var(--ink-faint)" },
+  ];
+
+  return (
+    <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <Panel
+        density="compact"
+        kicker="total fleet"
+        className="lg:col-span-1"
+      >
+        {isLoading ? (
+          <Skeleton className="h-9 w-28" />
+        ) : (
+          <div className="flex items-baseline gap-3">
+            <span className="font-mono tabular text-[36px] leading-none text-ink">
+              {formatNumber(total)}
+            </span>
+            <span className="font-mono text-[12px] text-ink-muted">vms</span>
+          </div>
+        )}
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <MiniStat label="migrated" value={formatNumber(migrated)} tone="ok" />
+          <MiniStat label="migrating" value={formatNumber(migrating)} tone="signal" />
+          <MiniStat label="failed" value={formatNumber(failed)} tone="err" />
+        </div>
+      </Panel>
+
+      <Panel
+        density="compact"
+        kicker="compatibility · hybrid scoring"
+        title="ready for kubevirt"
+        action={
+          <span className="font-mono tabular text-[24px] text-ok leading-none">
+            {total > 0 ? `${((compatible / total) * 100).toFixed(0)}%` : "—"}
+          </span>
+        }
+        className="lg:col-span-2"
+      >
+        {isLoading ? (
+          <Skeleton className="h-14 w-full" />
+        ) : (
+          <StackedBar segments={segments} height={12} />
+        )}
+        <div className="mt-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          <span aria-hidden className="block h-1 w-1 bg-signal rounded-full" />
+          adoption · {adoption.toFixed(1)}% of fleet already migrated
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "signal" | "err";
+}) {
+  const color = tone === "ok" ? "var(--ok)" : tone === "err" ? "var(--err)" : "var(--signal)";
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="kicker">{label}</span>
+      <span className="font-mono tabular text-[16px] leading-none" style={{ color }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/* --------------------------------- toolbar -------------------------------- */
 
 function Toolbar({
   search,
@@ -174,28 +314,28 @@ function Toolbar({
   hypervisors: Hypervisor[];
 }) {
   return (
-    <div className="flex items-center gap-3 flex-wrap">
-      <div className="relative flex-1 min-w-[200px] max-w-md">
+    <div className="flex items-center gap-2 flex-wrap">
+      <div className="relative">
         <Icon
           icon={Search}
-          size={16}
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none"
+          size={14}
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none"
         />
         <Input
-          aria-label="Rechercher une vm"
-          placeholder="nom, ip ou hostname…"
+          aria-label="Search vms"
+          placeholder="name, ip, or hostname…"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          className="pl-9"
+          className="pl-8 h-9 w-52"
         />
       </div>
       <Select
-        aria-label="Filtrer par statut"
+        aria-label="Filter by status"
         value={statusFilter}
         onChange={(e) => onStatusFilter(e.target.value as VmStatus | "")}
-        className="w-44"
+        className="w-36 h-9"
       >
-        <option value="">tous les statuts</option>
+        <option value="">all statuses</option>
         {VM_STATUSES.map((s) => (
           <option key={s} value={s}>
             {s}
@@ -203,12 +343,12 @@ function Toolbar({
         ))}
       </Select>
       <Select
-        aria-label="Filtrer par compatibilité"
+        aria-label="Filter by compatibility"
         value={compatFilter}
         onChange={(e) => onCompatFilter(e.target.value as CompatibilityStatus | "")}
-        className="w-44"
+        className="w-40 h-9"
       >
-        <option value="">toutes compatibilités</option>
+        <option value="">all compatibility</option>
         {COMPATIBILITY_STATUSES.map((c) => (
           <option key={c} value={c}>
             {c}
@@ -216,12 +356,14 @@ function Toolbar({
         ))}
       </Select>
       <Select
-        aria-label="Filtrer par hyperviseur"
+        aria-label="Filter by hypervisor"
         value={hypervisorFilter === "" ? "" : String(hypervisorFilter)}
-        onChange={(e) => onHypervisorFilter(e.target.value === "" ? "" : Number(e.target.value))}
-        className="w-44"
+        onChange={(e) =>
+          onHypervisorFilter(e.target.value === "" ? "" : Number(e.target.value))
+        }
+        className="w-40 h-9"
       >
-        <option value="">tous les hyperviseurs</option>
+        <option value="">all hypervisors</option>
         {hypervisors.map((h) => (
           <option key={h.id} value={h.id}>
             {h.name}
@@ -236,6 +378,8 @@ function hypervisorName(id: number | null, hypervisors: Hypervisor[]): string {
   if (id == null) return "—";
   return hypervisors.find((h) => h.id === id)?.name ?? `#${id}`;
 }
+
+/* ----------------------------------- table -------------------------------- */
 
 function VmTable({
   items,
@@ -252,51 +396,59 @@ function VmTable({
 }) {
   if (isError) {
     return (
-      <div
-        role="alert"
-        className="border border-err text-err bg-bg-elev-2 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.04em]"
-      >
-        Erreur lors du chargement des vms.
+      <div className="m-6">
+        <Callout tone="err" role="alert">
+          failed to load vms.
+        </Callout>
       </div>
     );
   }
 
+  if (isLoading && items.length === 0) {
+    return (
+      <div className="px-6 pb-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <SkeletonRow key={i} cols={8} />
+        ))}
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        icon={Monitor}
+        title="no vms"
+        hint="adjust filters or trigger a sync from the hypervisors page."
+      />
+    );
+  }
+
   return (
-    <Table>
-      <THead>
-        <TR>
-          <TH>nom</TH>
-          <TH>hyperviseur</TH>
-          <TH>os</TH>
-          <TH numeric>cpu</TH>
-          <TH numeric>ram</TH>
-          <TH numeric>disque</TH>
-          <TH>statut</TH>
-          <TH>compatibilité</TH>
-          <TH numeric>vue</TH>
-        </TR>
-      </THead>
-      <tbody>
-        {isLoading && items.length === 0 ? (
+    <div className="overflow-x-auto">
+      <Table className="border-0">
+        <THead>
           <TR>
-            <TD muted className="py-6 text-center" colSpan={9}>
-              chargement…
-            </TD>
+            <TH>name</TH>
+            <TH>hypervisor</TH>
+            <TH>os</TH>
+            <TH numeric>cpu</TH>
+            <TH numeric>ram</TH>
+            <TH numeric>disk</TH>
+            <TH>status</TH>
+            <TH>compat.</TH>
+            <TH numeric>seen</TH>
           </TR>
-        ) : items.length === 0 ? (
-          <TR>
-            <TD muted className="py-6 text-center" colSpan={9}>
-              aucune vm
-            </TD>
-          </TR>
-        ) : (
-          items.map((vm) => (
-            <TR key={vm.id} interactive>
+        </THead>
+        <tbody>
+          {items.map((vm, i) => (
+            <TR key={vm.id} interactive className="sw-mount">
               <TD>
                 <button
                   type="button"
                   onClick={() => onRowClick(vm.id)}
-                  className="text-left hover:text-signal transition-colors duration-150 w-full"
+                  className="text-left hover:text-signal transition-colors duration-150 w-full font-medium"
+                  style={{ "--sw-i": i } as React.CSSProperties}
                 >
                   {vm.name}
                 </button>
@@ -322,12 +474,14 @@ function VmTable({
                 {formatRelativeTime(vm.last_seen_at)}
               </TD>
             </TR>
-          ))
-        )}
-      </tbody>
-    </Table>
+          ))}
+        </tbody>
+      </Table>
+    </div>
   );
 }
+
+/* ------------------------------ pagination -------------------------------- */
 
 function Pagination({
   page,
@@ -347,18 +501,18 @@ function Pagination({
 
   return (
     <div className="flex items-center justify-between">
-      <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted tabular">
+      <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted tabular">
         {from}–{to} / {total}
       </span>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <Button
           variant="ghost"
           onClick={() => onChange(page - 1)}
           disabled={page <= 1}
-          aria-label="Page précédente"
-          leadingIcon={<Icon icon={ChevronLeft} size={16} />}
+          aria-label="Previous page"
+          leadingIcon={<Icon icon={ChevronLeft} size={14} />}
         >
-          précédent
+          previous
         </Button>
         <span className="font-mono text-[11px] tabular text-ink-muted px-2">
           {page} / {totalPages}
@@ -367,19 +521,22 @@ function Pagination({
           variant="ghost"
           onClick={() => onChange(page + 1)}
           disabled={page >= totalPages}
-          aria-label="Page suivante"
-          trailingIcon={<Icon icon={ChevronRight} size={16} />}
+          aria-label="Next page"
+          trailingIcon={<Icon icon={ChevronRight} size={14} />}
         >
-          suivant
+          next
         </Button>
       </div>
     </div>
   );
 }
 
+/* ----------------------------- detail drawer ------------------------------ */
+
 function VmDetailDrawer({ id, onClose }: { id: number | null; onClose: () => void }) {
   const queryClient = useQueryClient();
   const open = id !== null;
+  const canAnalyze = useHasPermission("vms", "update");
 
   const detailQuery = useQuery({
     queryKey: ["vm", id],
@@ -390,13 +547,13 @@ function VmDetailDrawer({ id, onClose }: { id: number | null; onClose: () => voi
   const analyzeMutation = useMutation({
     mutationFn: () => analyzeVm(id!, true),
     onSuccess: () => {
-      toast.success("Analyse terminée");
+      toast.success("analysis complete");
       queryClient.invalidateQueries({ queryKey: ["vm", id] });
       queryClient.invalidateQueries({ queryKey: ["vms"] });
       queryClient.invalidateQueries({ queryKey: ["stats", "vms"] });
     },
     onError: (err) => {
-      toast.error(describeError(err, "Erreur lors de l'analyse"));
+      toast.error(describeError(err, "analysis failed"));
     },
   });
 
@@ -407,38 +564,46 @@ function VmDetailDrawer({ id, onClose }: { id: number | null; onClose: () => voi
     <SlideOver
       open={open}
       onClose={onClose}
-      title={vm?.name ?? "machine virtuelle"}
+      title={vm?.name ?? "virtual machine"}
       footer={
         vm && (
           <>
             <Button variant="secondary" onClick={onClose}>
-              fermer
+              close
             </Button>
-            <Button
-              variant="primary"
-              loading={analyzeMutation.isPending}
-              onClick={() => analyzeMutation.mutate()}
-              leadingIcon={<Icon icon={Sparkles} size={16} />}
-            >
-              {details ? "ré-analyser" : "analyser"}
-            </Button>
+            {canAnalyze && (
+              <Button
+                variant="primary"
+                loading={analyzeMutation.isPending}
+                onClick={() => analyzeMutation.mutate()}
+                leadingIcon={<Icon icon={Sparkles} size={14} />}
+                uppercase
+              >
+                {details ? "re-analyze" : "analyze"}
+              </Button>
+            )}
           </>
         )
       }
     >
       {!vm ? (
-        <div className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted">
-          chargement…
+        <div className="space-y-3">
+          <Skeleton className="h-7 w-44" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-24 w-full" />
         </div>
       ) : (
         <div className="space-y-6">
+          <VmHero vm={vm} />
           <VmFacts vm={vm} />
           {details ? (
             <CompatibilityPanel details={details} />
           ) : (
-            <section className="border border-line bg-bg-elev-2 p-4 font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted">
-              aucune analyse — cliquez sur «analyser» pour lancer l'analyzer
-            </section>
+            <EmptyState
+              icon={Sparkles}
+              title="not analyzed"
+              hint="run the analyzer to compute a hybrid rules + ml compatibility score."
+            />
           )}
         </div>
       )}
@@ -446,67 +611,98 @@ function VmDetailDrawer({ id, onClose }: { id: number | null; onClose: () => voi
   );
 }
 
-function VmFacts({ vm }: { vm: Vm }) {
-  const rows: { label: string; value: string }[] = [
-    { label: "id source", value: vm.source_uuid ?? "—" },
-    { label: "hostname", value: vm.hostname ?? "—" },
-    { label: "ip", value: vm.ip_address ?? "—" },
-    { label: "os", value: vm.os_name || vm.os_type || "—" },
-    { label: "cpu", value: `${vm.cpu_cores} vcpu` },
-    { label: "ram", value: formatMemoryMb(vm.memory_mb) },
-    { label: "disque", value: formatGB(vm.disk_gb) },
-    { label: "statut", value: vm.status },
-    { label: "dernière vue", value: formatRelativeTime(vm.last_seen_at) },
-  ];
-
+function VmHero({ vm }: { vm: Vm }) {
   return (
-    <dl className="space-y-2">
-      {rows.map((r) => (
-        <div key={r.label} className="flex justify-between gap-4 border-b border-line pb-2">
-          <dt className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted">
-            {r.label}
-          </dt>
-          <dd className="font-mono text-[12px] tabular text-ink text-right break-all">
-            {r.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <section className="border border-line bg-bg-elev p-5">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <Badge variant={STATUS_VARIANT[vm.status]}>{vm.status}</Badge>
+        <Badge variant={COMPAT_VARIANT[vm.compatibility_status]}>{vm.compatibility_status}</Badge>
+        <span className="kicker">{vm.os_name || vm.os_type || "unknown os"}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <HeroStat icon={Cpu} label="cpu" value={`${vm.cpu_cores} vcpu`} />
+        <HeroStat icon={Layers} label="ram" value={formatMemoryMb(vm.memory_mb)} />
+        <HeroStat icon={HardDrive} label="disk" value={formatGB(vm.disk_gb)} />
+      </div>
+    </section>
   );
 }
 
-const GRADE_TONE: Record<"COMPATIBLE" | "PARTIAL" | "INCOMPATIBLE", BadgeVariant> = {
+function HeroStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: typeof Cpu;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="flex items-center gap-1.5 kicker">
+        <Icon icon={icon} size={11} />
+        {label}
+      </span>
+      <span className="font-mono tabular text-[18px] leading-none text-ink">{value}</span>
+    </div>
+  );
+}
+
+function VmFacts({ vm }: { vm: Vm }) {
+  const rows: { label: string; value: string }[] = [
+    { label: "source id", value: vm.source_uuid ?? "—" },
+    { label: "hostname", value: vm.hostname ?? "—" },
+    { label: "ip", value: vm.ip_address ?? "—" },
+    { label: "last seen", value: formatRelativeTime(vm.last_seen_at) },
+  ];
+
+  return (
+    <section>
+      <div className="kicker mb-2">identification</div>
+      <div>
+        {rows.map((r) => (
+          <MetricRow key={r.label} label={r.label} value={r.value} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const GRADE_TONE: Record<"COMPATIBLE" | "PARTIAL" | "INCOMPATIBLE", "ok" | "warn" | "err"> = {
+  COMPATIBLE: "ok",
+  PARTIAL: "warn",
+  INCOMPATIBLE: "err",
+};
+const GRADE_BADGE: Record<"COMPATIBLE" | "PARTIAL" | "INCOMPATIBLE", BadgeVariant> = {
   COMPATIBLE: "ok",
   PARTIAL: "partial",
   INCOMPATIBLE: "incompatible",
 };
 
 function CompatibilityPanel({ details }: { details: NonNullable<Vm["compatibility_details"]> }) {
+  const tone = GRADE_TONE[details.grade];
   return (
-    <section className="space-y-4">
-      <header className="flex items-center justify-between gap-3">
-        <h3 className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted">
-          analyse compatibilité
-        </h3>
-        <Badge variant={GRADE_TONE[details.grade]}>{details.grade}</Badge>
-      </header>
-
-      <div className="grid grid-cols-3 gap-3">
-        <ScoreBlock label="score" value={`${details.score}`} />
-        <ScoreBlock
-          label="moteur"
-          value={details.engine + (details.engine === "model" && details.confidence !== null ? ` · ${(details.confidence * 100).toFixed(0)}%` : "")}
-        />
-        <ScoreBlock
-          label="analysée"
-          value={formatRelativeTime(details.analyzed_at)}
-        />
+    <section className="space-y-5">
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <div className="kicker mb-1">analyzer · hybrid scoring</div>
+          <div className="flex items-center gap-2">
+            <Badge variant={GRADE_BADGE[details.grade]}>{details.grade}</Badge>
+            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
+              engine · {details.engine}
+              {details.engine === "model" && details.confidence !== null
+                ? ` · conf ${(details.confidence * 100).toFixed(0)}%`
+                : ""}
+            </span>
+          </div>
+        </div>
+        <Gauge value={details.score} label="score" tone={tone} />
       </div>
 
       {details.override_reason && (
-        <div className="border border-warn bg-bg-elev-2 p-3 font-mono text-[10px] uppercase tracking-[0.04em] text-warn">
-          override · {details.override_reason}
-        </div>
+        <Callout tone="warn" kicker="override">
+          {details.override_reason}
+        </Callout>
       )}
 
       <RulesGroup
@@ -514,27 +710,20 @@ function CompatibilityPanel({ details }: { details: NonNullable<Vm["compatibilit
         Icon={X}
         color="var(--err)"
         rules={details.blockers}
-        emptyLabel="aucun"
+        emptyLabel="no blockers detected"
       />
       <RulesGroup
         title="warnings"
         Icon={AlertTriangle}
         color="var(--warn)"
         rules={details.warnings}
-        emptyLabel="aucun"
+        emptyLabel="no warnings"
       />
-    </section>
-  );
-}
 
-function ScoreBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border border-line bg-bg-elev p-3 flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[0.05em] text-ink-muted">
-        {label}
-      </span>
-      <span className="font-mono text-[14px] tabular text-ink">{value}</span>
-    </div>
+      <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+        analyzed · {formatRelativeTime(details.analyzed_at)}
+      </div>
+    </section>
   );
 }
 
@@ -552,16 +741,17 @@ function RulesGroup({
   emptyLabel: string;
 }) {
   return (
-    <div className="space-y-2">
-      <h4 className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted flex items-center gap-2">
+    <div className="space-y-2.5">
+      <h4 className="flex items-center gap-2 kicker">
         <span style={{ color }} className="inline-flex">
-          <IconComponent size={14} strokeWidth={1.5} />
+          <IconComponent size={12} strokeWidth={1.75} />
         </span>
-        {title}
-        <span className="text-ink-muted">· {rules.length}</span>
+        <span>{title}</span>
+        <span className="text-ink-faint">· {rules.length}</span>
       </h4>
       {rules.length === 0 ? (
-        <div className="font-mono text-[11px] text-ink-muted uppercase tracking-[0.04em]">
+        <div className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.06em] flex items-center gap-2">
+          <span aria-hidden className="block h-px w-4 bg-line" />
           {emptyLabel}
         </div>
       ) : (
@@ -569,12 +759,22 @@ function RulesGroup({
           {rules.map((r, i) => (
             <li
               key={`${r.rule}-${i}`}
-              className="border-l-2 pl-3 py-1 bg-bg-elev"
-              style={{ borderColor: color }}
+              className="flex items-start gap-2.5 border border-line bg-bg-elev px-3 py-2"
             >
-              <div className="font-mono text-[11px] text-ink">{r.message}</div>
-              <div className="font-mono text-[10px] text-ink-muted uppercase tracking-[0.04em]">
-                {r.rule}
+              <span
+                aria-hidden
+                className="shrink-0 inline-flex items-center justify-center mt-[1px]"
+                style={{ color }}
+              >
+                <IconComponent size={13} strokeWidth={1.75} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-[12px] text-ink leading-snug">{r.message}</div>
+                <div className="mt-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+                  <span>{r.rule}</span>
+                  <span className="text-ink-faint" aria-hidden>·</span>
+                  <span style={{ color }}>{r.severity}</span>
+                </div>
               </div>
             </li>
           ))}

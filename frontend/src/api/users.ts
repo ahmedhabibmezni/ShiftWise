@@ -1,0 +1,65 @@
+import { api } from "@/lib/axios";
+import type { Role, User } from "@/api/types";
+
+export type UserListItem = {
+  id: number;
+  email: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  full_name: string;
+  tenant_id: string;
+  is_active: boolean;
+  is_verified: boolean;
+  is_superuser: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserListResponse = {
+  items: UserListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export type ListUsersParams = {
+  skip?: number;
+  limit?: number;
+  search?: string;
+  is_active?: boolean;
+  is_superuser?: boolean;
+  tenant_id?: string;
+};
+
+export async function listUsers(params: ListUsersParams = {}): Promise<UserListResponse> {
+  const res = await api.get<UserListResponse>("/users", { params });
+  return res.data;
+}
+
+export async function getUser(id: number): Promise<User> {
+  const res = await api.get<User>(`/users/${id}`);
+  return res.data;
+}
+
+export type CreateUserPayload = {
+  email: string;
+  username: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  tenant_id: string;
+  is_active?: boolean;
+  password: string;
+  role_ids: number[];
+};
+
+export async function createUser(payload: CreateUserPayload): Promise<User> {
+  const res = await api.post<User>("/users", payload);
+  return res.data;
+}
+
+export async function listRoles(): Promise<Role[]> {
+  const res = await api.get<Role[]>("/roles");
+  return res.data;
+}

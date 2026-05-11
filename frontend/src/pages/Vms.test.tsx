@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -7,7 +7,29 @@ import { http, HttpResponse } from "msw";
 import { Toaster } from "react-hot-toast";
 import { server } from "@/test/msw/server";
 import type { Vm } from "@/api/vms";
+import type { User } from "@/api/types";
+import { useAuthStore } from "@/store/auth";
 import Vms from "./Vms";
+
+function makeAuthUser(over: Partial<User> = {}): User {
+  return {
+    id: 1,
+    email: "op@shiftwise.local",
+    username: "op",
+    first_name: null,
+    last_name: null,
+    full_name: "op",
+    tenant_id: "t1",
+    is_active: true,
+    is_verified: true,
+    is_superuser: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    roles: [],
+    permissions: { vms: ["*"], hypervisors: ["read"] },
+    ...over,
+  };
+}
 
 function makeVm(over: Partial<Vm> = {}): Vm {
   return {
@@ -96,6 +118,14 @@ function renderPage() {
 }
 
 describe("Vms page", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: makeAuthUser(),
+      accessToken: "fake",
+      bootstrapped: true,
+    });
+  });
+
   it("renders rows with status + compatibility badges", async () => {
     server.use(
       mockHypervisorsAll(),
@@ -139,7 +169,7 @@ describe("Vms page", () => {
     await waitFor(() => expect(captured.length).toBeGreaterThan(0));
 
     await user.selectOptions(
-      screen.getByLabelText(/filtrer par compatibilité/i),
+      screen.getByLabelText(/filter by compatibility/i),
       "incompatible",
     );
 
@@ -187,11 +217,11 @@ describe("Vms page", () => {
     await user.click(trigger);
 
     const dialog = await screen.findByRole("dialog", { name: /ubuntu-22-prod/i });
-    expect(within(dialog).getByText(/aucune analyse/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/not analyzed/i)).toBeInTheDocument();
 
     server.use(http.get("/api/v1/vms/7", () => HttpResponse.json(analyzed)));
 
-    await user.click(within(dialog).getByRole("button", { name: /^analyser$/i }));
+    await user.click(within(dialog).getByRole("button", { name: /^analyze$/i }));
 
     await waitFor(() => {
       expect(within(dialog).getByText("INCOMPATIBLE")).toBeInTheDocument();
@@ -211,7 +241,32 @@ describe("Vms page", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/erreur lors du chargement des vms/i),
+      await screen.findByText(/failed to load vms/i),
     ).toBeInTheDocument();
+  });
+
+  it("hides the analyze button for read-only viewers", async () => {
+    useAuthStore.setState({
+      user: makeAuthUser({ permissions: { vms: ["read"], hypervisors: ["read"] } }),
+      accessToken: "fake",
+      bootstrapped: true,
+    });
+
+    const vm = makeVm({ id: 4, name: "viewer-vm" });
+    server.use(
+      mockHypervisorsAll(),
+      http.get("/api/v1/vms", () =>
+        HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [vm] }),
+      ),
+      http.get("/api/v1/vms/4", () => HttpResponse.json(vm)),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "viewer-vm" }));
+    const dialog = await screen.findByRole("dialog", { name: /viewer-vm/i });
+    expect(within(dialog).queryByRole("button", { name: /^analyze$/i })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^re-analyze$/i })).toBeNull();
   });
 });

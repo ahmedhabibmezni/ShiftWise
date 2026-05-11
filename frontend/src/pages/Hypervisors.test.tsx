@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -7,7 +7,29 @@ import { http, HttpResponse } from "msw";
 import { Toaster } from "react-hot-toast";
 import { server } from "@/test/msw/server";
 import type { Hypervisor } from "@/api/hypervisors";
+import type { User } from "@/api/types";
+import { useAuthStore } from "@/store/auth";
 import Hypervisors from "./Hypervisors";
+
+function makeUser(over: Partial<User> = {}): User {
+  return {
+    id: 1,
+    email: "op@shiftwise.local",
+    username: "op",
+    first_name: null,
+    last_name: null,
+    full_name: "op",
+    tenant_id: "t1",
+    is_active: true,
+    is_verified: true,
+    is_superuser: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    roles: [],
+    permissions: { hypervisors: ["*"], vms: ["*"] },
+    ...over,
+  };
+}
 
 function makeHypervisor(over: Partial<Hypervisor> = {}): Hypervisor {
   return {
@@ -52,6 +74,14 @@ function renderPage() {
 }
 
 describe("Hypervisors page", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: makeUser(),
+      accessToken: "fake",
+      bootstrapped: true,
+    });
+  });
+
   it("renders the list returned by the API", async () => {
     server.use(
       http.get("/api/v1/hypervisors", () =>
@@ -102,7 +132,7 @@ describe("Hypervisors page", () => {
 
     await waitFor(() => expect(recorded.length).toBeGreaterThan(0));
 
-    const typeSelect = screen.getByLabelText(/filtrer par type/i);
+    const typeSelect = screen.getByLabelText(/filter by type/i);
     await user.selectOptions(typeSelect, "kvm");
 
     await waitFor(() => {
@@ -156,13 +186,13 @@ describe("Hypervisors page", () => {
     const dialog = await screen.findByRole("dialog", { name: /kvm-east/i });
     expect(within(dialog).getByText("administrator@vsphere.local")).toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole("button", { name: /synchroniser/i }));
+    await user.click(within(dialog).getByRole("button", { name: /sync now/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/sync ok/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/12 découvertes/)).toBeInTheDocument();
-    expect(screen.getByText(/4 nouvelles/)).toBeInTheDocument();
+    expect(screen.getByText(/12 discovered/)).toBeInTheDocument();
+    expect(screen.getByText(/4 new/)).toBeInTheDocument();
   });
 
   it("surfaces an error banner when the list fails", async () => {
@@ -175,7 +205,46 @@ describe("Hypervisors page", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/erreur lors du chargement des hyperviseurs/i),
+      await screen.findByText(/failed to load hypervisors/i),
     ).toBeInTheDocument();
+  });
+
+  it("hides create and sync controls for read-only viewers", async () => {
+    useAuthStore.setState({
+      user: makeUser({ permissions: { hypervisors: ["read"] } }),
+      accessToken: "fake",
+      bootstrapped: true,
+    });
+
+    const target = makeHypervisor({ id: 9, name: "view-only-host" });
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({
+          total: 1,
+          page: 1,
+          page_size: 25,
+          items: [target],
+        }),
+      ),
+      http.get("/api/v1/hypervisors/9", () => HttpResponse.json(target)),
+      http.get("/api/v1/hypervisors/9/vms", () =>
+        HttpResponse.json({
+          hypervisor_id: 9,
+          hypervisor_name: "view-only-host",
+          total_vms: 0,
+          vms: [],
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("view-only-host");
+    expect(screen.queryByRole("button", { name: /add source/i })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "view-only-host" }));
+    const dialog = await screen.findByRole("dialog", { name: /view-only-host/i });
+    expect(within(dialog).queryByRole("button", { name: /sync now/i })).toBeNull();
   });
 });
