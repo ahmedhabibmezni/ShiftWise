@@ -21,6 +21,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.login_throttle import (
+    check_lockout,
+    record_failure,
+    reset as reset_throttle,
+)
 from app.core.refresh_token_store import (
     RotateOk,
     RotateReuseDetected,
@@ -144,32 +149,61 @@ def login(
     """
     Authentifie l'utilisateur et émet la paire (access body + refresh cookie).
 
-    Stamps `last_login_at` + `last_login_ip` for the audit trail on every
-    successful authentication.
+    - Brute-force protection: per-email + per-IP throttle in Redis (DB 1).
+      Locked-out attempts short-circuit before bcrypt to avoid the
+      authenticate cost amplifying a DoS.
+    - Audit trail: stamps `last_login_at` + `last_login_ip` on success.
     """
+    ip = _client_ip(request)
+
+    # Throttle check first — locked-out attackers must not pay the
+    # bcrypt cost or rotate the audit timestamp.
+    lockout = check_lockout(login_data.email, ip)
+    if lockout is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Trop de tentatives. Réessayez dans "
+                f"{lockout.retry_after_seconds} secondes."
+            ),
+            headers={"Retry-After": str(lockout.retry_after_seconds)},
+        )
+
     user = crud_user.authenticate_user(
         db,
         email=login_data.email,
         password=login_data.password,
     )
     if not user:
+        # Wrong email OR wrong password — both count toward the lockout.
+        # Same key (lowercased email) regardless of whether the email
+        # actually exists, so a probe attack can't enumerate accounts by
+        # comparing throttle behaviour.
+        record_failure(login_data.email, ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=CREDENTIALS_INVALID_MSG,
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_active:
+        # Inactive accounts also feed the counter so an attacker can't
+        # use a deactivated account to probe whether their target user
+        # still exists.
+        record_failure(login_data.email, ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ACCOUNT_INACTIVE_MSG,
         )
+
+    # Genuine success — clear both throttle buckets so the operator
+    # isn't punished by their own earlier typos.
+    reset_throttle(login_data.email, ip)
 
     # Stamp the audit fields BEFORE minting tokens — we want the trail
     # to be persisted even if the cookie write below somehow fails. The
     # IP is truncated at 45 chars (IPv6 max) so a forged absurdly-long
     # header from a misconfigured proxy can't blow up the column.
     user.last_login_at = datetime.now(timezone.utc)
-    ip = _client_ip(request)
     user.last_login_ip = ip[:45] if ip else None
     db.commit()
 

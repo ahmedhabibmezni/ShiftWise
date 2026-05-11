@@ -290,6 +290,19 @@ class Settings(BaseSettings):
     # même serveur en pratique.
     REDIS_AUTH_URL: str = "redis://localhost:6379/1"
 
+    # ============================================
+    # LOGIN THROTTLE (brute-force protection)
+    # ============================================
+    #
+    # Compteurs sliding-window dans Redis (DB 1, partagé avec les
+    # refresh tokens). Désactivé en mettant MAX_ATTEMPTS <= 0 — utile
+    # pour les environnements de dev / CI.
+    #
+    # Défaut : 5 tentatives ratées sur une fenêtre de 15 minutes
+    # déclenche un lockout, par email ET par IP source.
+    LOGIN_THROTTLE_MAX_ATTEMPTS: int = 5
+    LOGIN_THROTTLE_WINDOW_SECONDS: int = 15 * 60
+
     # URL du broker Redis. Format : redis://[:password@]host:port/db
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
 

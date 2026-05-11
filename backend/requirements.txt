@@ -55,6 +55,9 @@ pandas==2.2.1
 pytest==7.4.4
 pytest-asyncio==0.23.3
 httpx==0.26.0
+# In-memory Redis used by the login-throttle + auth-store tests so the
+# CI suite doesn't need a live Redis broker.
+fakeredis==2.21.3
 
 # Development
 black==23.12.1

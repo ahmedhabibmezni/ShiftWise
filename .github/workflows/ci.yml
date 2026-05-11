@@ -90,4 +90,5 @@ jobs:
             tests/test_migrator_p1.py \
             tests/test_namespace_quota.py \
             tests/test_login_audit.py \
+            tests/test_login_throttle.py \
             --tb=short -v
