@@ -71,10 +71,18 @@ def setup_test_superuser():
     conn = _get_db_conn()
     cur = conn.cursor()
     try:
-        # Check if already exists
+        # If the user already exists, refresh its hash and reactivate it.
+        # Keeping a stale hash from a previous incompatible bcrypt/passlib
+        # combination would silently break the login step.
         cur.execute("SELECT id FROM users WHERE email = %s", (SUPERUSER_EMAIL,))
         row = cur.fetchone()
         if row:
+            cur.execute(
+                "UPDATE users SET hashed_password = %s, is_active = TRUE, "
+                "is_superuser = TRUE, updated_at = NOW() WHERE id = %s",
+                (hashed, row[0]),
+            )
+            conn.commit()
             return row[0]
 
         # Get super_admin role id
@@ -199,14 +207,26 @@ def subsection(title: str):
 
 
 # ─── HTTP Helpers ───────────────────────────────────────────────────────────
+# Shared requests.Session so the refresh cookie posed by /auth/login is
+# automatically reattached on subsequent /auth/refresh calls. Required since
+# the refresh token is no longer returned in the JSON body (cookie-only).
+SESSION = requests.Session()
+
+REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "shiftwise_refresh")
+
+
 def headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+
 def login(email: str, password: str) -> requests.Response:
-    return requests.post(f"{API}/auth/login", json={"email": email, "password": password})
+    """Login via the shared session so the refresh cookie is captured."""
+    return SESSION.post(f"{API}/auth/login", json={"email": email, "password": password})
+
 
 def get_token(email: str, password: str) -> str | None:
-    r = login(email, password)
+    """Login on a throwaway session (avoids polluting SESSION cookies)."""
+    r = requests.post(f"{API}/auth/login", json={"email": email, "password": password})
     if r.status_code == 200:
         return r.json()["access_token"]
     return None
@@ -244,7 +264,7 @@ def test_health_and_root():
 
 # ──────────────────────────────────────────────────────────────────────────
 def test_superuser_login():
-    """Login with the default superuser and return the token."""
+    """Login with the default superuser and return the access token."""
     section("2 · SUPERUSER AUTHENTICATION")
 
     r = login(SUPERUSER_EMAIL, SUPERUSER_PASSWORD)
@@ -257,11 +277,15 @@ def test_superuser_login():
 
     data = r.json()
     _record("Auth", "Response contains access_token", "access_token" in data)
-    _record("Auth", "Response contains refresh_token", "refresh_token" in data)
+    _record("Auth", "Response does NOT contain refresh_token (cookie-only)",
+            "refresh_token" not in data)
     _record("Auth", "token_type is 'bearer'", data.get("token_type") == "bearer")
-    _record("Auth", "expires_in is positive integer", isinstance(data.get("expires_in"), int) and data["expires_in"] > 0)
+    _record("Auth", "expires_in is positive integer",
+            isinstance(data.get("expires_in"), int) and data["expires_in"] > 0)
+    _record("Auth", "Refresh cookie set on session",
+            bool(SESSION.cookies.get(REFRESH_COOKIE_NAME)))
 
-    return data["access_token"], data["refresh_token"]
+    return data["access_token"]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -300,23 +324,34 @@ def test_auth_me_and_verify(token: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-def test_token_refresh(refresh_token: str):
-    """Test token refresh flow."""
+def test_token_refresh():
+    """Test token refresh flow (cookie-based).
+
+    Re-login first because the previous /auth/logout call wiped the family.
+    """
     section("4 · TOKEN REFRESH")
 
-    r = requests.post(f"{API}/auth/refresh", json={"refresh_token": refresh_token})
+    relogin = login(SUPERUSER_EMAIL, SUPERUSER_PASSWORD)
+    _record("Auth", "Pre-refresh re-login returns 200", relogin.status_code == 200)
+
+    old_cookie = SESSION.cookies.get(REFRESH_COOKIE_NAME)
+    _record("Auth", "Pre-refresh: cookie exists on session", bool(old_cookie))
+
+    r = SESSION.post(f"{API}/auth/refresh")
     _record("Auth", "POST /auth/refresh returns 200", r.status_code == 200)
-    if r.status_code == 200:
-        data = r.json()
-        _record("Auth", "Refresh returns new access_token", bool(data.get("access_token")))
-        _record("Auth", "Refresh returns new refresh_token", bool(data.get("refresh_token")))
-        return data["access_token"]
+    if r.status_code != 200:
+        return None
 
-    # Negative: invalid refresh token
-    r = requests.post(f"{API}/auth/refresh", json={"refresh_token": "invalid.token.here"})
-    _record("Auth", "Invalid refresh token returns 401", r.status_code == 401)
+    data = r.json()
+    _record("Auth", "Refresh returns new access_token", bool(data.get("access_token")))
+    _record("Auth", "Refresh response has NO refresh_token in body",
+            "refresh_token" not in data)
 
-    return None
+    new_cookie = SESSION.cookies.get(REFRESH_COOKIE_NAME)
+    _record("Auth", "Refresh rotated the cookie value",
+            bool(new_cookie) and new_cookie != old_cookie)
+
+    return data["access_token"]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -339,16 +374,29 @@ def test_auth_negative():
     r = requests.get(f"{API}/auth/me", headers=headers("totally.invalid.token"))
     _record("Auth-Neg", "GET /me with bad token returns 401", r.status_code == 401)
 
-    subsection("Using refresh token as access token")
-    login_r = login(SUPERUSER_EMAIL, SUPERUSER_PASSWORD)
+    subsection("Using refresh cookie value as access bearer")
+    # Issue a fresh session, read the refresh cookie value, try to use it as
+    # an access bearer. Should be rejected because token type != "access".
+    isolated = requests.Session()
+    login_r = isolated.post(
+        f"{API}/auth/login",
+        json={"email": SUPERUSER_EMAIL, "password": SUPERUSER_PASSWORD},
+    )
     if login_r.status_code == 200:
-        refresh_tok = login_r.json()["refresh_token"]
+        refresh_tok = isolated.cookies.get(REFRESH_COOKIE_NAME)
         r = requests.get(f"{API}/auth/me", headers=headers(refresh_tok))
         _record("Auth-Neg", "Refresh token used as access → 401", r.status_code == 401)
 
-    subsection("Invalid refresh token")
-    r = requests.post(f"{API}/auth/refresh", json={"refresh_token": "garbage"})
-    _record("Auth-Neg", "Garbage refresh token → 401", r.status_code == 401)
+    subsection("Invalid refresh cookie")
+    r = requests.post(
+        f"{API}/auth/refresh",
+        cookies={REFRESH_COOKIE_NAME: "garbage"},
+    )
+    _record("Auth-Neg", "Garbage refresh cookie → 401", r.status_code == 401)
+
+    subsection("Missing refresh cookie")
+    r = requests.post(f"{API}/auth/refresh")
+    _record("Auth-Neg", "No refresh cookie → 401", r.status_code == 401)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -980,9 +1028,9 @@ def main():
     # ── Run all test suites ──
     test_health_and_root()
 
-    su_token, refresh_tok = test_superuser_login()
+    su_token = test_superuser_login()
     test_auth_me_and_verify(su_token)
-    new_token = test_token_refresh(refresh_tok)
+    new_token = test_token_refresh()
 
     # Use fresh token from refresh if available
     if new_token:
