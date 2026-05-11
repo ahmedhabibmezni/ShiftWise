@@ -74,8 +74,7 @@ const SECTIONS: NavSection[] = [
         id: "migrations",
         label: "migrations",
         icon: ArrowLeftRight,
-        badge: 3,
-        badgeTone: "signal",
+        to: "/migrations",
         requires: { resource: "migrations", action: "read" },
       },
       {

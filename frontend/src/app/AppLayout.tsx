@@ -12,6 +12,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/": "overview",
   "/hypervisors": "hypervisors",
   "/vms": "virtual machines",
+  "/migrations": "migrations",
   "/users": "users",
   "/styleguide": "styleguide",
 };
@@ -55,7 +56,7 @@ export function AppLayout() {
   }, [theme.role, theme.accentColor, theme.accentTint]);
 
   return (
-    <div className="min-h-[100dvh] bg-bg text-ink flex flex-col relative">
+    <div className="h-[100dvh] bg-bg text-ink flex flex-col relative overflow-hidden">
       <span aria-hidden className="sw-grain" />
       <div className="flex flex-1 min-h-0 relative z-[2]">
         <Sidebar />

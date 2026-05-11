@@ -122,23 +122,9 @@ class MigrationListResponse(BaseModel):
     page_size: int = Field(..., ge=1, le=100, description="Taille de la page")
 
 
-# Schéma pour démarrer une migration
-class MigrationStart(BaseModel):
-    """Schéma pour démarrer une migration"""
-    migration_id: int = Field(..., description="ID de la migration à démarrer")
-
-
-# Schéma pour annuler une migration
-class MigrationCancel(BaseModel):
-    """Schéma pour annuler une migration"""
-    migration_id: int = Field(..., description="ID de la migration à annuler")
-    reason: Optional[str] = Field(None, max_length=500, description="Raison de l'annulation")
-
-
 # Schéma pour rollback
 class MigrationRollback(BaseModel):
-    """Schéma pour rollback d'une migration"""
-    migration_id: int = Field(..., description="ID de la migration à rollback")
+    """Schéma pour rollback d'une migration — id pris dans l'URL"""
     reason: Optional[str] = Field(None, max_length=500, description="Raison du rollback")
 
 
