@@ -5,13 +5,14 @@ Endpoints CRUD pour les hyperviseurs sources (vSphere, VMware, Hyper-V, etc.)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Annotated, Optional
 
 from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
-from app.models.hypervisor import HypervisorType, HypervisorStatus
+from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
 from app.schemas.hypervisor import (
     HypervisorCreate,
     HypervisorUpdate,
@@ -114,28 +115,32 @@ def get_hypervisors_stats(
     tenant_id = None if current_user.is_superuser else current_user.tenant_id
 
     total = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id)
+    active = crud_hypervisor.get_hypervisors_count(
+        db, tenant_id=tenant_id, is_active=True
+    )
 
-    stats = {
+    # Single GROUP BY per column instead of 10+7 individual COUNTs. Guards
+    # against Postgres enum drift: if a Python-side enum value (e.g. OVIRT)
+    # is missing from the DB enum, a per-value SELECT explodes with
+    # InvalidTextRepresentation. The GROUP BY only returns values that
+    # actually appear in rows, so the failure mode is moot.
+    by_type_query = db.query(
+        Hypervisor.type, func.count(Hypervisor.id)
+    ).group_by(Hypervisor.type)
+    by_status_query = db.query(
+        Hypervisor.status, func.count(Hypervisor.id)
+    ).group_by(Hypervisor.status)
+    if tenant_id is not None:
+        by_type_query = by_type_query.filter(Hypervisor.tenant_id == tenant_id)
+        by_status_query = by_status_query.filter(Hypervisor.tenant_id == tenant_id)
+
+    return {
         "total": total,
-        "by_type": {},
-        "by_status": {},
-        "active": crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, is_active=True),
-        "inactive": crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, is_active=False)
+        "active": active,
+        "inactive": total - active,
+        "by_type": {t.value: c for t, c in by_type_query.all() if c > 0},
+        "by_status": {s.value: c for s, c in by_status_query.all() if c > 0},
     }
-
-    # Par type
-    for hyp_type in HypervisorType:
-        count = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, hypervisor_type=hyp_type)
-        if count > 0:
-            stats["by_type"][hyp_type.value] = count
-
-    # Par statut
-    for hyp_status in HypervisorStatus:
-        count = crud_hypervisor.get_hypervisors_count(db, tenant_id=tenant_id, status=hyp_status)
-        if count > 0:
-            stats["by_status"][hyp_status.value] = count
-
-    return stats
 
 
 @router.post("/test-connection", response_model=HypervisorTestConnectionResponse)
