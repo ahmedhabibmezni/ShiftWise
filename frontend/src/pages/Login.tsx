@@ -6,22 +6,25 @@ import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { AxiosError } from "axios";
 import { z } from "zod";
+import { ArrowRight, LockKeyhole, Shield } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { Icon } from "@/components/ui/Icon";
+import { LiveIndicator } from "@/components/ui/LiveIndicator";
+import { Callout } from "@/components/ui/Callout";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
 import { useAuthStore } from "@/store/auth";
 import type { ApiError } from "@/api/types";
 
 const loginSchema = z.object({
-  email: z.string().min(1, "Email requis").email("Email invalide"),
-  password: z.string().min(1, "Mot de passe requis"),
+  email: z.string().min(1, "email required").email("invalid email"),
+  password: z.string().min(1, "password required"),
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
-
 type LocationState = { from?: string };
 
-const GENERIC_LOGIN_ERROR = "Échec de la connexion. Vérifiez vos identifiants.";
+const GENERIC_LOGIN_ERROR = "login failed. check your credentials.";
 
 function extractDetail(err: unknown): string | null {
   if (err instanceof AxiosError) {
@@ -62,7 +65,7 @@ export default function Login() {
       const detail = extractDetail(err);
 
       if (status === 403) {
-        const msg = detail ?? "Compte inactif.";
+        const msg = detail ?? "account inactive.";
         setFormError(msg);
         toast.error(msg);
         return;
@@ -71,7 +74,7 @@ export default function Login() {
         setFormError(GENERIC_LOGIN_ERROR);
         return;
       }
-      const msg = detail ?? "Erreur réseau. Réessayez.";
+      const msg = detail ?? "network error. try again.";
       setFormError(msg);
       toast.error(msg);
     },
@@ -83,100 +86,175 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-bg text-ink flex items-center justify-center px-4">
-      <div className="w-full max-w-[380px]">
-        <header className="mb-6">
-          <div className="font-mono font-bold text-[28px] tracking-[0.04em] text-ink leading-none">
-            SW · SHIFTWISE
-          </div>
-          <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted">
-            console · authentification
-          </div>
-        </header>
+    <div className="min-h-[100dvh] w-full bg-bg text-ink grid grid-cols-1 lg:grid-cols-[1.05fr_1fr] relative overflow-hidden">
+      <span aria-hidden className="sw-grain" />
+      <BrandPanel />
 
-        <form
-          onSubmit={handleSubmit(onSubmit)}
-          noValidate
-          aria-label="Formulaire de connexion"
-          className="border border-line-strong bg-bg-elev p-6 space-y-4"
-        >
-          <div>
-            <label
-              htmlFor="email"
-              className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
-            >
-              email
-            </label>
-            <Input
+      <section className="relative z-[2] flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-[400px]">
+          <header className="mb-8">
+            <div className="kicker mb-2">console · authentication</div>
+            <h1 className="text-h1 lowercase leading-none">
+              welcome back<span className="sw-caret" />
+            </h1>
+            <p className="mt-2 font-mono text-[12px] text-ink-muted leading-relaxed">
+              operator access · audit logged · httponly cookie + rotating refresh token
+            </p>
+          </header>
+
+          <form
+            onSubmit={handleSubmit(onSubmit)}
+            noValidate
+            aria-label="Login form"
+            className="space-y-5"
+          >
+            <Field
               id="email"
+              label="email"
               type="email"
               autoComplete="email"
               autoFocus
-              invalid={!!errors.email}
-              aria-describedby={errors.email ? "email-error" : undefined}
-              {...register("email")}
+              error={errors.email?.message}
+              register={register("email")}
             />
-            {errors.email && (
-              <div
-                id="email-error"
-                role="alert"
-                className="mt-1 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
-              >
-                {errors.email.message}
-              </div>
-            )}
-          </div>
 
-          <div>
-            <label
-              htmlFor="password"
-              className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
-            >
-              password
-            </label>
-            <Input
+            <Field
               id="password"
+              label="password"
               type="password"
               autoComplete="current-password"
-              invalid={!!errors.password}
-              aria-describedby={errors.password ? "password-error" : undefined}
-              {...register("password")}
+              error={errors.password?.message}
+              register={register("password")}
             />
-            {errors.password && (
-              <div
-                id="password-error"
-                role="alert"
-                className="mt-1 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
-              >
-                {errors.password.message}
-              </div>
+
+            {formError && (
+              <Callout tone="err" role="alert">
+                {formError}
+              </Callout>
             )}
-          </div>
 
-          {formError && (
-            <div
-              role="alert"
-              className="border border-err text-err bg-bg-elev-2 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.04em]"
+            <Button
+              type="submit"
+              variant="primary"
+              uppercase
+              loading={isSubmitting || mutation.isPending}
+              trailingIcon={<Icon icon={ArrowRight} size={16} />}
+              className="w-full h-11"
             >
-              {formError}
-            </div>
-          )}
+              log in
+            </Button>
+          </form>
 
-          <Button
-            type="submit"
-            variant="primary"
-            uppercase
-            loading={isSubmitting || mutation.isPending}
-            className="w-full"
-          >
-            connexion
-          </Button>
-        </form>
-
-        <footer className="mt-4 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
-          session refresh · cookie httponly
-        </footer>
-      </div>
+          <footer className="mt-8 flex items-center justify-between gap-4">
+            <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              <Icon icon={LockKeyhole} size={11} /> tls 1.3 · hsts
+            </span>
+            <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              <Icon icon={Shield} size={11} /> oauth 2.1 bcp
+            </span>
+          </footer>
+        </div>
+      </section>
     </div>
+  );
+}
+
+function Field({
+  id,
+  label,
+  type,
+  autoComplete,
+  autoFocus,
+  error,
+  register,
+}: {
+  id: string;
+  label: string;
+  type: string;
+  autoComplete: string;
+  autoFocus?: boolean;
+  error?: string;
+  register: ReturnType<ReturnType<typeof useForm>["register"]>;
+}) {
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="block font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted mb-2"
+      >
+        {label}
+      </label>
+      <Input
+        id={id}
+        type={type}
+        autoComplete={autoComplete}
+        autoFocus={autoFocus}
+        invalid={!!error}
+        aria-describedby={error ? `${id}-error` : undefined}
+        className="h-11"
+        {...register}
+      />
+      {error && (
+        <div
+          id={`${id}-error`}
+          role="alert"
+          className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BrandPanel() {
+  return (
+    <aside className="relative hidden lg:flex flex-col justify-between bg-bg-elev p-12 overflow-hidden border-r border-line">
+      <span aria-hidden className="sw-hairlines absolute inset-0 opacity-30" />
+      <span
+        aria-hidden
+        className="absolute -top-32 -right-32 h-[480px] w-[480px] rounded-full bg-signal/8 blur-3xl"
+      />
+
+      <header className="relative z-[2] flex items-center gap-3">
+        <span
+          aria-hidden
+          className="relative inline-flex h-10 w-10 items-center justify-center bg-signal text-signal-ink font-mono font-bold text-[14px]"
+        >
+          SW
+          <span aria-hidden className="absolute -bottom-1.5 -right-1.5 h-2.5 w-2.5 bg-bg-elev border border-line-strong" />
+        </span>
+        <div className="flex flex-col leading-none">
+          <span className="font-mono text-[13px] font-semibold tracking-[0.08em] text-ink">
+            SHIFTWISE
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted mt-1">
+            vm migration platform · v2.4.1
+          </span>
+        </div>
+      </header>
+
+      <div className="relative z-[2] max-w-[44ch]">
+        <div className="kicker mb-3">manifesto · 01</div>
+        <p className="text-h1 lowercase leading-[1.1] text-ink" style={{ textWrap: "balance" }}>
+          a fleet to migrate.
+          <br />
+          <span className="text-signal">a cluster to master.</span>
+          <br />
+          a pipeline to orchestrate.
+        </p>
+        <p className="mt-6 font-mono text-[12px] text-ink-muted max-w-[52ch] leading-relaxed">
+          discovery · analyzer · converter · adapter · migrator · reporting. every vm transits six stages before landing on openshift virtualization.
+        </p>
+      </div>
+
+      <footer className="relative z-[2] flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
+        <div className="flex items-center gap-2">
+          <LiveIndicator label={null} srLabel="Cluster online" tone="ok" />
+          <span>cluster ok · 3 masters · kubevirt v1.4.1</span>
+        </div>
+        <span className="text-ink-faint">© 2026 · nextstep-it</span>
+      </footer>
+    </aside>
   );
 }

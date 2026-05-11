@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { Icon } from "./Icon";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 export function SlideOver({
   open,
@@ -16,6 +17,8 @@ export function SlideOver({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const trapRef = useFocusTrap<HTMLElement>(open);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -32,15 +35,16 @@ export function SlideOver({
     >
       <button
         type="button"
-        aria-label="Fermer"
+        aria-label="Close drawer"
         onClick={onClose}
         className={`absolute inset-0 transition-opacity duration-200 ${
           open ? "opacity-100" : "opacity-0"
         }`}
         style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
-        tabIndex={open ? 0 : -1}
+        tabIndex={-1}
       />
       <aside
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -53,8 +57,8 @@ export function SlideOver({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Fermer"
-            className="h-10 w-10 inline-flex items-center justify-center rounded-sm border border-transparent hover:bg-bg-elev hover:border-line text-ink-muted hover:text-ink transition-colors duration-150"
+            aria-label="Close drawer"
+            className="h-10 w-10 inline-flex items-center justify-center rounded-sm border border-transparent hover:bg-bg-elev hover:border-line text-ink-muted hover:text-ink transition-colors duration-150 focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1"
           >
             <Icon icon={X} size={20} />
           </button>

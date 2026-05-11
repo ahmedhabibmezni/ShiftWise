@@ -9,7 +9,8 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={toggle}
-      aria-label={`Activer le thème ${next}`}
+      aria-label={`Switch to ${next} theme`}
+      title={`Switch to ${next} theme`}
       className="h-10 w-10 inline-flex items-center justify-center rounded-sm border border-transparent text-ink-muted hover:bg-bg-elev hover:text-ink transition-colors duration-150 focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1"
     >
       <Icon icon={theme === "dark" ? Sun : Moon} size={20} />

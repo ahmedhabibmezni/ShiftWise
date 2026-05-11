@@ -42,12 +42,12 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex h-10 items-center justify-center gap-2 px-4 rounded-sm border",
-        "font-sans text-[14px] font-semibold",
-        "transition-[background-color,color,border-color,opacity] duration-150",
+        "sw-press inline-flex h-10 items-center justify-center gap-2 px-4 rounded-sm border",
+        "font-sans text-[13px] font-semibold",
+        "transition-[background-color,color,border-color,opacity,transform] duration-150",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         "focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1",
-        uppercase && "uppercase tracking-[0.04em]",
+        uppercase && "uppercase tracking-[0.06em]",
         VARIANTS[variant],
         className,
       )}

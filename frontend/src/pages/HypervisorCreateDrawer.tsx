@@ -36,27 +36,27 @@ const DEFAULT_PORT: Record<HypervisorType, string> = {
 };
 
 const HOST_HINT: Partial<Record<HypervisorType, string>> = {
-  vmware_workstation: "chemin absolu vers vmrun.exe",
+  vmware_workstation: "absolute path to vmrun.exe",
   kvm: "qemu+ssh://user@host/system",
-  hyper_v: "hostname Windows (WinRM)",
-  proxmox: "https://host (8006 par défaut)",
+  hyper_v: "Windows hostname (WinRM)",
+  proxmox: "https://host (8006 default)",
   ovirt: "https://manager.example.com/ovirt-engine/api",
 };
 
 const createSchema = z.object({
-  name: z.string().min(1, "Nom requis").max(255),
+  name: z.string().min(1, "name required").max(255),
   description: z.string().max(1000).optional().or(z.literal("")),
   type: z.enum(HYPERVISOR_TYPES),
-  host: z.string().min(1, "Host requis").max(255),
+  host: z.string().min(1, "host required").max(255),
   port: z
     .string()
-    .max(5, "Port invalide")
+    .max(5, "invalid port")
     .refine(
       (v) => v === "" || (/^\d+$/.test(v) && +v >= 1 && +v <= 65535),
-      "Port invalide",
+      "invalid port",
     ),
-  username: z.string().min(1, "Username requis").max(255),
-  password: z.string().min(1, "Password requis"),
+  username: z.string().min(1, "username required").max(255),
+  password: z.string().min(1, "password required"),
   verify_ssl: z.boolean(),
 });
 
@@ -137,9 +137,9 @@ export function HypervisorCreateDrawer({
     onError: (err) => {
       setTestResult({
         success: false,
-        message: extractDetail(err, "Erreur lors du test"),
+        message: extractDetail(err, "test failed"),
         vms_count: null,
-        error: extractDetail(err, "Erreur réseau"),
+        error: extractDetail(err, "network error"),
       });
     },
   });
@@ -157,13 +157,13 @@ export function HypervisorCreateDrawer({
         verify_ssl: values.verify_ssl,
       }),
     onSuccess: (created) => {
-      toast.success(`Hyperviseur «${created.name}» créé`);
+      toast.success(`hypervisor ${created.name} created`);
       queryClient.invalidateQueries({ queryKey: ["hypervisors"] });
       queryClient.invalidateQueries({ queryKey: ["stats", "hypervisors"] });
       onClose();
     },
     onError: (err) => {
-      toast.error(extractDetail(err, "Échec de la création"));
+      toast.error(extractDetail(err, "creation failed"));
     },
   });
 
@@ -178,11 +178,11 @@ export function HypervisorCreateDrawer({
     <SlideOver
       open={open}
       onClose={onClose}
-      title="nouvel hyperviseur"
+      title="new hypervisor"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} type="button">
-            annuler
+            cancel
           </Button>
           <Button
             type="submit"
@@ -191,7 +191,7 @@ export function HypervisorCreateDrawer({
             loading={isSubmitting || createMutation.isPending}
             disabled={!canSubmit}
           >
-            créer
+            create
           </Button>
         </>
       }
@@ -202,7 +202,7 @@ export function HypervisorCreateDrawer({
         noValidate
         className="space-y-5"
       >
-        <Field label="nom" id="hv-name" error={errors.name?.message}>
+        <Field label="name" id="hv-name" error={errors.name?.message}>
           <Input
             id="hv-name"
             autoFocus
@@ -262,7 +262,7 @@ export function HypervisorCreateDrawer({
         <label className="flex items-center gap-2 cursor-pointer">
           <Checkbox {...register("verify_ssl")} />
           <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
-            vérifier le certificat ssl
+            verify ssl certificate
           </span>
         </label>
 
@@ -287,7 +287,7 @@ export function HypervisorCreateDrawer({
             leadingIcon={<Icon icon={Plug} size={16} />}
             className="w-full"
           >
-            tester la connexion
+            test connection
           </Button>
           {testResult && <TestResultBanner result={testResult} />}
         </div>
@@ -350,7 +350,7 @@ function TestResultBanner({ result }: { result: TestConnectionResult }) {
       </div>
       {result.success && result.vms_count !== null && (
         <div className="font-mono text-[10px] text-ink-muted pl-6">
-          {result.vms_count} vms détectées
+          {result.vms_count} vms detected
         </div>
       )}
       {!result.success && result.error && (

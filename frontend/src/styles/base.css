@@ -23,7 +23,6 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
-  font-feature-settings: "ss01", "cv11";
 }
 
 ::selection {
@@ -53,14 +52,97 @@ body {
   background-size: 14px 14px;
 }
 
+/* === Signature: fixed grain overlay (pointer-events-none) === */
+.sw-grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 160px 160px;
+}
+
+/* Soft hairline grid visible behind hero panels */
+.sw-hairlines {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 40%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 40%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+/* === Keyframes === */
 @keyframes shiftwise-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.92); }
 }
 
 @keyframes shiftwise-topbar {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
+}
+
+@keyframes shiftwise-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes shiftwise-mount {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shiftwise-fade {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes shiftwise-marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes shiftwise-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* === Utility classes === */
+.sw-mount {
+  animation: shiftwise-mount var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--sw-i, 0) * 40ms);
+}
+
+.sw-skel {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+}
+.sw-skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--ink) 6%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shiftwise-shimmer 1.6s linear infinite;
+}
+
+.sw-caret::after {
+  content: "_";
+  margin-left: 1px;
+  animation: shiftwise-blink 1s steps(2, end) infinite;
+}
+
+/* Press feedback for interactive primitives */
+.sw-press:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -71,4 +153,5 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  .sw-grain { display: none; }
 }

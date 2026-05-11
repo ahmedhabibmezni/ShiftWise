@@ -38,13 +38,13 @@ export const handlers = {
   ),
   loginInvalidCredentials: http.post("/api/v1/auth/login", () =>
     HttpResponse.json(
-      { detail: "Email ou mot de passe incorrect" },
+      { detail: "Invalid email or password" },
       { status: 401 },
     ),
   ),
   loginInactive: http.post("/api/v1/auth/login", () =>
     HttpResponse.json(
-      { detail: "Compte inactif. Contactez l'administrateur." },
+      { detail: "Account inactive. Contact the administrator." },
       { status: 403 },
     ),
   ),

@@ -1,42 +1,77 @@
 :root[data-theme="dark"] {
-  --bg: #0f1115;
-  --bg-elev: #181b22;
-  --bg-elev-2: #20242c;
+  --bg: #0d0f13;
+  --bg-elev: #14171d;
+  --bg-elev-2: #1c2028;
+  --bg-inset: #090b0e;
   --ink: #f4f2ec;
-  --ink-muted: #8c8b85;
-  --line: #2a2d34;
-  --line-strong: #3a3d45;
-  --signal: #e8551f;
-  --signal-ink: #ffffff;
+  --ink-strong: #ffffff;
+  --ink-muted: #8b8a83;
+  --ink-faint: #56554f;
+  --line: #232730;
+  --line-strong: #353a44;
+  --signal: #00b5d6;
+  --signal-soft: #34cef0;
+  --signal-ink: #0d0f13;
   --info: #2b4a6f;
+  --info-soft: #4972a5;
   --info-ink: #f4f2ec;
   --ok: #3faf5f;
+  --ok-soft: #5cd882;
   --warn: #d4a017;
+  --warn-soft: #f0bd3a;
   --err: #d04030;
+  --err-soft: #ec6b5d;
 
-  --tint-pct: 0.12;
+  --tint-pct: 0.14;
+  --shadow-elev: 0 1px 0 rgba(255, 255, 255, 0.02), 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  --shadow-hover: 0 1px 0 rgba(255, 255, 255, 0.03), 0 18px 40px -16px rgba(0, 0, 0, 0.7);
+  --grain-opacity: 0.035;
+  --grain-blend: screen;
 }
 
 :root[data-theme="light"] {
-  --bg: #f2efe6;
-  --bg-elev: #e6e1d2;
-  --bg-elev-2: #dcd6c2;
-  --ink: #14110d;
-  --ink-muted: #6b6557;
-  --line: #14110d;
+  --bg: #ecede5;
+  --bg-elev: #e3e5db;
+  --bg-elev-2: #cfd2c5;
+  --bg-inset: #f3f4ed;
+  --ink: #13150f;
+  --ink-strong: #000000;
+  --ink-muted: #575a51;
+  --ink-faint: #90948a;
+  --line: #13150f;
   --line-strong: #000000;
-  --signal: #d6541c;
+  --signal: #017d9c;
+  --signal-soft: #0494b6;
   --signal-ink: #ffffff;
   --info: #244062;
-  --info-ink: #f2efe6;
+  --info-soft: #3d6293;
+  --info-ink: #ecede5;
   --ok: #1f7a3a;
+  --ok-soft: #2fa050;
   --warn: #b8860b;
+  --warn-soft: #d8a52a;
   --err: #b53024;
+  --err-soft: #d04a3c;
 
-  --tint-pct: 0.08;
+  --tint-pct: 0.1;
+  --shadow-elev: 0 1px 0 rgba(0, 0, 0, 0.04), 0 12px 28px -18px rgba(19, 21, 15, 0.25);
+  --shadow-hover: 0 1px 0 rgba(0, 0, 0, 0.06), 0 18px 36px -18px rgba(19, 21, 15, 0.35);
+  --grain-opacity: 0.06;
+  --grain-blend: multiply;
 }
 
 :root {
-  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
+
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-cmdk: 70;
 }

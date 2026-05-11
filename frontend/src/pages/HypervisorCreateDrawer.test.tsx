@@ -25,8 +25,8 @@ function renderDrawer() {
 }
 
 async function fillBaseFields(user: ReturnType<typeof userEvent.setup>) {
-  await user.clear(screen.getByLabelText(/^nom$/i));
-  await user.type(screen.getByLabelText(/^nom$/i), "lab-kvm");
+  await user.clear(screen.getByLabelText(/^name$/i));
+  await user.type(screen.getByLabelText(/^name$/i), "lab-kvm");
   await user.clear(screen.getByLabelText(/^host$/i));
   await user.type(
     screen.getByLabelText(/^host$/i),
@@ -45,7 +45,7 @@ describe("HypervisorCreateDrawer", () => {
         testCalls += 1;
         return HttpResponse.json({
           success: true,
-          message: "Connexion réussie · 12 VMs détectées",
+          message: "Connection successful · 12 VMs detected",
           vms_count: 12,
           error: null,
         });
@@ -55,12 +55,12 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     renderDrawer();
     await fillBaseFields(user);
-    await user.click(screen.getByRole("button", { name: /tester la connexion/i }));
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
 
     await waitFor(() => expect(testCalls).toBe(1));
     const status = await screen.findByRole("status");
-    expect(within(status).getByText(/connexion réussie/i)).toBeInTheDocument();
-    expect(within(status).getByText(/^12 vms détectées$/i)).toBeInTheDocument();
+    expect(within(status).getByText(/connection successful/i)).toBeInTheDocument();
+    expect(within(status).getByText(/^12 vms detected$/i)).toBeInTheDocument();
   });
 
   it("surfaces the backend error message on test-connection failure", async () => {
@@ -68,7 +68,7 @@ describe("HypervisorCreateDrawer", () => {
       http.post("/api/v1/hypervisors/test-connection", () =>
         HttpResponse.json({
           success: false,
-          message: "Échec de la connexion",
+          message: "Connection failed",
           vms_count: null,
           error: "SSH KVM connection failed: timed out",
         }),
@@ -78,9 +78,9 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     renderDrawer();
     await fillBaseFields(user);
-    await user.click(screen.getByRole("button", { name: /tester la connexion/i }));
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
 
-    expect(await screen.findByText(/échec de la connexion/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^Connection failed$/i)).toBeInTheDocument();
     expect(screen.getByText(/ssh kvm connection failed/i)).toBeInTheDocument();
   });
 
@@ -122,7 +122,7 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     const { onClose } = renderDrawer();
     await fillBaseFields(user);
-    await user.click(screen.getByRole("button", { name: /^créer$/i }));
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(createPayload).toMatchObject({
@@ -138,12 +138,12 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     renderDrawer();
 
-    await user.click(screen.getByRole("button", { name: /^créer$/i }));
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
 
-    expect(await screen.findByText(/nom requis/i)).toBeInTheDocument();
-    expect(screen.getByText(/host requis/i)).toBeInTheDocument();
-    expect(screen.getByText(/username requis/i)).toBeInTheDocument();
-    expect(screen.getByText(/password requis/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^name required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^host required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^username required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^password required$/i)).toBeInTheDocument();
   });
 
   it("rewrites the default port when the type changes", async () => {

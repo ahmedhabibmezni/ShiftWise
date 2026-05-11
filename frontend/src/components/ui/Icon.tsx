@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-type Size = 16 | 20;
+type Size = 10 | 11 | 12 | 14 | 16 | 18 | 20 | 24;
 
 export function Icon({
   icon: I,
