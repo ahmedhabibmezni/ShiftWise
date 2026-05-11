@@ -79,14 +79,25 @@ api.interceptors.response.use(
   },
 );
 
-export async function bootstrapAuth(): Promise<boolean> {
-  // Called once at app startup. Tries to silently rehydrate the session
-  // from the refresh cookie. Returns true if we end up authenticated.
-  try {
-    await runRefresh();
-    return true;
-  } catch {
-    clearSession();
-    return false;
+// Module-level cache for the bootstrap result. React StrictMode mounts
+// effects twice in dev, which without this guard would fire two parallel
+// /auth/refresh requests. The second one finds the first one's jti
+// already consumed, hits the reuse-detection branch in the store and
+// wipes the entire family — leaving the user logged out on the next
+// page reload. Caching the promise turns the second call into a no-op.
+let bootstrapPromise: Promise<boolean> | null = null;
+
+export function bootstrapAuth(): Promise<boolean> {
+  if (bootstrapPromise === null) {
+    bootstrapPromise = (async () => {
+      try {
+        await runRefresh();
+        return true;
+      } catch {
+        clearSession();
+        return false;
+      }
+    })();
   }
+  return bootstrapPromise;
 }
