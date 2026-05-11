@@ -29,6 +29,8 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        cookieDomainRewrite: "localhost",
+        cookiePathRewrite: { "/api/v1/auth": "/api/v1/auth" },
       },
     },
   },
