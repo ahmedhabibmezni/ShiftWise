@@ -1,8 +1,10 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 import Styleguide from "@/pages/Styleguide";
 import Login from "@/pages/Login";
+import Dashboard from "@/pages/Dashboard";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
+import { AppLayout } from "@/app/AppLayout";
 
 function NotFound() {
   return (
@@ -13,8 +15,8 @@ function NotFound() {
         </div>
         <p className="mt-2 text-[13px]">
           Cette page n'est pas encore disponible. Voir{" "}
-          <a href="/styleguide" className="text-info underline">
-            /styleguide
+          <a href="/" className="text-info underline">
+            /
           </a>
           .
         </p>
@@ -31,8 +33,13 @@ export const router = createBrowserRouter([
   {
     element: <ProtectedRoute />,
     children: [
-      { path: "/", element: <Navigate to="/styleguide" replace /> },
+      // Styleguide ships its own shell (it is a kitchen-sink demo) and must
+      // sit outside AppLayout to avoid a double Sidebar/Header/Footer.
       { path: "/styleguide", element: <Styleguide /> },
+      {
+        element: <AppLayout />,
+        children: [{ path: "/", element: <Dashboard /> }],
+      },
     ],
   },
   { path: "*", element: <NotFound /> },
