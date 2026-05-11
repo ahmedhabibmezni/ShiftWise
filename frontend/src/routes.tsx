@@ -3,6 +3,7 @@ import Styleguide from "@/pages/Styleguide";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Hypervisors from "@/pages/Hypervisors";
+import Vms from "@/pages/Vms";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
 import { AppLayout } from "@/app/AppLayout";
@@ -42,6 +43,7 @@ export const router = createBrowserRouter([
         children: [
           { path: "/", element: <Dashboard /> },
           { path: "/hypervisors", element: <Hypervisors /> },
+          { path: "/vms", element: <Vms /> },
         ],
       },
     ],

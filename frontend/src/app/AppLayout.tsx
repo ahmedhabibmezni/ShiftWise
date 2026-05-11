@@ -7,6 +7,7 @@ import { Footer } from "@/components/shell/Footer";
 const ROUTE_TITLES: Record<string, string> = {
   "/": "overview",
   "/hypervisors": "hypervisors",
+  "/vms": "virtual machines",
   "/styleguide": "styleguide",
 };
 

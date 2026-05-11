@@ -1,6 +1,7 @@
 import {
   Home,
   Server,
+  Monitor,
   ArrowLeftRight,
   Network,
   AlertTriangle,
@@ -27,6 +28,7 @@ type NavItem = {
 const ITEMS: NavItem[] = [
   { id: "overview", label: "overview", icon: Home, to: "/" },
   { id: "hypervisors", label: "hypervisors", icon: Server, to: "/hypervisors" },
+  { id: "vms", label: "vms", icon: Monitor, to: "/vms" },
   { id: "migrations", label: "migrations", icon: ArrowLeftRight },
   { id: "infrastructure", label: "infrastructure", icon: Network },
   { id: "alerts", label: "alerts", icon: AlertTriangle, badge: 12 },
