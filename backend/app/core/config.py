@@ -110,8 +110,32 @@ class Settings(BaseSettings):
     # Security & JWT
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-only-secret-not-for-production")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Refresh token cookie (HttpOnly, Secure, SameSite=Strict).
+    # COOKIE_DOMAIN reste vide en dev (host == "localhost" suffit). En prod,
+    # remplir avec le registrable domain partagé entre frontend et backend,
+    # ex. ".migration.nextstep-it.com" pour autoriser le cookie sur les deux
+    # sous-domaines. COOKIE_SECURE doit etre True en prod (cookie envoyé
+    # uniquement sur HTTPS) ; mis à False en dev pour autoriser http://localhost.
+    REFRESH_COOKIE_NAME: str = "shiftwise_refresh"
+    REFRESH_COOKIE_PATH: str = "/api/v1/auth"
+    REFRESH_COOKIE_SAMESITE: str = "strict"
+    REFRESH_COOKIE_SECURE: bool = False
+    REFRESH_COOKIE_DOMAIN: str | None = None
+
+    @field_validator("REFRESH_COOKIE_SAMESITE")
+    @classmethod
+    def validate_cookie_samesite(cls, v: str) -> str:
+        """SameSite must be one of strict|lax|none (lowercased)."""
+        allowed = {"strict", "lax", "none"}
+        v_low = v.lower()
+        if v_low not in allowed:
+            raise ValueError(
+                f"REFRESH_COOKIE_SAMESITE must be one of: {', '.join(sorted(allowed))}"
+            )
+        return v_low
 
     # CORS - Origins autorisées pour les requêtes cross-origin
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
@@ -235,6 +259,11 @@ class Settings(BaseSettings):
     # ============================================
     # CELERY / REDIS (orchestration des migrations)
     # ============================================
+
+    # Redis dédié au store des refresh tokens (familles, détection de reuse).
+    # DB logique distincte de Celery pour ne pas mélanger keyspaces, mais
+    # même serveur en pratique.
+    REDIS_AUTH_URL: str = "redis://localhost:6379/1"
 
     # URL du broker Redis. Format : redis://[:password@]host:port/db
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"

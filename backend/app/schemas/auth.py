@@ -35,20 +35,16 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     """
-    Schéma pour la réponse contenant les tokens.
+    Réponse contenant l'access token.
 
-    Retourné après login réussi ou refresh token.
+    Le refresh token n'est PAS retourné dans le body : il est posé en cookie
+    HttpOnly / Secure / SameSite=Strict par /login et /refresh. Le client
+    JavaScript n'y a jamais accès, ce qui élimine la classe de vols par XSS.
     """
     access_token: str = Field(
         ...,
         description="Token JWT d'accès (courte durée)",
         json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
-    )
-
-    refresh_token: str = Field(
-        ...,
-        description="Token JWT de refresh (longue durée)",
-        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.."}
     )
 
     token_type: str = Field(
@@ -58,21 +54,8 @@ class TokenResponse(BaseModel):
 
     expires_in: int = Field(
         ...,
-        description="Durée de validité du access_token en secondes",
-        json_schema_extra={"example": 1800}
-    )
-
-
-class RefreshTokenRequest(BaseModel):
-    """
-    Schéma pour la requête de refresh du token.
-
-    Utilisé lors de POST /api/v1/auth/refresh
-    """
-    refresh_token: str = Field(
-        ...,
-        description="Token de refresh à utiliser pour obtenir un nouveau access_token",
-        json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
+        description="Durée de validité de l'access_token en secondes",
+        json_schema_extra={"example": 900}
     )
 
 
@@ -165,22 +148,10 @@ class TokenPayload(BaseModel):
     """
     Schéma représentant le payload d'un token JWT décodé.
 
-    Utilisé en interne pour valider les tokens.
+    Les champs `fam` et `jti` ne sont présents que sur les refresh tokens.
     """
-    sub: str = Field(
-        ...,
-        description="Subject du token (user_id)",
-        json_schema_extra={"example": "123"}
-    )
-
-    exp: int = Field(
-        ...,
-        description="Timestamp d'expiration",
-        json_schema_extra={"example": 1234567890}
-    )
-
-    type: str = Field(
-        ...,
-        description="Type de token (access ou refresh)",
-        json_schema_extra={"example": "access"}
-    )
+    sub: str = Field(..., description="Subject (user_id)")
+    exp: int = Field(..., description="Timestamp d'expiration")
+    type: str = Field(..., description="access | refresh")
+    fam: str | None = Field(default=None, description="Family id (refresh only)")
+    jti: str | None = Field(default=None, description="Token id (refresh only)")

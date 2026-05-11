@@ -1,38 +1,48 @@
 """
-ShiftWise Authentication Routes
+ShiftWise Authentication Routes.
 
-Routes pour l'authentification et la gestion des tokens :
-- Login (email + password)
-- Refresh token
-- Changement de mot de passe
-- Récupération du profil utilisateur
+Modèle :
+- /login : pose un refresh token en cookie HttpOnly + retourne l'access dans
+  le body. Crée une famille refresh côté Redis.
+- /refresh : lit le cookie, valide (family_id, jti) contre Redis, rotate,
+  repose un nouveau cookie. Détecte le reuse (token rejoué après rotation)
+  et révoque toute la famille dans ce cas.
+- /logout : efface le cookie + supprime la famille du store.
+- /me, /change-password, /verify : inchangés (utilisent l'access token).
 
-Toutes les routes retournent des réponses JSON standardisées.
+Stockage des refresh tokens : voir app.core.refresh_token_store.
 """
 
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.refresh_token_store import (
+    RotateOk,
+    RotateReuseDetected,
+    RotateUnknown,
+    create_family,
+    revoke_family,
+    rotate,
+)
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    verify_token_type,
     get_password_hash,
+    validate_password_strength,
     verify_password,
-    validate_password_strength
+    verify_token_type,
 )
 from app.schemas.auth import (
-    LoginRequest,
-    TokenResponse,
-    RefreshTokenRequest,
     ChangePasswordRequest,
-    MessageResponse
+    LoginRequest,
+    MessageResponse,
+    TokenResponse,
 )
 from app.schemas.user import UserReadWithPermissions
 from app.crud import user as crud_user
@@ -41,341 +51,240 @@ from app.models.user import User
 
 router = APIRouter()
 
+CREDENTIALS_INVALID_MSG = "Email ou mot de passe incorrect"
+ACCOUNT_INACTIVE_MSG = "Compte inactif. Contactez l'administrateur."
+REFRESH_INVALID_MSG = "Refresh token invalide ou expiré"
+
+
+def _set_refresh_cookie(response: Response, refresh_jwt: str) -> None:
+    """Attach the refresh cookie with hardened attributes."""
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value=refresh_jwt,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
+        path=settings.REFRESH_COOKIE_PATH,
+        domain=settings.REFRESH_COOKIE_DOMAIN,
+        secure=settings.REFRESH_COOKIE_SECURE,
+        httponly=True,
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        path=settings.REFRESH_COOKIE_PATH,
+        domain=settings.REFRESH_COOKIE_DOMAIN,
+    )
+
+
+def _issue_access_token(user_id: int) -> TokenResponse:
+    access = create_access_token(
+        subject=str(user_id),
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    return TokenResponse(
+        access_token=access,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+def _mint_refresh(user_id: int) -> str:
+    """Create a new refresh family and return the signed JWT."""
+    family_id, jti = create_family(user_id)
+    return create_refresh_token(
+        subject=str(user_id),
+        family_id=family_id,
+        jti=jti,
+        expires_delta=timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+
+
+def _rotate_refresh(family_id: str, jti: str, user_id: int) -> str:
+    """Rotate the refresh JWT inside an existing family."""
+    result = rotate(family_id, jti, user_id)
+    if isinstance(result, RotateReuseDetected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session révoquée : token rejoué détecté",
+        )
+    if isinstance(result, RotateUnknown):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=REFRESH_INVALID_MSG,
+        )
+    assert isinstance(result, RotateOk)
+    return create_refresh_token(
+        subject=str(user_id),
+        family_id=family_id,
+        jti=result.new_jti,
+        expires_delta=timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+
 
 @router.post("/login", response_model=TokenResponse)
 def login(
-        login_data: LoginRequest,
-        db: Annotated[Session, Depends(get_db)]
+    login_data: LoginRequest,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
-    Authentifie un utilisateur et retourne les tokens JWT.
-
-    **Process :**
-    1. Vérifie email + mot de passe
-    2. Génère access_token (courte durée)
-    3. Génère refresh_token (longue durée)
-
-    **Returns :**
-    - access_token : Pour les requêtes API (30 min)
-    - refresh_token : Pour renouveler l'access_token (7 jours)
-    - token_type : "bearer"
-    - expires_in : Durée de validité en secondes
-
-    **Errors :**
-    - 401 : Email ou mot de passe incorrect
-    - 403 : Compte inactif
-
-    **Example :**
-    ```json
-    POST /api/v1/auth/login
-    {
-        "email": "ahmed@nextstep.tn",
-        "password": "SecurePassword123!"
-    }
-    ```
+    Authentifie l'utilisateur et émet la paire (access body + refresh cookie).
     """
-    # Authentifier l'utilisateur
     user = crud_user.authenticate_user(
         db,
         email=login_data.email,
-        password=login_data.password
+        password=login_data.password,
     )
-
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou mot de passe incorrect",
+            detail=CREDENTIALS_INVALID_MSG,
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    # Vérifier que le compte est actif
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte inactif. Contactez l'administrateur."
+            detail=ACCOUNT_INACTIVE_MSG,
         )
 
-    # Générer les tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        subject=str(user.id),
-        expires_delta=access_token_expires
-    )
-
-    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    refresh_token = create_refresh_token(
-        subject=str(user.id),
-        expires_delta=refresh_token_expires
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_type="bearer",
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60  # En secondes
-    )
+    refresh_jwt = _mint_refresh(user.id)
+    _set_refresh_cookie(response, refresh_jwt)
+    return _issue_access_token(user.id)
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh_token(
-        refresh_data: RefreshTokenRequest,
-        db: Annotated[Session, Depends(get_db)]
+def refresh_token_endpoint(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    refresh_cookie: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
     """
-    Renouvelle l'access_token en utilisant le refresh_token.
+    Renouvelle l'access token via le cookie refresh HttpOnly.
 
-    **Process :**
-    1. Valide le refresh_token
-    2. Vérifie que l'utilisateur existe et est actif
-    3. Génère un nouvel access_token
-
-    **Returns :**
-    - Nouveaux tokens (access + refresh)
-
-    **Errors :**
-    - 401 : Refresh token invalide ou expiré
-    - 403 : Compte inactif
-    - 404 : Utilisateur non trouvé
-
-    **Example :**
-    ```json
-    POST /api/v1/auth/refresh
-    {
-        "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-    }
-    ```
+    Valide la famille/jti contre Redis, détecte le reuse, rotate.
     """
-    # Décoder le refresh token
-    payload = decode_token(refresh_data.refresh_token)
-
-    if payload is None:
+    if not refresh_cookie:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token invalide ou expiré",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail=REFRESH_INVALID_MSG,
         )
 
-    # Vérifier que c'est bien un refresh token
-    if not verify_token_type(payload, "refresh"):
+    payload = decode_token(refresh_cookie)
+    if payload is None or not verify_token_type(payload, "refresh"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Type de token invalide",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail=REFRESH_INVALID_MSG,
         )
 
-    # Récupérer l'utilisateur
-    user_id = payload.get("sub")
-    if user_id is None:
+    user_id_str = payload.get("sub")
+    family_id = payload.get("fam")
+    jti = payload.get("jti")
+    if not user_id_str or not family_id or not jti:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token invalide",
+            detail=REFRESH_INVALID_MSG,
         )
 
-    user = crud_user.get_user(db, user_id=int(user_id))
+    try:
+        user_id = int(user_id_str)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=REFRESH_INVALID_MSG,
+        )
 
+    user = crud_user.get_user(db, user_id=user_id)
     if not user:
+        # User deleted between refreshes — wipe the family preemptively.
+        revoke_family(family_id)
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=REFRESH_INVALID_MSG,
         )
-
-    # Vérifier que le compte est actif
     if not user.is_active:
+        revoke_family(family_id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte inactif"
+            detail=ACCOUNT_INACTIVE_MSG,
         )
 
-    # Générer de nouveaux tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        subject=str(user.id),
-        expires_delta=access_token_expires
-    )
+    new_refresh_jwt = _rotate_refresh(family_id, jti, user_id)
+    _set_refresh_cookie(response, new_refresh_jwt)
+    return _issue_access_token(user_id)
 
-    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    new_refresh_token = create_refresh_token(
-        subject=str(user.id),
-        expires_delta=refresh_token_expires
-    )
 
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=new_refresh_token,
-        token_type="bearer",
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    )
+@router.post("/logout", response_model=MessageResponse)
+def logout(
+    response: Response,
+    refresh_cookie: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
+):
+    """
+    Déconnexion : efface le cookie et révoque la famille refresh.
+
+    Volontairement non authentifié (pas de dépendance sur l'access token) :
+    permet un logout cohérent même si l'access est déjà expiré.
+    """
+    if refresh_cookie:
+        payload = decode_token(refresh_cookie)
+        if payload and verify_token_type(payload, "refresh"):
+            family_id = payload.get("fam")
+            if family_id:
+                revoke_family(family_id)
+
+    _clear_refresh_cookie(response)
+    return MessageResponse(message="Déconnexion réussie", success=True)
 
 
 @router.get("/me", response_model=UserReadWithPermissions)
 def get_current_user_info(
-        current_user: Annotated[User, Depends(get_current_user)],
-        db: Annotated[Session, Depends(get_db)]
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """
-    Récupère les informations de l'utilisateur connecté.
-
-    **Returns :**
-    - Profil utilisateur complet
-    - Rôles assignés
-    - Permissions calculées
-
-    **Requires :**
-    - Token JWT valide dans l'en-tête Authorization
-
-    **Example :**
-    ```
-    GET /api/v1/auth/me
-    Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-    ```
-
-    **Response :**
-    ```json
-    {
-        "id": 1,
-        "email": "ahmed@nextstep.tn",
-        "username": "ahmedm",
-        "full_name": "Ahmed MEZNI",
-        "tenant_id": "nextstep",
-        "roles": [
-            {
-                "id": 1,
-                "name": "admin",
-                "permissions": {"vms": ["*"], "hypervisors": ["*"]}
-            }
-        ],
-        "permissions": {
-            "vms": ["read", "create", "update", "delete"],
-            "hypervisors": ["read", "create", "update", "delete"]
-        }
-    }
-    ```
-    """
-    # Construire la réponse avec permissions
+    """Récupère les informations de l'utilisateur connecté."""
     user_data = UserReadWithPermissions.model_validate(current_user)
     user_data.permissions = current_user.get_all_permissions()
-
     return user_data
 
 
 @router.post("/change-password", response_model=MessageResponse)
 def change_password(
-        password_data: ChangePasswordRequest,
-        current_user: Annotated[User, Depends(get_current_user)],
-        db: Annotated[Session, Depends(get_db)]
+    password_data: ChangePasswordRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ):
-    """
-    Change le mot de passe de l'utilisateur connecté.
-
-    **Process :**
-    1. Vérifie le mot de passe actuel
-    2. Hash le nouveau mot de passe
-    3. Met à jour en base de données
-
-    **Returns :**
-    - Message de confirmation
-
-    **Errors :**
-    - 400 : Mot de passe actuel incorrect
-
-    **Example :**
-    ```json
-    POST /api/v1/auth/change-password
-    Authorization: Bearer <token>
-    {
-        "current_password": "OldPassword123!",
-        "new_password": "NewSecurePassword123!"
-    }
-    ```
-    """
-    # Vérifier le mot de passe actuel
+    """Change le mot de passe de l'utilisateur connecté."""
     if not verify_password(password_data.current_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mot de passe actuel incorrect"
+            detail="Mot de passe actuel incorrect",
         )
-
-    # Vérifier que le nouveau mot de passe est différent
     if password_data.current_password == password_data.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le nouveau mot de passe doit être différent de l'ancien"
+            detail="Le nouveau mot de passe doit être différent de l'ancien",
         )
 
-    # Valider la force du nouveau mot de passe
     is_valid, error_msg = validate_password_strength(password_data.new_password)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_msg
+            detail=error_msg,
         )
 
-    # Hasher et mettre à jour le mot de passe
     current_user.hashed_password = get_password_hash(password_data.new_password)
     db.commit()
-
     return MessageResponse(
         message="Mot de passe modifié avec succès",
-        success=True
+        success=True,
     )
 
 
-@router.post("/logout", response_model=MessageResponse)
-def logout(
-        current_user: Annotated[User, Depends(get_current_user)]
-):
-    """
-    Déconnexion de l'utilisateur.
-
-    **Note :** Avec JWT, la déconnexion côté serveur n'est pas nécessaire.
-    Le client doit simplement supprimer ses tokens.
-
-    Cette route existe pour la cohérence de l'API et pourrait être étendue
-    pour ajouter le token à une blacklist si nécessaire.
-
-    **Returns :**
-    - Message de confirmation
-
-    **Example :**
-    ```
-    POST /api/v1/auth/logout
-    Authorization: Bearer <token>
-    ```
-    """
-    return MessageResponse(
-        message="Déconnexion réussie. Supprimez vos tokens côté client.",
-        success=True
-    )
-
-
-@router.get("/verify", response_model=MessageResponse)
-def verify_token(
-        current_user: Annotated[User, Depends(get_current_user)]
-):
-    """
-    Vérifie la validité du token JWT.
-
-    **Returns :**
-    - Message de confirmation si token valide
-
-    **Errors :**
-    - 401 : Token invalide ou expiré
-
-    **Example :**
-    ```
-    GET /api/v1/auth/verify
-    Authorization: Bearer <token>
-    ```
-
-    **Response :**
-    ```json
-    {
-        "message": "Token valide",
-        "success": true
-    }
-    ```
-    """
-    return MessageResponse(
-        message="Token valide",
-        success=True
-    )
+@router.get(
+    "/verify",
+    response_model=MessageResponse,
+    dependencies=[Depends(get_current_user)],
+)
+def verify_token():
+    """Vérifie la validité de l'access token courant."""
+    return MessageResponse(message="Token valide", success=True)

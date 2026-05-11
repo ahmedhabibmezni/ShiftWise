@@ -133,17 +133,22 @@ def create_access_token(
 
 def create_refresh_token(
         subject: str,
+        family_id: str,
+        jti: str,
         expires_delta: timedelta | None = None
 ) -> str:
     """
     Crée un token JWT de refresh.
 
-    Le refresh token permet d'obtenir un nouveau access token
-    sans redemander les credentials. Il a une durée de vie plus longue.
+    Le refresh token embarque (family_id, jti) pour permettre la détection
+    de reuse côté serveur via le store Redis (voir refresh_token_store).
+    L'absence de ces deux claims rend le token inexploitable.
 
     Args:
-        subject: Identifiant de l'utilisateur (généralement user_id)
-        expires_delta: Durée de validité du token (optionnel)
+        subject: Identifiant de l'utilisateur (user_id)
+        family_id: Identifiant de la famille de refresh (uuid hex)
+        jti: Identifiant unique du token dans la famille (uuid hex)
+        expires_delta: Durée de validité (optionnel)
 
     Returns:
         str: Refresh token JWT encodé
@@ -158,7 +163,9 @@ def create_refresh_token(
     to_encode = {
         "exp": expire,
         "sub": str(subject),
-        "type": "refresh"  # Type refresh pour distinguer
+        "type": "refresh",
+        "fam": family_id,
+        "jti": jti,
     }
 
     encoded_jwt = jwt.encode(

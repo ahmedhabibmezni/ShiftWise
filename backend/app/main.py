@@ -78,13 +78,17 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-# Configuration CORS
+# Configuration CORS — listes explicites (pas de wildcard).
+# allow_credentials=True est obligatoire pour que le cookie refresh circule
+# en cross-origin (dev : 5173 -> 8000 ; prod : selon déploiement).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
+    allow_origins=[str(origin).rstrip("/") for origin in settings.BACKEND_CORS_ORIGINS],
     allow_credentials=True,
-    allow_methods=["*"],  # Permet tous les HTTP methods
-    allow_headers=["*"],  # Permet tous les headers
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    expose_headers=[],
+    max_age=600,
 )
 
 
