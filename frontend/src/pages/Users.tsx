@@ -27,6 +27,7 @@ import { listUsers, type UserListItem } from "@/api/users";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { UserCreateDrawer } from "./UserCreateDrawer";
+import { UserDetailDrawer } from "./UserDetailDrawer";
 
 const PAGE_SIZE = 25;
 const REFETCH_INTERVAL_MS = 60_000;
@@ -38,6 +39,7 @@ export default function Users() {
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const canCreate = useHasPermission("users", "create");
 
   const params = useMemo(
@@ -121,6 +123,7 @@ export default function Users() {
           isError={listQuery.isError}
           canCreate={canCreate}
           onCreate={() => setCreateOpen(true)}
+          onRowClick={(id) => setSelectedId(id)}
         />
       </Panel>
 
@@ -135,6 +138,10 @@ export default function Users() {
       <UserCreateDrawer
         open={createOpen}
         onClose={() => setCreateOpen(false)}
+      />
+      <UserDetailDrawer
+        id={selectedId}
+        onClose={() => setSelectedId(null)}
       />
     </div>
   );
@@ -272,12 +279,14 @@ function UsersTable({
   isError,
   canCreate,
   onCreate,
+  onRowClick,
 }: {
   items: UserListItem[];
   isLoading: boolean;
   isError: boolean;
   canCreate: boolean;
   onCreate: () => void;
+  onRowClick: (id: number) => void;
 }) {
   if (isError) {
     return (
@@ -340,8 +349,16 @@ function UsersTable({
       </THead>
       <tbody>
         {items.map((u) => (
-          <TR key={u.id}>
-            <TD mono>{u.username}</TD>
+          <TR key={u.id} interactive>
+            <TD mono>
+              <button
+                type="button"
+                onClick={() => onRowClick(u.id)}
+                className="text-left hover:text-signal transition-colors duration-150 w-full"
+              >
+                {u.username}
+              </button>
+            </TD>
             <TD>{u.email}</TD>
             <TD muted>{u.full_name || "—"}</TD>
             <TD mono muted>{u.tenant_id}</TD>

@@ -1,13 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
+  Pencil,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Server,
   ServerOff,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -15,10 +18,12 @@ import { AxiosError } from "axios";
 import { Badge } from "@/components/ui/Badge";
 import type { BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { Textarea } from "@/components/ui/Textarea";
 import { TD, TH, THead, TR } from "@/components/ui/Table";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -34,13 +39,16 @@ import {
 import {
   HYPERVISOR_STATUSES,
   HYPERVISOR_TYPES,
+  deleteHypervisor,
   getHypervisor,
   listHypervisorVms,
   listHypervisors,
   syncHypervisor,
+  updateHypervisor,
   type Hypervisor,
   type HypervisorStatus,
   type HypervisorType,
+  type UpdateHypervisorPayload,
 } from "@/api/hypervisors";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
@@ -508,10 +516,72 @@ function Pagination({
 
 /* ------------------------------ detail drawer ----------------------------- */
 
+type EditDraft = {
+  name: string;
+  description: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  verify_ssl: boolean;
+  is_active: boolean;
+};
+
+function emptyDraft(): EditDraft {
+  return {
+    name: "",
+    description: "",
+    host: "",
+    port: "",
+    username: "",
+    password: "",
+    verify_ssl: false,
+    is_active: true,
+  };
+}
+
+function draftFrom(h: Hypervisor): EditDraft {
+  return {
+    name: h.name,
+    description: h.description ?? "",
+    host: h.host,
+    port: h.port != null ? String(h.port) : "",
+    username: h.username,
+    password: "",
+    verify_ssl: h.verify_ssl,
+    is_active: h.is_active,
+  };
+}
+
+function diffPayload(h: Hypervisor, draft: EditDraft): UpdateHypervisorPayload {
+  // Only ship fields that actually changed. Two reasons:
+  //   1. The backend supports partial updates — sending the full object
+  //      is wasteful and risks clobbering anything we forgot about.
+  //   2. Password must be omitted entirely when blank, otherwise the
+  //      backend's min_length=1 validation would refuse "" and we'd
+  //      need a separate branch.
+  const payload: UpdateHypervisorPayload = {};
+  if (draft.name !== h.name) payload.name = draft.name;
+  if (draft.description !== (h.description ?? "")) {
+    payload.description = draft.description || null;
+  }
+  if (draft.host !== h.host) payload.host = draft.host;
+  const draftPort = draft.port.trim() === "" ? null : Number(draft.port);
+  if (draftPort !== h.port) payload.port = draftPort;
+  if (draft.username !== h.username) payload.username = draft.username;
+  if (draft.password.length > 0) payload.password = draft.password;
+  if (draft.verify_ssl !== h.verify_ssl) payload.verify_ssl = draft.verify_ssl;
+  if (draft.is_active !== h.is_active) payload.is_active = draft.is_active;
+  return payload;
+}
+
 function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void }) {
   const queryClient = useQueryClient();
   const open = id !== null;
-  const canSync = useHasPermission("hypervisors", "update");
+  const canUpdate = useHasPermission("hypervisors", "update");
+  const canDelete = useHasPermission("hypervisors", "delete");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<EditDraft>(emptyDraft);
 
   const detailQuery = useQuery({
     queryKey: ["hypervisor", id],
@@ -524,6 +594,21 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
     queryFn: () => listHypervisorVms(id!),
     enabled: open,
   });
+
+  // Reset the draft + leave edit mode whenever a different hypervisor is
+  // loaded, or when the drawer closes. Without the reset, switching from
+  // hypervisor A (in edit mode) to B would carry A's unsaved changes over.
+  useEffect(() => {
+    if (detailQuery.data) {
+      setDraft(draftFrom(detailQuery.data));
+    }
+  }, [detailQuery.data]);
+
+  useEffect(() => {
+    if (!open) {
+      setEditing(false);
+    }
+  }, [open]);
 
   const syncMutation = useMutation({
     mutationFn: () => syncHypervisor(id!),
@@ -542,6 +627,36 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: () => {
+      const payload = diffPayload(detailQuery.data!, draft);
+      if (Object.keys(payload).length === 0) {
+        // No diff — bail out to avoid a no-op round-trip + 200 with stale data.
+        return Promise.resolve(detailQuery.data!);
+      }
+      return updateHypervisor(id!, payload);
+    },
+    onSuccess: () => {
+      toast.success("hypervisor updated");
+      queryClient.invalidateQueries({ queryKey: ["hypervisors"] });
+      queryClient.invalidateQueries({ queryKey: ["hypervisor", id] });
+      setEditing(false);
+    },
+    onError: (err) => toast.error(describeError(err, "update failed")),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteHypervisor(id!),
+    onSuccess: () => {
+      toast.success("hypervisor deleted");
+      queryClient.invalidateQueries({ queryKey: ["hypervisors"] });
+      queryClient.invalidateQueries({ queryKey: ["stats", "hypervisors"] });
+      queryClient.invalidateQueries({ queryKey: ["stats", "vms"] });
+      onClose();
+    },
+    onError: (err) => toast.error(describeError(err, "delete failed")),
+  });
+
   const hypervisor = detailQuery.data;
 
   return (
@@ -551,22 +666,75 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
       title={hypervisor?.name ?? "hypervisor"}
       footer={
         hypervisor && (
-          <>
-            <Button variant="secondary" onClick={onClose}>
-              close
-            </Button>
-            {canSync && (
+          editing ? (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setDraft(draftFrom(hypervisor));
+                  setEditing(false);
+                }}
+                disabled={updateMutation.isPending}
+              >
+                cancel
+              </Button>
               <Button
                 variant="primary"
-                loading={syncMutation.isPending}
-                onClick={() => syncMutation.mutate()}
-                leadingIcon={<Icon icon={RefreshCw} size={14} />}
                 uppercase
+                loading={updateMutation.isPending}
+                onClick={() => updateMutation.mutate()}
+                leadingIcon={<Icon icon={Save} size={14} />}
               >
-                sync now
+                save
               </Button>
-            )}
-          </>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={onClose}>
+                close
+              </Button>
+              {canDelete && (
+                <Button
+                  variant="secondary"
+                  uppercase
+                  loading={deleteMutation.isPending}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `delete hypervisor '${hypervisor.name}'? associated vms will be detached.`,
+                      )
+                    ) {
+                      deleteMutation.mutate();
+                    }
+                  }}
+                  leadingIcon={<Icon icon={Trash2} size={14} />}
+                >
+                  delete
+                </Button>
+              )}
+              {canUpdate && (
+                <Button
+                  variant="secondary"
+                  uppercase
+                  onClick={() => setEditing(true)}
+                  leadingIcon={<Icon icon={Pencil} size={14} />}
+                >
+                  edit
+                </Button>
+              )}
+              {canUpdate && (
+                <Button
+                  variant="primary"
+                  loading={syncMutation.isPending}
+                  onClick={() => syncMutation.mutate()}
+                  leadingIcon={<Icon icon={RefreshCw} size={14} />}
+                  uppercase
+                >
+                  sync now
+                </Button>
+              )}
+            </>
+          )
         )
       }
     >
@@ -576,6 +744,8 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </div>
+      ) : editing ? (
+        <EditFields draft={draft} onChange={setDraft} hypervisor={hypervisor} />
       ) : (
         <div className="space-y-6">
           <DetailHero hypervisor={hypervisor} />
@@ -584,6 +754,134 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
         </div>
       )}
     </SlideOver>
+  );
+}
+
+function EditFields({
+  draft,
+  onChange,
+  hypervisor,
+}: {
+  draft: EditDraft;
+  onChange: (next: EditDraft) => void;
+  hypervisor: Hypervisor;
+}) {
+  const set = <K extends keyof EditDraft>(key: K, value: EditDraft[K]) =>
+    onChange({ ...draft, [key]: value });
+
+  return (
+    <div className="space-y-5">
+      <Callout tone="info">
+        editing <span className="font-mono">{hypervisor.name}</span> · type +
+        ssl-cert path are not editable from this view.
+      </Callout>
+
+      <EditField id="ed-name" label="name">
+        <Input
+          id="ed-name"
+          value={draft.name}
+          onChange={(e) => set("name", e.target.value)}
+        />
+      </EditField>
+
+      <EditField id="ed-host" label="host">
+        <Input
+          id="ed-host"
+          value={draft.host}
+          onChange={(e) => set("host", e.target.value)}
+        />
+      </EditField>
+
+      <EditField id="ed-port" label="port">
+        <Input
+          id="ed-port"
+          type="number"
+          inputMode="numeric"
+          value={draft.port}
+          onChange={(e) => set("port", e.target.value)}
+        />
+      </EditField>
+
+      <EditField id="ed-username" label="username">
+        <Input
+          id="ed-username"
+          autoComplete="username"
+          value={draft.username}
+          onChange={(e) => set("username", e.target.value)}
+        />
+      </EditField>
+
+      <EditField
+        id="ed-password"
+        label="password"
+        hint="leave blank to keep the current credential."
+      >
+        <Input
+          id="ed-password"
+          type="password"
+          autoComplete="new-password"
+          value={draft.password}
+          placeholder="••••••••"
+          onChange={(e) => set("password", e.target.value)}
+        />
+      </EditField>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <Checkbox
+          checked={draft.verify_ssl}
+          onChange={(e) => set("verify_ssl", e.target.checked)}
+        />
+        <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
+          verify ssl certificate
+        </span>
+      </label>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <Checkbox
+          checked={draft.is_active}
+          onChange={(e) => set("is_active", e.target.checked)}
+        />
+        <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
+          active
+        </span>
+      </label>
+
+      <EditField id="ed-description" label="description">
+        <Textarea
+          id="ed-description"
+          rows={3}
+          value={draft.description}
+          onChange={(e) => set("description", e.target.value)}
+        />
+      </EditField>
+    </div>
+  );
+}
+
+function EditField({
+  id,
+  label,
+  hint,
+  children,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
+      >
+        {label}
+      </label>
+      {children}
+      {hint && (
+        <div className="mt-1 font-mono text-[10px] text-ink-muted">{hint}</div>
+      )}
+    </div>
   );
 }
 

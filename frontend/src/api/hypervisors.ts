@@ -97,6 +97,29 @@ export async function createHypervisor(
   return res.data;
 }
 
+export type UpdateHypervisorPayload = {
+  name?: string;
+  description?: string | null;
+  host?: string;
+  port?: number | null;
+  username?: string;
+  password?: string;
+  verify_ssl?: boolean;
+  is_active?: boolean;
+};
+
+export async function updateHypervisor(
+  id: number,
+  payload: UpdateHypervisorPayload,
+): Promise<Hypervisor> {
+  const res = await api.put<Hypervisor>(`/hypervisors/${id}`, payload);
+  return res.data;
+}
+
+export async function deleteHypervisor(id: number): Promise<void> {
+  await api.delete(`/hypervisors/${id}`);
+}
+
 export type TestConnectionPayload = {
   type: HypervisorType;
   host: string;

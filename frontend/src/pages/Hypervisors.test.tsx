@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -193,6 +193,81 @@ describe("Hypervisors page", () => {
     });
     expect(screen.getByText(/12 discovered/)).toBeInTheDocument();
     expect(screen.getByText(/4 new/)).toBeInTheDocument();
+  });
+
+  it("submits a partial update from the edit mode (only changed fields)", async () => {
+    let captured: unknown = null;
+    const target = makeHypervisor({ id: 5, name: "kvm-old", host: "10.0.0.55" });
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [target] }),
+      ),
+      http.get("/api/v1/hypervisors/5", () => HttpResponse.json(target)),
+      http.get("/api/v1/hypervisors/5/vms", () =>
+        HttpResponse.json({
+          hypervisor_id: 5,
+          hypervisor_name: "kvm-old",
+          total_vms: 0,
+          vms: [],
+        }),
+      ),
+      http.put("/api/v1/hypervisors/5", async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ ...target, name: "kvm-renamed" });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "kvm-old" }));
+    const dialog = await screen.findByRole("dialog", { name: /kvm-old/i });
+    await user.click(within(dialog).getByRole("button", { name: /^edit$/i }));
+
+    const nameInput = within(dialog).getByLabelText(/^name$/i);
+    await user.clear(nameInput);
+    await user.type(nameInput, "kvm-renamed");
+
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      // Only `name` should be in the payload — host/port/etc were unchanged.
+      expect(captured).toEqual({ name: "kvm-renamed" });
+    });
+  });
+
+  it("deletes a hypervisor after confirmation", async () => {
+    let deleted = false;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const target = makeHypervisor({ id: 11, name: "stale-host" });
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [target] }),
+      ),
+      http.get("/api/v1/hypervisors/11", () => HttpResponse.json(target)),
+      http.get("/api/v1/hypervisors/11/vms", () =>
+        HttpResponse.json({
+          hypervisor_id: 11,
+          hypervisor_name: "stale-host",
+          total_vms: 0,
+          vms: [],
+        }),
+      ),
+      http.delete("/api/v1/hypervisors/11", () => {
+        deleted = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "stale-host" }));
+    const dialog = await screen.findByRole("dialog", { name: /stale-host/i });
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => expect(deleted).toBe(true));
+    confirmSpy.mockRestore();
   });
 
   it("surfaces an error banner when the list fails", async () => {

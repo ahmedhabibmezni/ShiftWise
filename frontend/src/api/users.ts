@@ -59,6 +59,29 @@ export async function createUser(payload: CreateUserPayload): Promise<User> {
   return res.data;
 }
 
+export type UpdateUserPayload = {
+  email?: string;
+  username?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  password?: string;
+  is_active?: boolean;
+  role_ids?: number[];
+};
+
+export async function updateUser(
+  id: number,
+  payload: UpdateUserPayload,
+): Promise<User> {
+  const res = await api.put<User>(`/users/${id}`, payload);
+  return res.data;
+}
+
+export async function deleteUser(id: number): Promise<{ message: string; success: boolean }> {
+  const res = await api.delete<{ message: string; success: boolean }>(`/users/${id}`);
+  return res.data;
+}
+
 export async function listRoles(): Promise<Role[]> {
   const res = await api.get<Role[]>("/roles");
   return res.data;

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -206,6 +206,173 @@ describe("Users page", () => {
         role_ids: [3],
       });
     });
+  });
+
+  it("opens the detail drawer on row click and edits the user with a diff payload", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({
+          items: [makeUserItem({ id: 42, username: "alice" })],
+          total: 1,
+          page: 1,
+          page_size: 25,
+          pages: 1,
+        }),
+      ),
+      http.get("/api/v1/users/42", () =>
+        HttpResponse.json({
+          id: 42,
+          email: "alice@shiftwise.local",
+          username: "alice",
+          first_name: "Alice",
+          last_name: "Martin",
+          full_name: "Alice Martin",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: false,
+          created_at: "2026-04-01T00:00:00Z",
+          updated_at: "2026-05-01T00:00:00Z",
+          roles: [],
+          permissions: {},
+        }),
+      ),
+      http.get("/api/v1/roles", () => HttpResponse.json([])),
+      http.put("/api/v1/users/42", async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({
+          id: 42,
+          email: "alice@shiftwise.local",
+          username: "alice2",
+          first_name: "Alice",
+          last_name: "Martin",
+          full_name: "Alice Martin",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: false,
+          created_at: "2026-04-01T00:00:00Z",
+          updated_at: "2026-05-11T00:00:00Z",
+          roles: [],
+          permissions: {},
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "alice" }));
+    const dialog = await screen.findByRole("dialog", { name: /alice/i });
+    await user.click(within(dialog).getByRole("button", { name: /^edit$/i }));
+
+    const usernameInput = within(dialog).getByLabelText(/^username$/i);
+    await user.clear(usernameInput);
+    await user.type(usernameInput, "alice2");
+
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      // Diff payload — username changed, everything else is identical.
+      expect(captured).toEqual({ username: "alice2" });
+    });
+  });
+
+  it("hides the delete button on the current user's own account", async () => {
+    // The drawer is opened for the signed-in user (id=1). Self-delete is
+    // blocked client-side; the backend also enforces this.
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({
+          items: [makeUserItem({ id: 1, username: "admin" })],
+          total: 1,
+          page: 1,
+          page_size: 25,
+          pages: 1,
+        }),
+      ),
+      http.get("/api/v1/users/1", () =>
+        HttpResponse.json({
+          id: 1,
+          email: "admin@shiftwise.local",
+          username: "admin",
+          first_name: null,
+          last_name: null,
+          full_name: "admin",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: false,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          roles: [],
+          permissions: { users: ["*"] },
+        }),
+      ),
+      http.get("/api/v1/roles", () => HttpResponse.json([])),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "admin" }));
+    const dialog = await screen.findByRole("dialog", { name: /admin/i });
+
+    expect(within(dialog).queryByRole("button", { name: /^delete$/i })).toBeNull();
+    expect(within(dialog).getByText(/this is your own account/i)).toBeInTheDocument();
+  });
+
+  it("deletes another user after confirmation", async () => {
+    let deleted = false;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({
+          items: [makeUserItem({ id: 9, username: "leaver" })],
+          total: 1,
+          page: 1,
+          page_size: 25,
+          pages: 1,
+        }),
+      ),
+      http.get("/api/v1/users/9", () =>
+        HttpResponse.json({
+          id: 9,
+          email: "leaver@shiftwise.local",
+          username: "leaver",
+          first_name: null,
+          last_name: null,
+          full_name: "leaver",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: false,
+          is_superuser: false,
+          created_at: "2026-04-01T00:00:00Z",
+          updated_at: "2026-04-01T00:00:00Z",
+          roles: [],
+          permissions: {},
+        }),
+      ),
+      http.get("/api/v1/roles", () => HttpResponse.json([])),
+      http.delete("/api/v1/users/9", () => {
+        deleted = true;
+        return HttpResponse.json({
+          message: "Utilisateur leaver@shiftwise.local supprimé avec succès",
+          success: true,
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "leaver" }));
+    const dialog = await screen.findByRole("dialog", { name: /leaver/i });
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => expect(deleted).toBe(true));
+    confirmSpy.mockRestore();
   });
 
   it("surfaces inline validation when required fields are missing", async () => {
