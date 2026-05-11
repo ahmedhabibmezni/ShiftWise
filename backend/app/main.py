@@ -11,14 +11,18 @@ Ce fichier configure :
 - L'initialisation de la base de données
 """
 
+import time
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import FastAPI, status
+from fastapi import Depends, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import get_db, init_db
 from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
 
 @asynccontextmanager
@@ -119,29 +123,95 @@ def read_root():
     }
 
 
+def _probe_database(db: Session) -> dict:
+    """Run a cheap `SELECT 1` against Postgres."""
+    started = time.perf_counter()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"ok": True, "latency_ms": int((time.perf_counter() - started) * 1000), "error": None}
+    except Exception as exc:  # noqa: BLE001 — surface any driver failure
+        return {
+            "ok": False,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _probe_redis_auth() -> dict:
+    """Ping the auth Redis (DB 1). Imported lazily so /health degrades
+    gracefully when the redis package or the connection is misbehaving."""
+    started = time.perf_counter()
+    try:
+        from app.core.redis_client import get_redis  # local import: avoids
+        # eager connection on app import + lets tests monkeypatch easily.
+        client = get_redis()
+        pong = client.ping()
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if not pong:
+            return {"ok": False, "latency_ms": latency_ms, "error": "PING returned falsy"}
+        return {"ok": True, "latency_ms": latency_ms, "error": None}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 # Health check endpoint
 @app.get("/health", tags=["Health"])
-def health_check():
+def health_check(db: Annotated[Session, Depends(get_db)]):
     """
-    Endpoint de vérification de santé de l'application.
+    Liveness + readiness probe for monitoring and load balancers.
 
-    Utilisé par les outils de monitoring et les load balancers
-    pour vérifier que l'application fonctionne correctement.
+    Probes the two operational dependencies declared in CLAUDE.md:
+    - **Postgres** (`SELECT 1`) — required for every endpoint.
+    - **Redis auth DB** (`PING`) — required for `/api/v1/auth/*` only.
 
-    **Response :**
+    Severity model:
+    - `healthy` (HTTP 200): both probes ok.
+    - `degraded` (HTTP 200): DB ok but Redis down — read-only endpoints
+      still serve, auth flows return 5xx. Load balancers can keep the
+      pod in rotation; an alert should already be paging the SRE.
+    - `unhealthy` (HTTP 503): DB down. Nothing meaningful can be served;
+      the LB should evict this replica.
+
+    **Response (healthy):**
     ```json
     {
         "status": "healthy",
         "app": "ShiftWise",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "checks": {
+            "database": {"ok": true, "latency_ms": 4, "error": null},
+            "redis_auth": {"ok": true, "latency_ms": 1, "error": null}
+        }
     }
     ```
     """
-    return {
-        "status": "healthy",
+    db_check = _probe_database(db)
+    redis_check = _probe_redis_auth()
+
+    if not db_check["ok"]:
+        overall = "unhealthy"
+        http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif not redis_check["ok"]:
+        overall = "degraded"
+        http_status = status.HTTP_200_OK
+    else:
+        overall = "healthy"
+        http_status = status.HTTP_200_OK
+
+    payload = {
+        "status": overall,
         "app": settings.APP_NAME,
-        "version": settings.APP_VERSION
+        "version": settings.APP_VERSION,
+        "checks": {
+            "database": db_check,
+            "redis_auth": redis_check,
+        },
     }
+    return JSONResponse(status_code=http_status, content=payload)
 
 
 # Inclusion des routers API v1
