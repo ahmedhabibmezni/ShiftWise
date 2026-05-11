@@ -79,6 +79,50 @@ export async function getHypervisor(id: number): Promise<Hypervisor> {
   return res.data;
 }
 
+export type CreateHypervisorPayload = {
+  name: string;
+  description?: string | null;
+  type: HypervisorType;
+  host: string;
+  port?: number | null;
+  username: string;
+  password: string;
+  verify_ssl: boolean;
+};
+
+export async function createHypervisor(
+  payload: CreateHypervisorPayload,
+): Promise<Hypervisor> {
+  const res = await api.post<Hypervisor>("/hypervisors", payload);
+  return res.data;
+}
+
+export type TestConnectionPayload = {
+  type: HypervisorType;
+  host: string;
+  port?: number | null;
+  username: string;
+  password: string;
+  verify_ssl: boolean;
+};
+
+export type TestConnectionResult = {
+  success: boolean;
+  message: string;
+  vms_count: number | null;
+  error: string | null;
+};
+
+export async function testHypervisorConnection(
+  payload: TestConnectionPayload,
+): Promise<TestConnectionResult> {
+  const res = await api.post<TestConnectionResult>(
+    "/hypervisors/test-connection",
+    payload,
+  );
+  return res.data;
+}
+
 export type SyncResponse = {
   hypervisor_id: number;
   hypervisor_name: string;

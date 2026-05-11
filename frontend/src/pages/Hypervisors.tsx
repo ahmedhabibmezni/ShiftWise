@@ -24,6 +24,7 @@ import {
 } from "@/api/hypervisors";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 import type { ApiError } from "@/api/types";
+import { HypervisorCreateDrawer } from "./HypervisorCreateDrawer";
 
 const PAGE_SIZE = 25;
 const REFETCH_INTERVAL_MS = 60_000;
@@ -52,6 +53,7 @@ export default function Hypervisors() {
   const [typeFilter, setTypeFilter] = useState<HypervisorType | "">("");
   const [statusFilter, setStatusFilter] = useState<HypervisorStatus | "">("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const params = useMemo(
     () => ({
@@ -94,6 +96,7 @@ export default function Hypervisors() {
           setStatusFilter(v);
           setPage(1);
         }}
+        onCreate={() => setCreateOpen(true)}
       />
 
       <HypervisorTable
@@ -112,6 +115,10 @@ export default function Hypervisors() {
       />
 
       <DetailDrawer id={selectedId} onClose={() => setSelectedId(null)} />
+      <HypervisorCreateDrawer
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </div>
   );
 }
@@ -123,6 +130,7 @@ function Toolbar({
   onTypeFilter,
   statusFilter,
   onStatusFilter,
+  onCreate,
 }: {
   search: string;
   onSearch: (v: string) => void;
@@ -130,6 +138,7 @@ function Toolbar({
   onTypeFilter: (v: HypervisorType | "") => void;
   statusFilter: HypervisorStatus | "";
   onStatusFilter: (v: HypervisorStatus | "") => void;
+  onCreate: () => void;
 }) {
   return (
     <div className="flex items-center gap-3 flex-wrap">
@@ -173,7 +182,7 @@ function Toolbar({
           </option>
         ))}
       </Select>
-      <Button variant="primary" disabled title="Bientôt disponible">
+      <Button variant="primary" onClick={onCreate}>
         + ajouter
       </Button>
     </div>

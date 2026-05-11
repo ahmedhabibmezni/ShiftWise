@@ -154,20 +154,33 @@ def test_hypervisor_connection(
 
     **Permissions requises :** hypervisors:create
 
-    ⚠️ Note : Cette fonctionnalité nécessite l'implémentation des clients
-    vSphere/VMware/Hyper-V. Pour l'instant, retourne un échec explicite.
+    Reuses the discovery service connectors to enumerate VMs on the source
+    without persisting anything. VSPHERE returns success=False until the
+    pyvmomi-based connector lands.
     """
-    # TODO: Implémenter la connexion réelle selon le type
-    # - vSphere: utiliser pyvmomi
-    # - VMware Workstation: utiliser vmrun
-    # - Hyper-V: utiliser PowerShell via subprocess
-    # - KVM: utiliser libvirt
+    transient = Hypervisor(
+        name="connection-test",
+        tenant_id=current_user.tenant_id,
+        type=test_data.type,
+        host=test_data.host,
+        port=test_data.port,
+        username=test_data.username,
+        password=test_data.password,
+        verify_ssl=test_data.verify_ssl,
+    )
+    service = create_discovery_service(db)
+    result = service.test_connection(transient)
+
+    if result["success"]:
+        message = f"Connexion réussie · {result['vms_count']} VMs détectées"
+    else:
+        message = "Échec de la connexion"
 
     return HypervisorTestConnectionResponse(
-        success=False,
-        message="Connection test not yet implemented — simulation mode",
-        vms_count=None,
-        error=None
+        success=result["success"],
+        message=message,
+        vms_count=result["vms_count"],
+        error=result["error"],
     )
 
 

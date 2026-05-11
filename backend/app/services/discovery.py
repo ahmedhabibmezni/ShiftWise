@@ -1010,6 +1010,47 @@ class DiscoveryService:
             self.db.commit()
             raise DiscoveryError(f"Échec de la découverte: {str(e)}")
 
+    def test_connection(self, hypervisor: Hypervisor) -> Dict[str, Any]:
+        """Probe a hypervisor's reachability and credentials without persisting.
+
+        Reuses the per-type _discover_* methods but stops after the VM
+        enumeration step — nothing is written to the database. Returns a
+        dict with `success` (bool), `vms_count` (int|None) and `error`
+        (str|None). VSPHERE short-circuits because its connector is still
+        a stub returning fake data; reporting "success" from it would mask
+        the missing pyvmomi implementation.
+        """
+        if hypervisor.type == HypervisorType.VSPHERE:
+            return {
+                "success": False,
+                "vms_count": None,
+                "error": "vSphere connector not implemented (pyvmomi pending)",
+            }
+
+        try:
+            if hypervisor.type == HypervisorType.VMWARE_WORKSTATION:
+                vms = self._discover_vmware_workstation(hypervisor)
+            elif hypervisor.type == HypervisorType.HYPER_V:
+                vms = self._discover_hyperv(hypervisor)
+            elif hypervisor.type == HypervisorType.KVM:
+                vms = self._discover_kvm(hypervisor)
+            elif hypervisor.type == HypervisorType.PROXMOX:
+                vms = self._discover_proxmox(hypervisor)
+            elif hypervisor.type == HypervisorType.OVIRT:
+                vms = self._discover_ovirt(hypervisor)
+            else:
+                return {
+                    "success": False,
+                    "vms_count": None,
+                    "error": f"Unsupported hypervisor type: {hypervisor.type}",
+                }
+        except DiscoveryError as e:
+            return {"success": False, "vms_count": None, "error": str(e)}
+        except (ConnectionError, TimeoutError, OSError) as e:
+            return {"success": False, "vms_count": None, "error": str(e)}
+
+        return {"success": True, "vms_count": len(vms), "error": None}
+
     # ========================================================================
     # DÉCOUVERTE PAR TYPE D'HYPERVISOR
     # ========================================================================
