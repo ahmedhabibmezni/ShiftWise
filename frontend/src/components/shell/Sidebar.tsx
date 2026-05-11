@@ -81,6 +81,7 @@ const SECTIONS: NavSection[] = [
         id: "reports",
         label: "reports",
         icon: FileBarChart,
+        to: "/reports",
         requires: { resource: "reports", action: "read" },
       },
     ],

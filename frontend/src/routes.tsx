@@ -5,6 +5,7 @@ import Dashboard from "@/pages/Dashboard";
 import Hypervisors from "@/pages/Hypervisors";
 import Vms from "@/pages/Vms";
 import Migrations from "@/pages/Migrations";
+import Reports from "@/pages/Reports";
 import Roles from "@/pages/Roles";
 import Settings from "@/pages/Settings";
 import Users from "@/pages/Users";
@@ -49,6 +50,7 @@ export const router = createBrowserRouter([
           { path: "/hypervisors", element: <Hypervisors /> },
           { path: "/vms", element: <Vms /> },
           { path: "/migrations", element: <Migrations /> },
+          { path: "/reports", element: <Reports /> },
           { path: "/users", element: <Users /> },
           { path: "/roles", element: <Roles /> },
           { path: "/settings", element: <Settings /> },

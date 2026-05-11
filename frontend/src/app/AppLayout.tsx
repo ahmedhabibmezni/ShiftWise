@@ -13,6 +13,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/hypervisors": "hypervisors",
   "/vms": "virtual machines",
   "/migrations": "migrations",
+  "/reports": "reports",
   "/users": "users",
   "/roles": "roles",
   "/settings": "settings",
