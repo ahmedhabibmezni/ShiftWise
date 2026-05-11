@@ -60,6 +60,17 @@ NEXT_STEPS.md
 Shiftwise_session_handoff.md
 ShiftWise_session_handoff.md
 *_session_handoff.md
+commit_rules.md
+
+# Agent / IDE assistant artefacts (per-tool config + caches, never commit)
+.agents/
+.impeccable/
+.kiro/
+.qoder/
+.qwen/
+.windsurf/
+skills/
+skills-lock.json
 
 # Documentations
 docs/
