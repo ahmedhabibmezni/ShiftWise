@@ -15,6 +15,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/migrations": "migrations",
   "/users": "users",
   "/roles": "roles",
+  "/settings": "settings",
   "/styleguide": "styleguide",
 };
 

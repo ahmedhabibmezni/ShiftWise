@@ -106,7 +106,9 @@ const SECTIONS: NavSection[] = [
   },
   {
     kicker: "system",
-    items: [{ id: "settings", label: "settings", icon: SettingsIcon }],
+    // Settings is universal — no `requires` so every signed-in user
+    // (even a viewer) can reach their own profile + password rotation.
+    items: [{ id: "settings", label: "settings", icon: SettingsIcon, to: "/settings" }],
   },
 ];
 
