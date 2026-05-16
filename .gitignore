@@ -64,6 +64,7 @@ start.txt
 DESIGN.md
 PRODUCT.md
 screenshot.mjs
+frontend/verify-redesign.mjs
 screenshots/
 
 # Agent / IDE assistant artefacts (per-tool config + caches, never commit)
