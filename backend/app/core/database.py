@@ -79,6 +79,11 @@ def init_db() -> None:
     En production, utiliser Alembic :
         alembic upgrade head
     """
-    # Importer tous les modèles pour que SQLAlchemy les enregistre dans Base.metadata
-    from app.models import user, role, hypervisor, virtual_machine, migration  # noqa: F401
+    # Importer tous les modèles pour que SQLAlchemy les enregistre dans Base.metadata.
+    # Audit C-10 : `conversion` doit figurer dans la liste, sinon les tables
+    # conversion_groups / conversion_jobs / conversion_attempts ne sont jamais
+    # créées par init_db() (pipeline de conversion cassé sur une base vierge).
+    from app.models import (  # noqa: F401
+        user, role, hypervisor, virtual_machine, migration, conversion,
+    )
     Base.metadata.create_all(bind=engine)
