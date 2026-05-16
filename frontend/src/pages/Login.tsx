@@ -13,7 +13,6 @@ import { Icon } from "@/components/ui/Icon";
 import { LiveIndicator } from "@/components/ui/LiveIndicator";
 import { Callout } from "@/components/ui/Callout";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
-import { OrbitalIllustration } from "@/components/OrbitalIllustration";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
 import { setAccessToken, useAuthStore } from "@/store/auth";
 import type { ApiError } from "@/api/types";

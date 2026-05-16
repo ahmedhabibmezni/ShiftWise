@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -23,6 +23,8 @@ function makeUser(over: Partial<User> = {}): User {
     is_active: true,
     is_verified: true,
     is_superuser: false,
+    last_login_at: null,
+    last_login_ip: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     roles: [],
