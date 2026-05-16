@@ -6,25 +6,27 @@ import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { AxiosError } from "axios";
 import { z } from "zod";
-import { ArrowRight, LockKeyhole, Shield } from "lucide-react";
+import { ArrowRight, Layers, LockKeyhole, Shield } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { LiveIndicator } from "@/components/ui/LiveIndicator";
 import { Callout } from "@/components/ui/Callout";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { OrbitalIllustration } from "@/components/OrbitalIllustration";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
-import { useAuthStore } from "@/store/auth";
+import { setAccessToken, useAuthStore } from "@/store/auth";
 import type { ApiError } from "@/api/types";
 
 const loginSchema = z.object({
-  email: z.string().min(1, "email required").email("invalid email"),
-  password: z.string().min(1, "password required"),
+  email: z.string().min(1, "Email is required").email("Invalid email address"),
+  password: z.string().min(1, "Password is required"),
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 type LocationState = { from?: string };
 
-const GENERIC_LOGIN_ERROR = "login failed. check your credentials.";
+const GENERIC_LOGIN_ERROR = "Login failed. Check your credentials.";
 
 function extractDetail(err: unknown): string | null {
   if (err instanceof AxiosError) {
@@ -52,6 +54,11 @@ export default function Login() {
   const mutation = useMutation({
     mutationFn: async (values: LoginFormValues) => {
       const tokens = await loginRequest(values);
+      // The axios interceptor reads the access token from the store on each
+      // request. Set it before /me so a fresh session (no refresh cookie)
+      // succeeds — otherwise FastAPI's HTTPBearer returns 403 and the
+      // response interceptor only retries on 401.
+      setAccessToken(tokens.access_token);
       const me = await fetchCurrentUser();
       return { tokens, me };
     },
@@ -65,7 +72,8 @@ export default function Login() {
       const detail = extractDetail(err);
 
       if (status === 403) {
-        const msg = detail ?? "account inactive.";
+        const msg =
+          detail ?? "Your account is inactive. Contact an administrator to reactivate it.";
         setFormError(msg);
         toast.error(msg);
         return;
@@ -74,7 +82,7 @@ export default function Login() {
         setFormError(GENERIC_LOGIN_ERROR);
         return;
       }
-      const msg = detail ?? "network error. try again.";
+      const msg = detail ?? "Network error. Try again.";
       setFormError(msg);
       toast.error(msg);
     },
@@ -86,19 +94,27 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-[100dvh] w-full bg-bg text-ink grid grid-cols-1 lg:grid-cols-[1.05fr_1fr] relative overflow-hidden">
-      <span aria-hidden className="sw-grain" />
+    <div className="min-h-[100dvh] w-full grid grid-cols-1 lg:grid-cols-[1.05fr_1fr] relative overflow-hidden">
       <BrandPanel />
 
-      <section className="relative z-[2] flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-[400px]">
-          <header className="mb-8">
-            <div className="kicker mb-2">console · authentication</div>
-            <h1 className="text-h1 lowercase leading-none">
-              welcome back<span className="sw-caret" />
+      <section className="relative flex items-center justify-center px-6 py-12">
+        <div className="absolute top-6 right-6">
+          <ThemeToggle />
+        </div>
+        <div className="glass-card w-full max-w-[440px] p-8">
+          <header className="mb-7">
+            <span
+              aria-hidden
+              className="icon-container icon-container--accent w-12 h-12 rounded-2xl mb-5"
+            >
+              <Layers size={22} strokeWidth={2} />
+            </span>
+            <div className="kicker mb-2">Console · Authentication</div>
+            <h1 className="text-[28px] font-bold tracking-[-0.02em] leading-[1.1] text-[var(--text-primary)]">
+              Welcome back
             </h1>
-            <p className="mt-2 font-mono text-[12px] text-ink-muted leading-relaxed">
-              operator access · audit logged · httponly cookie + rotating refresh token
+            <p className="mt-2 text-[13px] text-[var(--text-secondary)] leading-relaxed">
+              Operator access · audit logged · HttpOnly cookie with rotating refresh token.
             </p>
           </header>
 
@@ -110,7 +126,7 @@ export default function Login() {
           >
             <Field
               id="email"
-              label="email"
+              label="Email"
               type="email"
               autoComplete="email"
               autoFocus
@@ -120,7 +136,7 @@ export default function Login() {
 
             <Field
               id="password"
-              label="password"
+              label="Password"
               type="password"
               autoComplete="current-password"
               error={errors.password?.message}
@@ -136,21 +152,20 @@ export default function Login() {
             <Button
               type="submit"
               variant="primary"
-              uppercase
               loading={isSubmitting || mutation.isPending}
               trailingIcon={<Icon icon={ArrowRight} size={16} />}
               className="w-full h-11"
             >
-              log in
+              Sign in
             </Button>
           </form>
 
-          <footer className="mt-8 flex items-center justify-between gap-4">
-            <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              <Icon icon={LockKeyhole} size={11} /> tls 1.3 · hsts
+          <footer className="mt-7 flex items-center justify-between gap-4 pt-5 border-t border-[var(--hairline)]">
+            <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
+              <Icon icon={LockKeyhole} size={12} /> TLS 1.3 · HSTS
             </span>
-            <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              <Icon icon={Shield} size={11} /> oauth 2.1 bcp
+            <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
+              <Icon icon={Shield} size={12} /> OAuth 2.1 BCP
             </span>
           </footer>
         </div>
@@ -180,7 +195,7 @@ function Field({
     <div>
       <label
         htmlFor={id}
-        className="block font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted mb-2"
+        className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
       >
         {label}
       </label>
@@ -198,7 +213,7 @@ function Field({
         <div
           id={`${id}-error`}
           role="alert"
-          className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
+          className="mt-1.5 text-[12px] text-[var(--alert-critical)]"
         >
           {error}
         </div>
@@ -209,51 +224,49 @@ function Field({
 
 function BrandPanel() {
   return (
-    <aside className="relative hidden lg:flex flex-col justify-between bg-bg-elev p-12 overflow-hidden border-r border-line">
-      <span aria-hidden className="sw-hairlines absolute inset-0 opacity-30" />
-      <span
-        aria-hidden
-        className="absolute -top-32 -right-32 h-[480px] w-[480px] rounded-full bg-signal/8 blur-3xl"
-      />
+    <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden">
+      {/* Decorative orbital SVG, top-right */}
 
-      <header className="relative z-[2] flex items-center gap-3">
+      <header className="relative flex items-center gap-3">
         <span
           aria-hidden
-          className="relative inline-flex h-10 w-10 items-center justify-center bg-signal text-signal-ink font-mono font-bold text-[14px]"
+          className="icon-container icon-container--accent w-11 h-11 rounded-xl"
         >
-          SW
-          <span aria-hidden className="absolute -bottom-1.5 -right-1.5 h-2.5 w-2.5 bg-bg-elev border border-line-strong" />
+          <Layers size={22} strokeWidth={2} />
         </span>
-        <div className="flex flex-col leading-none">
-          <span className="font-mono text-[13px] font-semibold tracking-[0.08em] text-ink">
-            SHIFTWISE
+        <div className="flex flex-col leading-none gap-1">
+          <span className="text-[14px] font-bold tracking-[0.02em] text-[var(--text-primary)]">
+            ShiftWise
           </span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted mt-1">
-            vm migration platform · v2.4.1
+          <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--text-muted)]">
+            VM Migration Platform · v2.4.1
           </span>
         </div>
       </header>
 
-      <div className="relative z-[2] max-w-[44ch]">
-        <div className="kicker mb-3">manifesto · 01</div>
-        <p className="text-h1 lowercase leading-[1.1] text-ink" style={{ textWrap: "balance" }}>
-          a fleet to migrate.
+      <div className="relative max-w-[44ch]">
+        <div className="kicker mb-3">Manifesto · 01</div>
+        <p
+          className="text-[40px] font-bold leading-[1.05] tracking-[-0.025em] text-[var(--text-primary)]"
+          style={{ textWrap: "balance" } as React.CSSProperties}
+        >
+          A fleet to migrate.
           <br />
-          <span className="text-signal">a cluster to master.</span>
+          <span className="text-[var(--accent-light)]">A cluster to master.</span>
           <br />
-          a pipeline to orchestrate.
+          A pipeline to orchestrate.
         </p>
-        <p className="mt-6 font-mono text-[12px] text-ink-muted max-w-[52ch] leading-relaxed">
-          discovery · analyzer · converter · adapter · migrator · reporting. every vm transits six stages before landing on openshift virtualization.
+        <p className="mt-6 text-[13px] text-[var(--text-secondary)] max-w-[52ch] leading-relaxed">
+          Discovery · Analyzer · Converter · Adapter · Migrator · Reporting. Every VM transits six stages before landing on OpenShift Virtualization.
         </p>
       </div>
 
-      <footer className="relative z-[2] flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
+      <footer className="relative flex items-center justify-between text-[12px] text-[var(--text-secondary)]">
         <div className="flex items-center gap-2">
           <LiveIndicator label={null} srLabel="Cluster online" tone="ok" />
-          <span>cluster ok · 3 masters · kubevirt v1.4.1</span>
+          <span>Cluster OK · 3 masters · KubeVirt v1.4.1</span>
         </div>
-        <span className="text-ink-faint">© 2026 · nextstep-it</span>
+        <span className="text-[var(--text-muted)]">© 2026 · NextStep-IT</span>
       </footer>
     </aside>
   );

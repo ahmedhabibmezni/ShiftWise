@@ -106,7 +106,7 @@ describe("Settings page", () => {
 
     await user.click(screen.getByRole("button", { name: /change password/i }));
 
-    expect(await screen.findByText(/min 8 characters/i)).toBeInTheDocument();
+    expect(await screen.findByText(/must be at least 8 characters/i)).toBeInTheDocument();
     expect(called).toBe(false);
   });
 

@@ -1,21 +1,23 @@
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Activity,
+  ArrowRightLeft,
   CheckCircle2,
-  Clock,
   Download,
   FileBarChart,
   Gauge,
   HardDrive,
   XCircle,
 } from "lucide-react";
-import { Badge } from "@/components/ui/Badge";
-import type { BadgeVariant } from "@/components/ui/Badge";
+import { MigrationStatusBadge, type MigrationStatusKey } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Icon } from "@/components/ui/Icon";
 import { Panel } from "@/components/ui/Panel";
+import { KPIPrimary } from "@/components/ui/KPIPrimary";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { StackedBar } from "@/components/ui/StackedBar";
@@ -33,21 +35,6 @@ import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
 
 const REPORT_PAGE_SIZE = 100;
 const REFETCH_MS = 60_000;
-
-const STATUS_VARIANT: Record<MigrationStatus, BadgeVariant> = {
-  pending: "neutral",
-  validating: "info",
-  preparing: "info",
-  transferring: "info",
-  configuring: "info",
-  starting: "info",
-  verifying: "info",
-  completed: "ok",
-  failed: "critical",
-  cancelled: "neutral",
-  rollback: "warn",
-  rolled_back: "warn",
-};
 
 function formatDuration(seconds: number): string {
   if (!seconds || seconds < 0) return "—";
@@ -75,19 +62,15 @@ export default function Reports() {
     refetchInterval: REFETCH_MS,
   });
 
-  // The report set: most recent N migrations (any status). We pull a page
-  // worth — anything beyond that belongs in a paginated export, not an
-  // operator's dashboard.
   const recentQuery = useQuery({
     queryKey: ["migrations", "report"],
     queryFn: () => listMigrations({ skip: 0, limit: REPORT_PAGE_SIZE }),
     refetchInterval: REFETCH_MS,
   });
 
-  // Light VM lookup — only the VMs referenced by the report rows show up.
   const vmsQuery = useQuery({
     queryKey: ["vms", "report-lookup"],
-    queryFn: () => listVms({ skip: 0, limit: 200 }),
+    queryFn: () => listVms({ skip: 0, limit: 100 }),
     staleTime: 5 * 60_000,
   });
 
@@ -98,33 +81,33 @@ export default function Reports() {
   const csv = useMemo(() => makeCsv(items, vms), [items, vms]);
 
   return (
-    <div className="max-w-[1440px] mx-auto p-6 md:p-8 space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
-        kicker="operations"
-        title="reports"
-        breadcrumbs={[{ label: "console" }, { label: "operations" }, { label: "reports" }]}
+        title="Reports"
         description="Historical migration outcomes for audit, SLA review, and capacity planning."
         actions={
           <Button
             variant="primary"
-            uppercase
-            leadingIcon={<Icon icon={Download} size={14} />}
+            leadingIcon={<Icon icon={Download} size={14} strokeWidth={2.25} />}
             disabled={items.length === 0}
             onClick={() => downloadCsv(buildFilename(), csv)}
           >
-            export csv
+            Export CSV
           </Button>
         }
       />
 
       <StatsStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
 
-      <BreakdownPanel breakdown={breakdown} total={items.length} isLoading={recentQuery.isPending} />
+      <BreakdownPanel
+        breakdown={breakdown}
+        total={items.length}
+        isLoading={recentQuery.isPending}
+      />
 
       <Panel
-        density="compact"
         kicker={`${items.length} migrations · last ${REPORT_PAGE_SIZE} max`}
-        title="migration history"
+        title="Migration History"
         bodyClassName="px-0"
       >
         <HistoryTable
@@ -136,9 +119,7 @@ export default function Reports() {
       </Panel>
 
       <Callout tone="info">
-        the export bundles only the rows currently loaded · for full
-        history use the backend API directly or wait for the scheduled
-        export job (roadmap).
+        The export includes only the rows currently loaded. For full history, use the backend API directly or wait for the scheduled export job (roadmap).
       </Callout>
     </div>
   );
@@ -154,86 +135,42 @@ function StatsStrip({
   isLoading: boolean;
 }) {
   return (
-    <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Tile
-        kicker="success rate"
-        value={isLoading ? null : `${(stats?.success_rate ?? 0).toFixed(0)}%`}
-        tone="ok"
+    <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <KPIPrimary
+        label="Success Rate"
+        value={
+          isLoading ? <Skeleton className="h-5 w-12" /> : `${(stats?.success_rate ?? 0).toFixed(0)}%`
+        }
         icon={Gauge}
+        iconTone="success"
       />
-      <Tile
-        kicker="completed"
-        value={isLoading ? null : formatNumber(stats?.completed)}
-        suffix={stats ? `/ ${formatNumber(stats.total_migrations)}` : undefined}
-        tone="ok"
+      <KPIPrimary
+        label="Completed"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(stats?.completed)}
+        delta={stats ? `/ ${formatNumber(stats.total_migrations)}` : undefined}
+        deltaTone="neutral"
         icon={CheckCircle2}
+        iconTone="success"
       />
-      <Tile
-        kicker="failed"
-        value={isLoading ? null : formatNumber(stats?.failed)}
-        tone="err"
+      <KPIPrimary
+        label="Failed"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(stats?.failed)}
         icon={XCircle}
+        iconTone="warn"
       />
-      <Tile
-        kicker="data transferred"
-        value={isLoading ? null : formatGB(stats?.total_data_transferred_gb)}
-        hint={
+      <KPIPrimary
+        label="Data Transferred"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatGB(stats?.total_data_transferred_gb)}
+        delta={
           stats?.average_duration_seconds
-            ? `avg run · ${formatDuration(stats.average_duration_seconds)}`
+            ? `Avg ${formatDuration(stats.average_duration_seconds)}`
             : undefined
         }
-        tone="signal"
+        deltaTone="neutral"
         icon={HardDrive}
+        iconTone="accent"
       />
     </section>
-  );
-}
-
-function Tile({
-  kicker,
-  value,
-  suffix,
-  hint,
-  tone,
-  icon,
-}: {
-  kicker: string;
-  value: string | null;
-  suffix?: string;
-  hint?: string;
-  tone: "ok" | "err" | "muted" | "signal";
-  icon?: typeof FileBarChart;
-}) {
-  const color =
-    tone === "ok"
-      ? "var(--ok)"
-      : tone === "err"
-        ? "var(--err)"
-        : tone === "signal"
-          ? "var(--signal)"
-          : "var(--ink)";
-  return (
-    <Panel density="compact">
-      <div className="flex items-start justify-between gap-3">
-        <span className="kicker">{kicker}</span>
-        {icon && <Icon icon={icon} size={14} className="text-ink-faint" />}
-      </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        {value === null ? (
-          <Skeleton className="h-7 w-20" />
-        ) : (
-          <span className="font-mono tabular text-[28px] leading-none" style={{ color }}>
-            {value}
-          </span>
-        )}
-        {suffix && <span className="font-mono text-[12px] text-ink-muted">{suffix}</span>}
-      </div>
-      {hint && (
-        <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint truncate">
-          {hint}
-        </div>
-      )}
-    </Panel>
   );
 }
 
@@ -269,28 +206,29 @@ function BreakdownPanel({
   const idle = breakdown.pending + breakdown.cancelled;
 
   const segments = [
-    { key: "ok", label: "completed", value: completed, color: "var(--ok)" },
-    { key: "active", label: "in progress", value: active, color: "var(--signal)" },
-    { key: "failed", label: "failed", value: failed, color: "var(--err)" },
-    { key: "idle", label: "pending / cancelled", value: idle, color: "var(--ink-faint)" },
+    { key: "ok",     label: "Completed",         value: completed, color: "var(--alert-success)" },
+    { key: "active", label: "In progress",       value: active,    color: "var(--accent-primary)" },
+    { key: "failed", label: "Failed",            value: failed,    color: "var(--alert-critical)" },
+    { key: "idle",   label: "Pending / cancelled", value: idle,    color: "var(--text-muted)" },
   ];
 
   return (
     <Panel
-      density="compact"
-      kicker={`status mix · last ${total} rows`}
-      title="outcome distribution"
+      icon={Activity}
+      iconTone="accent"
+      kicker={`Status mix · last ${total} rows`}
+      title="Outcome Distribution"
       action={
-        <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
-          {total > 0 ? `${((completed / total) * 100).toFixed(0)}% completed in window` : "no data"}
+        <span className="text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
+          {total > 0 ? `${((completed / total) * 100).toFixed(0)}% completed in window` : "No data"}
         </span>
       }
     >
       {isLoading ? (
         <Skeleton className="h-14 w-full" />
       ) : total === 0 ? (
-        <div className="font-mono text-[11px] text-ink-muted uppercase tracking-[0.05em]">
-          no migrations yet · trigger one from the migrations page
+        <div className="text-[12px] text-[var(--text-secondary)]">
+          No migrations yet. Trigger one from the Migrations page.
         </div>
       ) : (
         <StackedBar segments={segments} height={12} />
@@ -316,11 +254,13 @@ function HistoryTable({
   isLoading: boolean;
   isError: boolean;
 }) {
+  const navigate = useNavigate();
+
   if (isError) {
     return (
       <div className="m-6">
         <Callout tone="err" role="alert">
-          failed to load migration history.
+          Could not load migration history. Refresh to retry.
         </Callout>
       </div>
     );
@@ -340,54 +280,58 @@ function HistoryTable({
     return (
       <EmptyState
         icon={FileBarChart}
-        title="no migrations"
-        hint="reports populate after the first migration completes."
+        title="No history to report"
+        hint="Once migrations complete, this page tracks their outcomes, transfer volumes, and durations for audit and capacity planning. Run the first migration to populate it."
+        action={
+          <Button
+            variant="primary"
+            leadingIcon={<Icon icon={ArrowRightLeft} size={14} strokeWidth={2.25} />}
+            onClick={() => navigate("/migrations")}
+          >
+            Go to Migrations
+          </Button>
+        }
       />
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <Table className="border-0">
-        <THead>
-          <TR>
-            <TH>#</TH>
-            <TH>vm</TH>
-            <TH>strategy</TH>
-            <TH>status</TH>
-            <TH numeric>transferred</TH>
-            <TH numeric>duration</TH>
-            <TH numeric>completed</TH>
+    <Table className="px-2">
+      <THead>
+        <TR>
+          <TH>#</TH>
+          <TH>VM</TH>
+          <TH>Strategy</TH>
+          <TH>Status</TH>
+          <TH numeric>Transferred</TH>
+          <TH numeric>Duration</TH>
+          <TH numeric>Completed</TH>
+        </TR>
+      </THead>
+      <tbody>
+        {items.map((m) => (
+          <TR key={m.id}>
+            <TD muted>
+              <span className="tabular font-bold text-[var(--text-primary)]">#{m.id}</span>
+            </TD>
+            <TD>{vmName(m.vm_id, vms)}</TD>
+            <TD muted>{m.strategy}</TD>
+            <TD>
+              <MigrationStatusBadge status={m.status.toUpperCase() as MigrationStatusKey} />
+            </TD>
+            <TD numeric muted>
+              {formatGB(m.transferred_gb || null)}
+            </TD>
+            <TD numeric muted>
+              {formatDuration(m.duration_seconds)}
+            </TD>
+            <TD numeric muted>
+              {m.completed_at ? formatRelativeTime(m.completed_at) : "—"}
+            </TD>
           </TR>
-        </THead>
-        <tbody>
-          {items.map((m, i) => (
-            <TR key={m.id} className="sw-mount">
-              <TD mono muted style={{ "--sw-i": i } as React.CSSProperties}>
-                #{m.id}
-              </TD>
-              <TD>{vmName(m.vm_id, vms)}</TD>
-              <TD mono muted>{m.strategy}</TD>
-              <TD>
-                <Badge variant={STATUS_VARIANT[m.status]}>{m.status.replace(/_/g, " ")}</Badge>
-              </TD>
-              <TD numeric muted>{formatGB(m.transferred_gb || null)}</TD>
-              <TD numeric muted>{formatDuration(m.duration_seconds)}</TD>
-              <TD numeric muted>
-                {m.completed_at ? (
-                  formatRelativeTime(m.completed_at)
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-ink-faint">
-                    <Icon icon={Clock} size={11} />
-                    n/a
-                  </span>
-                )}
-              </TD>
-            </TR>
-          ))}
-        </tbody>
-      </Table>
-    </div>
+        ))}
+      </tbody>
+    </Table>
   );
 }
 

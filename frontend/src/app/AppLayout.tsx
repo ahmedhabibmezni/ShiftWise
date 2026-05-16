@@ -1,77 +1,84 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "@/components/shell/Sidebar";
+import { MobileNav } from "@/components/shell/MobileNav";
 import { Header } from "@/components/shell/Header";
 import { Footer } from "@/components/shell/Footer";
-import { RoleStripe } from "@/components/shell/RoleStripe";
 import { CommandPalette } from "@/components/shell/CommandPalette";
-import { usePrimaryRole } from "@/lib/permissions";
-import { getRoleTheme } from "@/lib/role-theme";
 
 const ROUTE_TITLES: Record<string, string> = {
-  "/": "overview",
-  "/hypervisors": "hypervisors",
-  "/vms": "virtual machines",
-  "/migrations": "migrations",
-  "/reports": "reports",
-  "/users": "users",
-  "/roles": "roles",
-  "/settings": "settings",
-  "/styleguide": "styleguide",
+  "/": "Dashboard",
+  "/hypervisors": "Hypervisors",
+  "/vms": "Virtual Machines",
+  "/migrations": "Migrations",
+  "/reports": "Reports",
+  "/users": "Users",
+  "/roles": "Roles",
+  "/settings": "Settings",
+  "/styleguide": "Styleguide",
 };
 
-function useCurrentTime() {
-  const [now, setNow] = useState(() => formatTime(new Date()));
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(formatTime(new Date())), 1_000);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
-}
+// Breadcrumb parent labels mirror the Sidebar's section headings exactly,
+// so the breadcrumb and the nav agree on where each page lives.
+const PARENT_PATH: Record<string, string> = {
+  "/": "Operations",
+  "/hypervisors": "Operations",
+  "/vms": "Operations",
+  "/migrations": "Operations",
+  "/reports": "Operations",
+  "/users": "Administration",
+  "/roles": "Administration",
+  "/settings": "Administration",
+  "/styleguide": "Pages",
+};
 
-function formatTime(d: Date): string {
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
-}
-
+/**
+ * AppLayout — the Vision UI shell: a full-height navigation rail flush to the
+ * left viewport edge, with the header, content, and footer in a padded column
+ * beside it.
+ *
+ *   ┌──────────────────────────────────────────────────────┐
+ *   │┌────────┐┌─ 24px padding ────────────────────────┐    │
+ *   ││Sidebar ││  Header (topbar)                      │    │
+ *   ││ rail   ││  ──────────────────────────────────── │    │
+ *   ││ (full  ││  <Outlet />                           │    │
+ *   ││ height,││                                       │    │
+ *   ││ edge-  ││  Footer                               │    │
+ *   ││ flush) ││                                       │    │
+ *   │└────────┘└───────────────────────────────────────┘    │
+ *   └──────────────────────────────────────────────────────┘
+ *
+ *   Body radial orbs (declared on body::before in base.css) bleed brand
+ *   colour through the 120 px backdrop-blur on the rail and every glass card.
+ *
+ *   ⚠️  Don't wrap this layout in any element that has opacity/transform/
+ *       filter/will-change/mask — that creates a backdrop-root and silently
+ *       breaks the blur on the rail and every descendant card.
+ */
 export function AppLayout() {
   const location = useLocation();
-  const title =
-    ROUTE_TITLES[location.pathname] ?? (location.pathname.replace(/^\//, "") || "overview");
-  const timestamp = useCurrentTime();
-  const role = usePrimaryRole();
-  const theme = getRoleTheme(role);
+  const titleFromPath = location.pathname.replace(/^\//, "");
+  const fallbackTitle = titleFromPath
+    ? titleFromPath.charAt(0).toUpperCase() + titleFromPath.slice(1)
+    : "Dashboard";
+  const title = ROUTE_TITLES[location.pathname] ?? fallbackTitle;
+  const parent = PARENT_PATH[location.pathname] ?? "Pages";
 
-  // Propagate the role accent at the document root so any element in the
-  // app can reach it through `var(--role-accent)` — Sidebar brand, focus
-  // outlines, drawer headers, anything that wants to reflect the operator's
-  // privilege level without duplicating the role-theme switch.
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--role-accent", theme.accentColor);
-    root.style.setProperty("--role-accent-tint", theme.accentTint);
-    root.dataset.role = theme.role;
-    return () => {
-      root.style.removeProperty("--role-accent");
-      root.style.removeProperty("--role-accent-tint");
-      delete root.dataset.role;
-    };
-  }, [theme.role, theme.accentColor, theme.accentTint]);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const openMobileNav = useCallback(() => setMobileNavOpen(true), []);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
   return (
-    <div className="h-[100dvh] bg-bg text-ink flex flex-col relative overflow-hidden">
-      <span aria-hidden className="sw-grain" />
-      <div className="flex flex-1 min-h-0 relative z-[2]">
-        <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <Header title={title} timestamp={timestamp} />
-          <RoleStripe />
-          <main className="flex-1 overflow-auto">
-            <Outlet />
-          </main>
-          <Footer />
-        </div>
+    <div className="min-h-[100dvh] flex">
+      <Sidebar />
+      <div className="flex-1 flex flex-col min-w-0 p-4 md:p-6 gap-6">
+        <Header title={title} parent={parent} onMenuClick={openMobileNav} />
+        <main className="flex-1 min-h-0">
+          <Outlet />
+        </main>
+        <Footer />
       </div>
+      <MobileNav open={mobileNavOpen} onClose={closeMobileNav} />
       <CommandPalette />
     </div>
   );

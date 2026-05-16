@@ -140,10 +140,10 @@ describe("HypervisorCreateDrawer", () => {
 
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
-    expect(await screen.findByText(/^name required$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^host required$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^username required$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^password required$/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^name is required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^host is required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^username is required$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^password is required$/i)).toBeInTheDocument();
   });
 
   it("rewrites the default port when the type changes", async () => {

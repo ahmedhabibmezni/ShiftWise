@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import { z } from "zod";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { PermissionsMatrix } from "@/components/ui/PermissionsMatrix";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -21,9 +22,9 @@ import type { ApiError } from "@/api/types";
 const schema = z.object({
   name: z
     .string()
-    .min(2, "min 2 characters")
-    .max(50, "max 50 characters")
-    .regex(/^[a-z0-9_]+$/i, "letters, digits, underscores only"),
+    .min(2, "Must be at least 2 characters")
+    .max(50, "Must be 50 characters or fewer")
+    .regex(/^[a-z0-9_]+$/i, "Letters, digits, and underscores only"),
   description: z.string().max(500).optional().or(z.literal("")),
   is_active: z.boolean(),
 });
@@ -88,11 +89,11 @@ export function RoleCreateDrawer({
         is_active: values.is_active,
       }),
     onSuccess: (role) => {
-      toast.success(`role ${role.name} created`);
+      toast.success(`Role ${role.name} created`);
       queryClient.invalidateQueries({ queryKey: ["roles"] });
       onClose();
     },
-    onError: (err) => toast.error(describeError(err, "creation failed")),
+    onError: (err) => toast.error(describeError(err, "Creation failed")),
   });
 
   const onSubmit: SubmitHandler<FormValues> = (values) => {
@@ -105,22 +106,21 @@ export function RoleCreateDrawer({
     <SlideOver
       open={open}
       onClose={onClose}
-      title="new role"
+      title="New Role"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} type="button">
-            cancel
+            Cancel
           </Button>
           <Button
             type="submit"
             form="role-create-form"
             variant="primary"
-            uppercase
             loading={isSubmitting || createMutation.isPending}
             disabled={grants === 0}
-            title={grants === 0 ? "grant at least one permission first" : undefined}
+            title={grants === 0 ? "Grant at least one permission first" : undefined}
           >
-            create
+            Create
           </Button>
         </>
       }
@@ -131,7 +131,7 @@ export function RoleCreateDrawer({
         noValidate
         className="space-y-5"
       >
-        <Field id="role-name" label="name" error={errors.name?.message} hint="lowercase slug · letters, digits, underscores">
+        <Field id="role-name" label="Name" error={errors.name?.message} hint="Lowercase slug · letters, digits, underscores">
           <Input
             id="role-name"
             autoFocus
@@ -140,23 +140,17 @@ export function RoleCreateDrawer({
           />
         </Field>
 
-        <Field id="role-description" label="description" error={errors.description?.message}>
+        <Field id="role-description" label="Description" error={errors.description?.message}>
           <Textarea id="role-description" rows={2} {...register("description")} />
         </Field>
 
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 accent-signal"
-            {...register("is_active")}
-          />
-          <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
-            active
-          </span>
+        <label className="flex items-center gap-2.5 cursor-pointer">
+          <Checkbox {...register("is_active")} />
+          <span className="text-[13px] text-[var(--text-primary)] font-medium">Active</span>
         </label>
 
         <section>
-          <div className="kicker mb-2">permissions matrix</div>
+          <div className="kicker mb-2">Permissions Matrix</div>
           {resourcesQuery.data ? (
             <PermissionsMatrix
               resources={resourcesQuery.data.resources}
@@ -167,15 +161,15 @@ export function RoleCreateDrawer({
           ) : (
             <Skeleton className="h-48 w-full" />
           )}
-          <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
+          <div className="mt-2 text-[11px] text-[var(--text-muted)]">
             {grants === 0
-              ? "no grants yet — pick at least one action."
+              ? "No grants yet — pick at least one action."
               : `${grants} grant${grants > 1 ? "s" : ""} configured`}
           </div>
         </section>
 
         <Callout tone="info">
-          system roles cannot be created from the UI — only the four seeded at
+          System roles cannot be created from the UI — only the four seeded at
           install (super_admin, admin, user, viewer) carry that flag.
         </Callout>
       </form>
@@ -200,19 +194,16 @@ function Field({
     <div>
       <label
         htmlFor={id}
-        className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
+        className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
       >
         {label}
       </label>
       {children}
       {hint && !error && (
-        <div className="mt-1 font-mono text-[10px] text-ink-muted">{hint}</div>
+        <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">{hint}</div>
       )}
       {error && (
-        <div
-          role="alert"
-          className="mt-1 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
-        >
+        <div role="alert" className="mt-1.5 text-[12px] text-[var(--alert-critical)]">
           {error}
         </div>
       )}

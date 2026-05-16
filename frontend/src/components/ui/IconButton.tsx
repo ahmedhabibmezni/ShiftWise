@@ -11,25 +11,33 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-signal text-signal-ink border-transparent hover:brightness-95",
+  primary:
+    "text-white shadow-[var(--shadow-accent)] border-transparent hover:brightness-110",
   secondary:
-    "bg-transparent text-ink border-line-strong hover:bg-bg-elev",
+    "glass-card text-[var(--text-primary)] hover:text-[var(--accent-light)]",
   ghost:
-    "bg-transparent text-ink-muted border-transparent hover:bg-bg-elev hover:text-ink",
+    "bg-transparent text-[var(--text-secondary)] border-transparent hover:text-[var(--accent-light)]",
 };
 
 export const IconButton = forwardRef<HTMLButtonElement, Props>(function IconButton(
-  { variant = "ghost", className, children, ...rest },
+  { variant = "ghost", className, children, style, ...rest },
   ref,
 ) {
+  const primaryStyle =
+    variant === "primary"
+      ? {
+          background:
+            "linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-light) 100%)",
+        }
+      : undefined;
   return (
     <button
       ref={ref}
+      style={{ ...primaryStyle, ...style }}
       className={cn(
-        "inline-flex h-10 w-10 items-center justify-center rounded-sm border",
-        "transition-[background-color,color,border-color] duration-150",
+        "inline-flex h-9 w-9 items-center justify-center rounded-xl border",
+        "transition-all duration-200",
         "disabled:opacity-50 disabled:cursor-not-allowed",
-        "focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1",
         VARIANTS[variant],
         className,
       )}

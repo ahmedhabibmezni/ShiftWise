@@ -151,7 +151,7 @@ describe("Vms page", () => {
 
     expect(await screen.findByText("ubuntu-22-prod")).toBeInTheDocument();
     expect(screen.getByText("centos-legacy")).toBeInTheDocument();
-    expect(screen.getByText(/1–2 \/ 2/)).toBeInTheDocument();
+    expect(screen.getByText(/1–2 of 2/)).toBeInTheDocument();
   });
 
   it("forwards compatibility filter to the API", async () => {
@@ -241,7 +241,7 @@ describe("Vms page", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/failed to load vms/i),
+      await screen.findByText(/could not load vms/i),
     ).toBeInTheDocument();
   });
 

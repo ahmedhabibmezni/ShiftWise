@@ -13,14 +13,21 @@ export const Input = forwardRef<HTMLInputElement, Props>(function Input(
       ref={ref}
       aria-invalid={invalid || undefined}
       className={cn(
-        "w-full h-10 px-3 rounded-sm border bg-bg-elev text-ink",
-        "font-sans text-[14px] placeholder:text-ink-muted",
-        "transition-[border-color,outline-color] duration-150",
-        invalid ? "border-err" : "border-line hover:border-line-strong",
-        "focus:outline-none focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-0",
+        "w-full h-10 px-3.5 rounded-xl border bg-[var(--surface-soft)]",
+        "text-[var(--text-primary)] text-[14px] font-medium",
+        "placeholder:text-[var(--text-muted)] placeholder:font-normal",
+        "transition-all duration-200",
+        invalid
+          ? "border-[var(--alert-critical)]/60"
+          : "border-[var(--hairline)] hover:border-[var(--accent-light)]/50 focus:border-[var(--accent-primary)]/60",
+        "focus:outline-none focus:bg-[var(--surface-soft-strong)]",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         className,
       )}
+      style={{
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+      }}
       {...rest}
     />
   );

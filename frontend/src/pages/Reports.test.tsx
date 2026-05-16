@@ -198,8 +198,9 @@ describe("Reports page", () => {
 
     renderPage();
 
-    // The empty-state hint announces no migrations.
-    expect(await screen.findByText(/reports populate after the first/i)).toBeInTheDocument();
+    // The empty-state announces no history and routes to the first action.
+    expect(await screen.findByText(/no history to report/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /go to migrations/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /export csv/i })).toBeDisabled();
   });
 
@@ -264,7 +265,7 @@ describe("Reports page", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/failed to load migration history/i),
+      await screen.findByText(/could not load migration history/i),
     ).toBeInTheDocument();
   });
 });

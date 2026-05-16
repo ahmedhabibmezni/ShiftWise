@@ -18,13 +18,30 @@ createRoot(document.getElementById("root")!).render(
         position="bottom-right"
         toastOptions={{
           style: {
-            background: "var(--bg-elev)",
-            color: "var(--ink)",
-            border: "1px solid var(--line-strong)",
-            borderRadius: "2px",
-            fontFamily: "var(--font-mono, monospace)",
-            fontSize: "12px",
-            letterSpacing: "0.02em",
+            background: "var(--card-gradient)",
+            backdropFilter: "blur(60px)",
+            WebkitBackdropFilter: "blur(60px)",
+            color: "var(--text-primary)",
+            border: "1px solid var(--hairline)",
+            borderRadius: "14px",
+            fontFamily: "var(--font-sans)",
+            fontSize: "13px",
+            fontWeight: 500,
+            letterSpacing: "0",
+            boxShadow: "var(--shadow-card)",
+            padding: "12px 16px",
+          },
+          success: {
+            iconTheme: {
+              primary: "var(--alert-success-light)",
+              secondary: "var(--bg-app)",
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: "var(--alert-critical)",
+              secondary: "var(--bg-app)",
+            },
           },
         }}
       />

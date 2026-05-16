@@ -10,7 +10,7 @@ export function Skeleton({
   return (
     <div
       aria-hidden
-      className={cn("sw-skel rounded-sm", className)}
+      className={cn("sw-skel rounded-lg", className)}
       style={style}
     />
   );
@@ -18,7 +18,7 @@ export function Skeleton({
 
 export function SkeletonRow({ cols = 4 }: { cols?: number }) {
   return (
-    <div className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0">
+    <div className="flex items-center gap-3 py-3 border-b border-[var(--hairline-faint)] last:border-b-0">
       {Array.from({ length: cols }, (_, i) => (
         <Skeleton
           key={i}

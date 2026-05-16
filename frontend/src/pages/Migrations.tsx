@@ -1,30 +1,45 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowLeftRight,
+  ArrowRightLeft,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Cpu,
+  Monitor,
+  Plug,
   Plus,
+  RefreshCw,
+  Rocket,
+  ScanSearch,
   XCircle,
 } from "lucide-react";
-import { Badge } from "@/components/ui/Badge";
-import type { BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { Table, TD, TH, THead, TR } from "@/components/ui/Table";
 import { Panel } from "@/components/ui/Panel";
+import { KPIPrimary } from "@/components/ui/KPIPrimary";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Callout } from "@/components/ui/Callout";
 import {
+  PipelineStrip,
+  type PipelineStageData,
+} from "@/components/PipelineStrip";
+import {
+  MigrationStatusBadge,
+  type MigrationStatusKey,
+} from "@/components/ui/StatusBadge";
+import {
   ACTIVE_MIGRATION_STATUSES,
   MIGRATION_STATUSES,
   MIGRATION_STRATEGIES,
+  formatStrategy,
   listMigrations,
   type Migration,
   type MigrationStatus,
@@ -41,19 +56,14 @@ const PAGE_SIZE = 25;
 const REFETCH_IDLE_MS = 30_000;
 const REFETCH_ACTIVE_MS = 5_000;
 
-const STATUS_VARIANT: Record<MigrationStatus, BadgeVariant> = {
-  pending: "neutral",
-  validating: "info",
-  preparing: "info",
-  transferring: "info",
-  configuring: "info",
-  starting: "info",
-  verifying: "info",
-  completed: "ok",
-  failed: "critical",
-  cancelled: "neutral",
-  rollback: "warn",
-  rolled_back: "warn",
+// One-line description of each pipeline stage, shown in the strip before any
+// migration has run so the empty pipeline reads as a diagram, not dead tiles.
+const STAGE_BLURB: Record<string, string> = {
+  discover: "Scans hypervisors for VMs",
+  analyze: "Scores OpenShift fit",
+  convert: "Disks to QCOW2",
+  adapt: "Guest OS fixups",
+  migrate: "Boots on KubeVirt",
 };
 
 function formatDuration(seconds: number): string {
@@ -90,8 +100,6 @@ export default function Migrations() {
   const listQuery = useQuery({
     queryKey: ["migrations", params],
     queryFn: () => listMigrations(params),
-    // Poll faster when any visible migration is mid-flight — gives the operator
-    // a near-live view of progress without hammering when the table is idle.
     refetchInterval: (query) => {
       const data = query.state.data;
       const hasActive = data?.items.some((m) => ACTIVE_MIGRATION_STATUSES.has(m.status));
@@ -106,8 +114,6 @@ export default function Migrations() {
     refetchInterval: REFETCH_IDLE_MS,
   });
 
-  // Light VM list — used to display human-readable names in the table.
-  // 100-item ceiling is intentional: this is a quick lookup, not a full sync.
   const vmsQuery = useQuery({
     queryKey: ["vms", "all-light"],
     queryFn: () => listVms({ skip: 0, limit: 100 }),
@@ -120,22 +126,89 @@ export default function Migrations() {
   const items = listQuery.data?.items ?? [];
   const filtersActive = !!(statusFilter || strategyFilter);
 
+  // Build pipeline data from current stats
+  const pipelineStages: PipelineStageData[] = useMemo(() => {
+    const s = statsQuery.data;
+    if (!s) {
+      return [];
+    }
+    const total = s.total_migrations;
+    const completed = s.completed;
+    const inProgress = s.in_progress;
+    const pending = s.pending;
+    const failed = s.failed;
+    const succeededOrInflight = completed + inProgress;
+    return [
+      {
+        key: "discover",
+        label: "Discovery",
+        icon: ScanSearch,
+        count: formatNumber(total),
+        meta: total > 0 ? "100% scanned" : STAGE_BLURB.discover,
+        progress: total > 0 ? 100 : 0,
+        state: total > 0 ? "done" : "pending",
+      },
+      {
+        key: "analyze",
+        label: "Analyzer",
+        icon: Cpu,
+        count: formatNumber(succeededOrInflight + pending),
+        meta: total > 0 ? "100% analyzed" : STAGE_BLURB.analyze,
+        progress: total > 0 ? 100 : 0,
+        state: total > 0 ? "done" : "pending",
+      },
+      {
+        key: "convert",
+        label: "Converter",
+        icon: RefreshCw,
+        count: formatNumber(succeededOrInflight),
+        meta:
+          total > 0
+            ? `${Math.round((succeededOrInflight / total) * 100)}% converted`
+            : STAGE_BLURB.convert,
+        progress: total > 0 ? (succeededOrInflight / total) * 100 : 0,
+        state: succeededOrInflight > 0 ? "active" : "pending",
+      },
+      {
+        key: "adapt",
+        label: "Adapter",
+        icon: Plug,
+        count: formatNumber(inProgress),
+        meta:
+          total > 0
+            ? `${Math.round((inProgress / total) * 100)}% adapted`
+            : STAGE_BLURB.adapt,
+        progress: total > 0 ? (inProgress / total) * 100 : 0,
+        state: inProgress > 0 ? "active" : "pending",
+      },
+      {
+        key: "migrate",
+        label: "Migrator",
+        icon: Rocket,
+        count: formatNumber(completed),
+        meta:
+          total > 0
+            ? `${Math.round((completed / total) * 100)}% migrated`
+            : STAGE_BLURB.migrate,
+        progress: total > 0 ? (completed / total) * 100 : 0,
+        state: completed > 0 && failed === 0 ? "done" : completed > 0 ? "active" : "pending",
+      },
+    ];
+  }, [statsQuery.data]);
+
   return (
-    <div className="max-w-[1440px] mx-auto p-6 md:p-8 space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
-        kicker="operations"
-        title="migrations"
-        breadcrumbs={[{ label: "console" }, { label: "operations" }, { label: "migrations" }]}
-        description="VM → KubeVirt pipeline. Discovery → Analyzer → Converter → Adapter → Migrator."
+        title="Migrations"
+        description="VM → KubeVirt pipeline: Discovery → Analyzer → Converter → Adapter → Migrator."
         actions={
           canCreate ? (
             <Button
               variant="primary"
-              uppercase
-              leadingIcon={<Icon icon={Plus} size={16} />}
+              leadingIcon={<Icon icon={Plus} size={16} strokeWidth={2.25} />}
               onClick={() => setCreateOpen(true)}
             >
-              new migration
+              New Migration
             </Button>
           ) : null
         }
@@ -144,13 +217,27 @@ export default function Migrations() {
       <StatsStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
 
       <Panel
-        density="compact"
+        title="Migration Pipeline"
+        hint={
+          (statsQuery.data?.total_migrations ?? 0) > 0
+            ? `Live state across ${statsQuery.data?.total_migrations} jobs`
+            : "The five stages every VM clears on its way to OpenShift"
+        }
+      >
+        {statsQuery.isPending || pipelineStages.length === 0 ? (
+          <Skeleton className="h-[120px] w-full" />
+        ) : (
+          <PipelineStrip stages={pipelineStages} />
+        )}
+      </Panel>
+
+      <Panel
         kicker={
           filtersActive
-            ? `filters active · ${listQuery.data?.total ?? 0} results`
+            ? `Filters active · ${listQuery.data?.total ?? 0} results`
             : `${listQuery.data?.total ?? 0} migrations recorded`
         }
-        title="pipeline log"
+        title="Pipeline Log"
         action={
           <Toolbar
             statusFilter={statusFilter}
@@ -206,88 +293,44 @@ function StatsStrip({
   isLoading: boolean;
 }) {
   return (
-    <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Tile
-        kicker="in progress"
-        value={isLoading ? null : formatNumber(stats?.in_progress)}
-        suffix={stats ? `/ ${formatNumber(stats.total_migrations)}` : undefined}
-        tone="signal"
-        icon={ArrowLeftRight}
-      />
-      <Tile
-        kicker="completed"
-        value={isLoading ? null : formatNumber(stats?.completed)}
-        tone="ok"
-        icon={CheckCircle2}
-      />
-      <Tile
-        kicker="failed"
-        value={isLoading ? null : formatNumber(stats?.failed)}
-        tone="err"
-        icon={XCircle}
-      />
-      <Tile
-        kicker="success rate"
-        value={isLoading ? null : `${(stats?.success_rate ?? 0).toFixed(0)}%`}
-        hint={
-          stats?.average_duration_seconds
-            ? `avg duration · ${formatDuration(stats.average_duration_seconds)}`
-            : "no completed runs yet"
+    <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <KPIPrimary
+        label="In Progress"
+        value={
+          isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(stats?.in_progress)
         }
-        tone="ok"
+        delta={stats ? `/ ${formatNumber(stats.total_migrations)}` : undefined}
+        deltaTone="neutral"
+        icon={ArrowRightLeft}
+        iconTone="accent"
+      />
+      <KPIPrimary
+        label="Completed"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(stats?.completed)}
+        icon={CheckCircle2}
+        iconTone="success"
+      />
+      <KPIPrimary
+        label="Failed"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(stats?.failed)}
+        icon={XCircle}
+        iconTone="warn"
+      />
+      <KPIPrimary
+        label="Success Rate"
+        value={
+          isLoading ? <Skeleton className="h-5 w-12" /> : `${(stats?.success_rate ?? 0).toFixed(0)}%`
+        }
+        delta={
+          stats?.average_duration_seconds
+            ? formatDuration(stats.average_duration_seconds)
+            : undefined
+        }
+        deltaTone="neutral"
         icon={Clock}
+        iconTone="blue"
       />
     </section>
-  );
-}
-
-function Tile({
-  kicker,
-  value,
-  suffix,
-  hint,
-  tone,
-  icon,
-}: {
-  kicker: string;
-  value: string | null;
-  suffix?: string;
-  hint?: string;
-  tone: "ok" | "err" | "muted" | "signal";
-  icon?: typeof ArrowLeftRight;
-}) {
-  const color =
-    tone === "ok"
-      ? "var(--ok)"
-      : tone === "err"
-        ? "var(--err)"
-        : tone === "signal"
-          ? "var(--signal)"
-          : "var(--ink)";
-  return (
-    <Panel density="compact">
-      <div className="flex items-start justify-between gap-3">
-        <span className="kicker">{kicker}</span>
-        {icon && <Icon icon={icon} size={14} className="text-ink-faint" />}
-      </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        {value === null ? (
-          <Skeleton className="h-7 w-20" />
-        ) : (
-          <span className="font-mono tabular text-[28px] leading-none" style={{ color }}>
-            {value}
-          </span>
-        )}
-        {suffix && (
-          <span className="font-mono text-[12px] text-ink-muted">{suffix}</span>
-        )}
-      </div>
-      {hint && (
-        <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint truncate">
-          {hint}
-        </div>
-      )}
-    </Panel>
   );
 }
 
@@ -310,12 +353,12 @@ function Toolbar({
         aria-label="Filter by status"
         value={statusFilter}
         onChange={(e) => onStatusFilter(e.target.value as MigrationStatus | "")}
-        className="w-40 h-9"
+        className="w-44 h-9"
       >
-        <option value="">all statuses</option>
+        <option value="">All Statuses</option>
         {MIGRATION_STATUSES.map((s) => (
           <option key={s} value={s}>
-            {s.replace(/_/g, " ")}
+            {s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
           </option>
         ))}
       </Select>
@@ -323,12 +366,12 @@ function Toolbar({
         aria-label="Filter by strategy"
         value={strategyFilter}
         onChange={(e) => onStrategyFilter(e.target.value as MigrationStrategy | "")}
-        className="w-40 h-9"
+        className="w-44 h-9"
       >
-        <option value="">all strategies</option>
+        <option value="">All Strategies</option>
         {MIGRATION_STRATEGIES.map((s) => (
           <option key={s} value={s}>
-            {s}
+            {s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()}
           </option>
         ))}
       </Select>
@@ -340,6 +383,52 @@ function Toolbar({
 
 function vmName(id: number, vms: Vm[]): string {
   return vms.find((v) => v.id === id)?.name ?? `vm#${id}`;
+}
+
+/**
+ * First-run empty state for the pipeline log. The strip above already names
+ * the five stages; this panel's job is to route the operator to the first
+ * action and name its prerequisite (a compatibility-checked VM).
+ */
+function MigrationsEmptyState({
+  onCreate,
+  canCreate,
+}: {
+  onCreate: () => void;
+  canCreate: boolean;
+}) {
+  const navigate = useNavigate();
+  return (
+    <EmptyState
+      icon={Rocket}
+      title="No migrations yet"
+      hint={
+        canCreate
+          ? "A migration carries one virtual machine through the five stages above and onto OpenShift Virtualization. Start with a VM that has cleared compatibility analysis."
+          : "No migrations have run yet. An operator with migration rights launches the first one."
+      }
+      action={
+        canCreate ? (
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Button
+              variant="primary"
+              leadingIcon={<Icon icon={Plus} size={14} strokeWidth={2.25} />}
+              onClick={onCreate}
+            >
+              New Migration
+            </Button>
+            <Button
+              variant="secondary"
+              leadingIcon={<Icon icon={Monitor} size={14} />}
+              onClick={() => navigate("/vms")}
+            >
+              Review VM readiness
+            </Button>
+          </div>
+        ) : undefined
+      }
+    />
+  );
 }
 
 function MigrationTable({
@@ -363,7 +452,7 @@ function MigrationTable({
     return (
       <div className="m-6">
         <Callout tone="err" role="alert">
-          failed to load migrations.
+          Could not load migrations. Refresh to retry.
         </Callout>
       </div>
     );
@@ -380,92 +469,71 @@ function MigrationTable({
   }
 
   if (items.length === 0) {
-    return (
-      <EmptyState
-        icon={ArrowLeftRight}
-        title="no migrations"
-        hint={
-          canCreate
-            ? "pick a vm and trigger a migration to begin."
-            : "no migrations yet — ask an operator to create one."
-        }
-        action={
-          canCreate ? (
-            <Button
-              variant="primary"
-              uppercase
-              leadingIcon={<Icon icon={Plus} size={14} />}
-              onClick={onCreate}
-            >
-              new migration
-            </Button>
-          ) : undefined
-        }
-      />
-    );
+    return <MigrationsEmptyState onCreate={onCreate} canCreate={canCreate} />;
   }
 
   return (
-    <div className="overflow-x-auto">
-      <Table className="border-0">
-        <THead>
-          <TR>
-            <TH>#</TH>
-            <TH>vm</TH>
-            <TH>strategy</TH>
-            <TH>status</TH>
-            <TH>progress</TH>
-            <TH numeric>duration</TH>
-            <TH numeric>updated</TH>
+    <Table className="px-2">
+      <THead>
+        <TR>
+          <TH>#</TH>
+          <TH>VM</TH>
+          <TH>Strategy</TH>
+          <TH>Status</TH>
+          <TH>Progress</TH>
+          <TH numeric>Duration</TH>
+          <TH numeric>Updated</TH>
+        </TR>
+      </THead>
+      <tbody>
+        {items.map((m) => (
+          <TR key={m.id} interactive>
+            <TD muted>
+              <button
+                type="button"
+                onClick={() => onRowClick(m.id)}
+                className="text-left hover:text-[var(--accent-light)] transition-colors duration-200 tabular font-bold text-[var(--text-primary)]"
+              >
+                #{m.id}
+              </button>
+            </TD>
+            <TD>
+              <button
+                type="button"
+                onClick={() => onRowClick(m.id)}
+                className="text-left text-[var(--text-primary)] hover:text-[var(--accent-light)] transition-colors duration-200 w-full font-bold"
+              >
+                {vmName(m.vm_id, vms)}
+              </button>
+            </TD>
+            <TD muted>{formatStrategy(m.strategy)}</TD>
+            <TD>
+              <MigrationStatusBadge status={m.status.toUpperCase() as MigrationStatusKey} />
+            </TD>
+            <TD>
+              <ProgressBar
+                value={m.progress_percentage}
+                variant={
+                  m.status === "completed"
+                    ? "ok"
+                    : m.status === "failed"
+                      ? "err"
+                      : "signal"
+                }
+                className="w-40"
+                showPct
+              />
+            </TD>
+            <TD numeric muted>
+              {formatDuration(m.duration_seconds)}
+            </TD>
+            <TD numeric muted>
+              {formatRelativeTime(m.updated_at)}
+            </TD>
           </TR>
-        </THead>
-        <tbody>
-          {items.map((m, i) => (
-            <TR key={m.id} interactive className="sw-mount">
-              <TD mono muted>
-                <button
-                  type="button"
-                  onClick={() => onRowClick(m.id)}
-                  className="text-left hover:text-signal transition-colors duration-150 tabular"
-                  style={{ "--sw-i": i } as React.CSSProperties}
-                >
-                  #{m.id}
-                </button>
-              </TD>
-              <TD>
-                <button
-                  type="button"
-                  onClick={() => onRowClick(m.id)}
-                  className="text-left hover:text-signal transition-colors duration-150 w-full font-medium"
-                >
-                  {vmName(m.vm_id, vms)}
-                </button>
-              </TD>
-              <TD mono muted>{m.strategy}</TD>
-              <TD>
-                <Badge variant={STATUS_VARIANT[m.status]}>{m.status.replace(/_/g, " ")}</Badge>
-              </TD>
-              <TD>
-                <ProgressBar
-                  value={m.progress_percentage}
-                  variant={
-                    m.status === "completed"
-                      ? "ok"
-                      : m.status === "failed"
-                        ? "white"
-                        : "signal"
-                  }
-                  className="w-40"
-                  showPct
-                />
-              </TD>
-              <TD numeric muted>{formatDuration(m.duration_seconds)}</TD>
-              <TD numeric muted>{formatRelativeTime(m.updated_at)}</TD>
-            </TR>
-          ))}
-        </tbody>
-      </Table>
-    </div>
+        ))}
+      </tbody>
+    </Table>
   );
 }
 
@@ -489,34 +557,36 @@ function Pagination({
 
   return (
     <div className="flex items-center justify-between">
-      <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted tabular">
-        {from}–{to} / {total}
+      <span className="text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)] tabular">
+        {from}–{to} of {total}
       </span>
       <div className="flex items-center gap-1.5">
         <Button
           variant="ghost"
+          size="sm"
           onClick={() => onChange(page - 1)}
           disabled={page <= 1}
           aria-label="Previous page"
           leadingIcon={<Icon icon={ChevronLeft} size={14} />}
         >
-          previous
+          Previous
         </Button>
-        <span className="font-mono text-[11px] tabular text-ink-muted px-2">
+        <span className="text-[11px] tabular text-[var(--text-secondary)] px-2">
           {page} / {totalPages}
         </span>
         <Button
           variant="ghost"
+          size="sm"
           onClick={() => onChange(page + 1)}
           disabled={page >= totalPages}
           aria-label="Next page"
           trailingIcon={<Icon icon={ChevronRight} size={14} />}
         >
-          next
+          Next
         </Button>
       </div>
     </div>
   );
 }
 
-export { formatDuration, STATUS_VARIANT };
+export { formatDuration };

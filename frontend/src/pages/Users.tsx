@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Ban,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -10,7 +12,7 @@ import {
   Users as UsersIcon,
   UserX,
 } from "lucide-react";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -18,6 +20,7 @@ import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
+import { KPIPrimary } from "@/components/ui/KPIPrimary";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { Select } from "@/components/ui/Select";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
@@ -47,9 +50,7 @@ export default function Users() {
       skip: (page - 1) * PAGE_SIZE,
       limit: PAGE_SIZE,
       ...(search.trim() ? { search: search.trim() } : {}),
-      ...(activeFilter === ""
-        ? {}
-        : { is_active: activeFilter === "true" }),
+      ...(activeFilter === "" ? {} : { is_active: activeFilter === "true" }),
     }),
     [page, search, activeFilter],
   );
@@ -67,25 +68,18 @@ export default function Users() {
   const filtersActive = !!(search || activeFilter);
 
   return (
-    <div className="max-w-[1440px] mx-auto p-6 md:p-8 space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
-        kicker="administration"
-        title="users"
-        breadcrumbs={[
-          { label: "console" },
-          { label: "administration" },
-          { label: "users" },
-        ]}
+        title="Users"
         description="Operator accounts. Each user belongs to a tenant and inherits permissions from one or more roles."
         actions={
           canCreate ? (
             <Button
               variant="primary"
-              uppercase
-              leadingIcon={<Icon icon={Plus} size={16} />}
+              leadingIcon={<Icon icon={Plus} size={16} strokeWidth={2.25} />}
               onClick={() => setCreateOpen(true)}
             >
-              new user
+              New User
             </Button>
           ) : null
         }
@@ -94,13 +88,12 @@ export default function Users() {
       <StatsStrip total={total} items={items} isLoading={listQuery.isPending} />
 
       <Panel
-        density="compact"
         kicker={
           filtersActive
-            ? `filters active · ${total} results`
+            ? `Filters active · ${total} results`
             : `${total} users registered`
         }
-        title="directory"
+        title="Directory"
         action={
           <Toolbar
             search={search}
@@ -135,14 +128,8 @@ export default function Users() {
         onChange={setPage}
       />
 
-      <UserCreateDrawer
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-      />
-      <UserDetailDrawer
-        id={selectedId}
-        onClose={() => setSelectedId(null)}
-      />
+      <UserCreateDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
+      <UserDetailDrawer id={selectedId} onClose={() => setSelectedId(null)} />
     </div>
   );
 }
@@ -163,68 +150,32 @@ function StatsStrip({
   const superusers = items.filter((u) => u.is_superuser).length;
 
   return (
-    <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Tile kicker="total" value={isLoading ? null : formatNumber(total)} icon={UsersIcon} tone="signal" />
-      <Tile
-        kicker="active (page)"
-        value={isLoading ? null : formatNumber(active)}
+    <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <KPIPrimary
+        label="Total"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(total)}
+        icon={UsersIcon}
+        iconTone="accent"
+      />
+      <KPIPrimary
+        label="Active (page)"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(active)}
         icon={UserCheck}
-        tone="ok"
+        iconTone="success"
       />
-      <Tile
-        kicker="inactive (page)"
-        value={isLoading ? null : formatNumber(inactive)}
+      <KPIPrimary
+        label="Inactive (page)"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(inactive)}
         icon={UserX}
-        tone="muted"
+        iconTone="muted"
       />
-      <Tile
-        kicker="superusers (page)"
-        value={isLoading ? null : formatNumber(superusers)}
+      <KPIPrimary
+        label="Superusers (page)"
+        value={isLoading ? <Skeleton className="h-5 w-12" /> : formatNumber(superusers)}
         icon={UserPlus}
-        tone="err"
+        iconTone="warn"
       />
     </section>
-  );
-}
-
-function Tile({
-  kicker,
-  value,
-  icon,
-  tone,
-}: {
-  kicker: string;
-  value: string | null;
-  icon?: typeof UsersIcon;
-  tone: "ok" | "err" | "muted" | "signal";
-}) {
-  const color =
-    tone === "ok"
-      ? "var(--ok)"
-      : tone === "err"
-        ? "var(--err)"
-        : tone === "signal"
-          ? "var(--signal)"
-          : "var(--ink)";
-  return (
-    <Panel density="compact">
-      <div className="flex items-start justify-between gap-3">
-        <span className="kicker">{kicker}</span>
-        {icon && <Icon icon={icon} size={14} className="text-ink-faint" />}
-      </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        {value === null ? (
-          <Skeleton className="h-7 w-20" />
-        ) : (
-          <span
-            className="font-mono tabular text-[28px] leading-none"
-            style={{ color }}
-          >
-            {value}
-          </span>
-        )}
-      </div>
-    </Panel>
   );
 }
 
@@ -247,14 +198,14 @@ function Toolbar({
         <Icon
           icon={Search}
           size={14}
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none"
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none"
         />
         <Input
           aria-label="Search users"
-          placeholder="email, name, username…"
+          placeholder="Email, name, username…"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          className="pl-8 h-9 w-60"
+          className="pl-9 h-9 w-64"
         />
       </div>
       <Select
@@ -263,9 +214,9 @@ function Toolbar({
         onChange={(e) => onActiveFilter(e.target.value as ActiveFilter)}
         className="w-36 h-9"
       >
-        <option value="">all statuses</option>
-        <option value="true">active</option>
-        <option value="false">inactive</option>
+        <option value="">All Statuses</option>
+        <option value="true">Active</option>
+        <option value="false">Inactive</option>
       </Select>
     </div>
   );
@@ -292,7 +243,7 @@ function UsersTable({
     return (
       <div className="m-6">
         <Callout tone="err" role="alert">
-          failed to load users.
+          Could not load users. Refresh to retry.
         </Callout>
       </div>
     );
@@ -312,21 +263,20 @@ function UsersTable({
     return (
       <EmptyState
         icon={UsersIcon}
-        title="no users"
+        title="No users yet"
         hint={
           canCreate
-            ? "create the first user account to onboard an operator."
-            : "no users yet — ask a super-admin to register accounts."
+            ? "Create the first user account to onboard an operator."
+            : "No users yet. Ask a super-admin to register accounts."
         }
         action={
           canCreate ? (
             <Button
               variant="primary"
-              uppercase
-              leadingIcon={<Icon icon={Plus} size={14} />}
+              leadingIcon={<Icon icon={Plus} size={14} strokeWidth={2.25} />}
               onClick={onCreate}
             >
-              new user
+              New User
             </Button>
           ) : undefined
         }
@@ -335,46 +285,46 @@ function UsersTable({
   }
 
   return (
-    <Table>
+    <Table className="px-2">
       <THead>
         <TR>
-          <TH>username</TH>
-          <TH>email</TH>
-          <TH>full name</TH>
-          <TH>tenant</TH>
-          <TH>role</TH>
-          <TH>status</TH>
-          <TH numeric>created</TH>
+          <TH>Username</TH>
+          <TH>Email</TH>
+          <TH>Full Name</TH>
+          <TH>Tenant</TH>
+          <TH>Role</TH>
+          <TH>Status</TH>
+          <TH numeric>Created</TH>
         </TR>
       </THead>
       <tbody>
         {items.map((u) => (
           <TR key={u.id} interactive>
-            <TD mono>
+            <TD>
               <button
                 type="button"
                 onClick={() => onRowClick(u.id)}
-                className="text-left hover:text-signal transition-colors duration-150 w-full"
+                className="text-left text-[var(--text-primary)] hover:text-[var(--accent-light)] transition-colors duration-150 w-full font-bold"
               >
                 {u.username}
               </button>
             </TD>
             <TD>{u.email}</TD>
             <TD muted>{u.full_name || "—"}</TD>
-            <TD mono muted>{u.tenant_id}</TD>
+            <TD muted>{u.tenant_id}</TD>
             <TD>
               {u.is_superuser ? (
                 <RoleBadge role="super_admin" />
               ) : (
-                <span className="font-mono text-[11px] text-ink-muted uppercase tracking-[0.04em]">
-                  member
-                </span>
+                <span className="text-[11px] text-[var(--text-muted)]">member</span>
               )}
             </TD>
             <TD>
-              <Badge variant={u.is_active ? "ok" : "neutral"}>
-                {u.is_active ? "active" : "inactive"}
-              </Badge>
+              <StatusBadge
+                icon={u.is_active ? CheckCircle2 : Ban}
+                label={u.is_active ? "Active" : "Inactive"}
+                tone={u.is_active ? "ok" : "muted"}
+              />
             </TD>
             <TD numeric muted>
               {formatRelativeTime(u.created_at)}
@@ -406,30 +356,32 @@ function Pagination({
 
   return (
     <div className="flex items-center justify-between">
-      <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink-muted tabular">
-        {from}–{to} / {total}
+      <span className="text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)] tabular">
+        {from}–{to} of {total}
       </span>
       <div className="flex items-center gap-2">
         <Button
           variant="ghost"
+          size="sm"
           onClick={() => onChange(page - 1)}
           disabled={page <= 1}
           aria-label="Previous page"
           leadingIcon={<Icon icon={ChevronLeft} size={14} />}
         >
-          previous
+          Previous
         </Button>
-        <span className="font-mono text-[11px] tabular text-ink-muted px-2">
+        <span className="text-[11px] tabular text-[var(--text-secondary)] px-2">
           {page} / {totalPages}
         </span>
         <Button
           variant="ghost"
+          size="sm"
           onClick={() => onChange(page + 1)}
           disabled={page >= totalPages}
           aria-label="Next page"
           trailingIcon={<Icon icon={ChevronRight} size={14} />}
         >
-          next
+          Next
         </Button>
       </div>
     </div>

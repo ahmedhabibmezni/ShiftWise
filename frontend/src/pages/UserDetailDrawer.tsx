@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { Pencil, Save, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, Pencil, Save, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -13,6 +13,7 @@ import { MetricRow } from "@/components/ui/MetricRow";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   deleteUser,
   getUser,
@@ -22,7 +23,12 @@ import {
 } from "@/api/users";
 import type { ApiError, User } from "@/api/types";
 import { formatRelativeTime } from "@/lib/format";
-import { primaryRole, useHasPermission } from "@/lib/permissions";
+import {
+  isSuperAdminUser,
+  primaryRole,
+  SUPER_ADMIN_ROLE,
+  useHasPermission,
+} from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
 
 function describeError(err: unknown, fallback: string): string {
@@ -103,8 +109,10 @@ export function UserDetailDrawer({
   const canDelete = useHasPermission("users", "delete");
   const me = useAuthStore((s) => s.user);
   const isSelf = !!me && me.id === id;
+  const meIsSuperuser = me?.is_superuser ?? false;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: ["user", id],
@@ -119,12 +127,25 @@ export function UserDetailDrawer({
     staleTime: 5 * 60_000,
   });
 
+  // A non-superuser cannot grant the super_admin role — drop it from the
+  // edit form's role list so it is never offered.
+  const editableRoles = useMemo(
+    () =>
+      (rolesQuery.data ?? []).filter(
+        (r) => meIsSuperuser || r.name !== SUPER_ADMIN_ROLE,
+      ),
+    [rolesQuery.data, meIsSuperuser],
+  );
+
   useEffect(() => {
     if (detailQuery.data) setDraft(draftFrom(detailQuery.data));
   }, [detailQuery.data]);
 
   useEffect(() => {
-    if (!open) setEditing(false);
+    if (!open) {
+      setEditing(false);
+      setConfirmDelete(false);
+    }
   }, [open]);
 
   const setAuthUser = useAuthStore((s) => s.setUser);
@@ -138,39 +159,50 @@ export function UserDetailDrawer({
       return updateUser(id!, payload);
     },
     onSuccess: (next) => {
-      toast.success("user updated");
+      toast.success("User updated");
       queryClient.invalidateQueries({ queryKey: ["user", id] });
       queryClient.invalidateQueries({ queryKey: ["users"] });
       // If the operator just edited their own profile, push the new user
       // object straight into the auth store. /me is read once by AuthGate
       // at boot — there's no React Query for it — so invalidating a
       // synthetic "auth/me" key wouldn't actually refresh anything. The
-      // sidebar / RoleStripe / route guards all read from the store.
+      // sidebar and route guards all read from the store.
       if (isSelf) {
         setAuthUser(next);
       }
       setEditing(false);
     },
-    onError: (err) => toast.error(describeError(err, "update failed")),
+    onError: (err) => toast.error(describeError(err, "Update failed")),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteUser(id!),
     onSuccess: () => {
-      toast.success("user deleted");
+      toast.success("User deleted");
       queryClient.invalidateQueries({ queryKey: ["users"] });
       onClose();
     },
-    onError: (err) => toast.error(describeError(err, "delete failed")),
+    onError: (err) => {
+      setConfirmDelete(false);
+      toast.error(describeError(err, "Delete failed"));
+    },
   });
 
   const user = detailQuery.data;
+  // A non-superuser may not modify a super-admin account — mirrors the
+  // backend guard in update_user / delete_user. Self-edits stay allowed.
+  const targetIsSuperAdmin = !!user && isSuperAdminUser(user);
+  const canEditUser =
+    canUpdate && (meIsSuperuser || isSelf || !targetIsSuperAdmin);
+  const canDeleteUser =
+    canDelete && !isSelf && (meIsSuperuser || !targetIsSuperAdmin);
 
   return (
+    <>
     <SlideOver
       open={open}
       onClose={onClose}
-      title={user ? user.username : "user"}
+      title={user ? user.username : "User"}
       footer={
         user && (
           editing ? (
@@ -183,50 +215,39 @@ export function UserDetailDrawer({
                 }}
                 disabled={updateMutation.isPending}
               >
-                cancel
+                Cancel
               </Button>
               <Button
                 variant="primary"
-                uppercase
                 loading={updateMutation.isPending}
                 onClick={() => updateMutation.mutate()}
                 leadingIcon={<Icon icon={Save} size={14} />}
               >
-                save
+                Save
               </Button>
             </>
           ) : (
             <>
               <Button variant="secondary" onClick={onClose}>
-                close
+                Close
               </Button>
-              {canDelete && !isSelf && (
+              {canDeleteUser && (
                 <Button
                   variant="secondary"
-                  uppercase
                   loading={deleteMutation.isPending}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `delete user '${user.username}'? this cannot be undone.`,
-                      )
-                    ) {
-                      deleteMutation.mutate();
-                    }
-                  }}
+                  onClick={() => setConfirmDelete(true)}
                   leadingIcon={<Icon icon={Trash2} size={14} />}
                 >
-                  delete
+                  Delete
                 </Button>
               )}
-              {canUpdate && (
+              {canEditUser && (
                 <Button
                   variant="primary"
-                  uppercase
                   onClick={() => setEditing(true)}
                   leadingIcon={<Icon icon={Pencil} size={14} />}
                 >
-                  edit
+                  Edit
                 </Button>
               )}
             </>
@@ -244,7 +265,7 @@ export function UserDetailDrawer({
         <EditForm
           draft={draft}
           onChange={setDraft}
-          allRoles={rolesQuery.data ?? []}
+          allRoles={editableRoles}
           rolesPending={rolesQuery.isPending}
         />
       ) : (
@@ -254,33 +275,62 @@ export function UserDetailDrawer({
           <RolesSection user={user} />
           {isSelf && (
             <Callout tone="info">
-              this is your own account · the self-delete guard is enforced both
+              This is your own account. The self-delete guard is enforced both
               client- and server-side.
+            </Callout>
+          )}
+          {targetIsSuperAdmin && !meIsSuperuser && !isSelf && (
+            <Callout tone="info" kicker="Restricted">
+              Super-admin accounts can only be modified by another
+              super-admin.
             </Callout>
           )}
         </div>
       )}
     </SlideOver>
+    {user && (
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate()}
+        loading={deleteMutation.isPending}
+        icon={Trash2}
+        title="Delete this user?"
+        confirmLabel="Delete user"
+        cancelLabel="Keep user"
+        message={
+          <>
+            <strong className="font-bold text-[var(--text-primary)]">
+              {user.full_name || user.username}
+            </strong>{" "}
+            ({user.email}) loses access immediately and is removed from every
+            role they hold. This cannot be undone. To suspend access without
+            deleting, edit the user and clear the Active flag instead.
+          </>
+        }
+      />
+    )}
+    </>
   );
 }
 
 function Hero({ user }: { user: User }) {
   const role = primaryRole(user) ?? "member";
   return (
-    <section className="border border-line bg-bg-elev p-5">
+    <section className="rounded-2xl bg-[var(--surface-soft)] p-5">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <RoleBadge role={role} />
-        <Badge variant={user.is_active ? "ok" : "neutral"}>
-          {user.is_active ? "active" : "inactive"}
-        </Badge>
-        {user.is_verified && <Badge variant="info">verified</Badge>}
+        <StatusBadge
+          icon={user.is_active ? CheckCircle2 : Ban}
+          label={user.is_active ? "Active" : "Inactive"}
+          tone={user.is_active ? "ok" : "muted"}
+        />
+        {user.is_verified && <StatusBadge icon={CheckCircle2} label="Verified" tone="info" />}
       </div>
-      <div className="font-mono tabular text-[22px] leading-none text-ink">
+      <div className="text-[22px] font-bold tabular leading-none text-[var(--text-primary)] tracking-[-0.01em]">
         {user.full_name || user.username}
       </div>
-      <div className="mt-2 font-mono text-[11px] text-ink-muted">
-        {user.email}
-      </div>
+      <div className="mt-2 text-[12px] text-[var(--text-secondary)]">{user.email}</div>
     </section>
   );
 }
@@ -288,20 +338,20 @@ function Hero({ user }: { user: User }) {
 function Facts({ user }: { user: User }) {
   return (
     <section>
-      <div className="kicker mb-3">facts</div>
+      <div className="kicker mb-3">Facts</div>
       <div>
-        <MetricRow label="username" value={user.username} />
-        <MetricRow label="tenant" value={user.tenant_id} />
+        <MetricRow label="Username" value={user.username} />
+        <MetricRow label="Tenant" value={user.tenant_id} />
         <MetricRow
-          label="last login"
+          label="Last Login"
           value={
             user.last_login_at
               ? `${formatRelativeTime(user.last_login_at)}${user.last_login_ip ? ` · ${user.last_login_ip}` : ""}`
-              : "never"
+              : "Never"
           }
         />
-        <MetricRow label="created" value={formatRelativeTime(user.created_at)} />
-        <MetricRow label="updated" value={formatRelativeTime(user.updated_at)} />
+        <MetricRow label="Created" value={formatRelativeTime(user.created_at)} />
+        <MetricRow label="Updated" value={formatRelativeTime(user.updated_at)} />
       </div>
     </section>
   );
@@ -310,21 +360,23 @@ function Facts({ user }: { user: User }) {
 function RolesSection({ user }: { user: User }) {
   return (
     <section>
-      <div className="kicker mb-3">assigned roles · {user.roles.length}</div>
+      <div className="kicker mb-3">Assigned roles · {user.roles.length}</div>
       {user.roles.length === 0 ? (
-        <div className="font-mono text-[11px] text-ink-muted uppercase tracking-[0.05em]">
-          no role · falls back to member capabilities
+        <div className="text-[12px] text-[var(--text-secondary)]">
+          No role · falls back to member capabilities
         </div>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {user.roles.map((r) => (
             <li
               key={r.id}
-              className="flex items-center justify-between border border-line bg-bg-elev px-3 py-2"
+              className="flex items-center justify-between rounded-xl bg-[var(--surface-soft)] px-3.5 py-2.5"
             >
-              <span className="font-mono text-[12px] text-ink">{r.name}</span>
+              <span className="text-[13px] font-bold text-[var(--text-primary)]">
+                {r.name}
+              </span>
               {r.description && (
-                <span className="font-mono text-[10px] text-ink-muted lowercase max-w-[60%] truncate">
+                <span className="text-[11px] text-[var(--text-secondary)] max-w-[60%] truncate">
                   {r.description}
                 </span>
               )}
@@ -359,7 +411,7 @@ function EditForm({
 
   return (
     <div className="space-y-5">
-      <Field id="ed-email" label="email">
+      <Field id="ed-email" label="Email">
         <Input
           id="ed-email"
           type="email"
@@ -369,7 +421,7 @@ function EditForm({
         />
       </Field>
 
-      <Field id="ed-username" label="username">
+      <Field id="ed-username" label="Username">
         <Input
           id="ed-username"
           autoComplete="username"
@@ -378,8 +430,8 @@ function EditForm({
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field id="ed-first" label="first name">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field id="ed-first" label="First name">
           <Input
             id="ed-first"
             autoComplete="given-name"
@@ -388,7 +440,7 @@ function EditForm({
           />
         </Field>
 
-        <Field id="ed-last" label="last name">
+        <Field id="ed-last" label="Last name">
           <Input
             id="ed-last"
             autoComplete="family-name"
@@ -400,8 +452,8 @@ function EditForm({
 
       <Field
         id="ed-password"
-        label="password"
-        hint="leave blank to keep the current credential."
+        label="Password"
+        hint="Leave blank to keep the current credential."
       >
         <Input
           id="ed-password"
@@ -413,32 +465,28 @@ function EditForm({
         />
       </Field>
 
-      <label className="flex items-center gap-2 cursor-pointer">
+      <label className="flex items-center gap-2.5 cursor-pointer">
         <Checkbox
           checked={draft.is_active}
           onChange={(e) => set("is_active", e.target.checked)}
         />
-        <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
-          active
-        </span>
+        <span className="text-[13px] text-[var(--text-primary)] font-medium">Active</span>
       </label>
 
       <div>
-        <div className="kicker mb-2">roles</div>
+        <div className="kicker mb-2">Roles</div>
         {rolesPending ? (
           <Skeleton className="h-24 w-full" />
         ) : allRoles.length === 0 ? (
-          <div className="font-mono text-[11px] text-ink-muted uppercase tracking-[0.05em]">
-            no role available
-          </div>
+          <div className="text-[12px] text-[var(--text-secondary)]">No roles available</div>
         ) : (
-          <ul className="space-y-1.5">
+          <ul className="space-y-2">
             {allRoles.map((r) => {
               const checked = draft.role_ids.includes(r.id);
               return (
                 <li
                   key={r.id}
-                  className="flex items-center gap-3 border border-line bg-bg-elev px-3 py-2"
+                  className="flex items-center gap-3 rounded-xl bg-[var(--surface-soft)] px-3.5 py-2.5"
                 >
                   <Checkbox
                     aria-label={`role ${r.name}`}
@@ -446,9 +494,11 @@ function EditForm({
                     onChange={(e) => toggleRole(r.id, e.target.checked)}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono text-[12px] text-ink">{r.name}</div>
+                    <div className="text-[13px] font-bold text-[var(--text-primary)]">
+                      {r.name}
+                    </div>
                     {r.description && (
-                      <div className="font-mono text-[10px] text-ink-muted lowercase truncate">
+                      <div className="text-[11px] text-[var(--text-muted)] truncate">
                         {r.description}
                       </div>
                     )}
@@ -478,13 +528,13 @@ function Field({
     <div>
       <label
         htmlFor={id}
-        className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
+        className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
       >
         {label}
       </label>
       {children}
       {hint && (
-        <div className="mt-1 font-mono text-[10px] text-ink-muted">{hint}</div>
+        <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">{hint}</div>
       )}
     </div>
   );

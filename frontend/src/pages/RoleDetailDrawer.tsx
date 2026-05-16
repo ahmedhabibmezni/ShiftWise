@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { Lock, Pencil, Save, Trash2, Users as UsersIcon } from "lucide-react";
+import { Ban, CheckCircle2, Lock, Pencil, Save, Trash2, Users as UsersIcon } from "lucide-react";
 import toast from "react-hot-toast";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
 import { MetricRow } from "@/components/ui/MetricRow";
 import { PermissionsMatrix } from "@/components/ui/PermissionsMatrix";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Textarea } from "@/components/ui/Textarea";
 import {
   deleteRole,
@@ -48,6 +50,7 @@ export function RoleDetailDrawer({
   const [draftDescription, setDraftDescription] = useState("");
   const [draftPermissions, setDraftPermissions] = useState<RolePermissions>({});
   const [draftActive, setDraftActive] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: ["role", id],
@@ -74,7 +77,10 @@ export function RoleDetailDrawer({
   }, [detailQuery.data]);
 
   useEffect(() => {
-    if (!open) setEditing(false);
+    if (!open) {
+      setEditing(false);
+      setConfirmDelete(false);
+    }
   }, [open]);
 
   const updateMutation = useMutation({
@@ -86,22 +92,25 @@ export function RoleDetailDrawer({
         is_active: draftActive,
       }),
     onSuccess: () => {
-      toast.success("role updated");
+      toast.success("Role updated");
       queryClient.invalidateQueries({ queryKey: ["role", id] });
       queryClient.invalidateQueries({ queryKey: ["roles"] });
       setEditing(false);
     },
-    onError: (err) => toast.error(describeError(err, "update failed")),
+    onError: (err) => toast.error(describeError(err, "Update failed")),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteRole(id!),
     onSuccess: () => {
-      toast.success("role deleted");
+      toast.success("Role deleted");
       queryClient.invalidateQueries({ queryKey: ["roles"] });
       onClose();
     },
-    onError: (err) => toast.error(describeError(err, "delete failed")),
+    onError: (err) => {
+      setConfirmDelete(false);
+      toast.error(describeError(err, "Delete failed"));
+    },
   });
 
   const role = detailQuery.data;
@@ -110,55 +119,45 @@ export function RoleDetailDrawer({
   const deletable = canDelete && !isSystem && (role?.user_count ?? 0) === 0;
 
   return (
+    <>
     <SlideOver
       open={open}
       onClose={onClose}
-      title={role ? role.name : "role"}
+      title={role ? role.name : "Role"}
       footer={
         role && (
           <>
             <Button variant="secondary" onClick={onClose}>
-              close
+              Close
             </Button>
             {editing ? (
               <Button
                 variant="primary"
-                uppercase
                 loading={updateMutation.isPending}
                 onClick={() => updateMutation.mutate()}
                 leadingIcon={<Icon icon={Save} size={14} />}
               >
-                save
+                Save
               </Button>
             ) : (
               <>
                 {deletable && (
                   <Button
                     variant="secondary"
-                    uppercase
                     loading={deleteMutation.isPending}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `delete role '${role.name}'? this cannot be undone.`,
-                        )
-                      ) {
-                        deleteMutation.mutate();
-                      }
-                    }}
+                    onClick={() => setConfirmDelete(true)}
                     leadingIcon={<Icon icon={Trash2} size={14} />}
                   >
-                    delete
+                    Delete
                   </Button>
                 )}
                 {editable && (
                   <Button
                     variant="primary"
-                    uppercase
                     onClick={() => setEditing(true)}
                     leadingIcon={<Icon icon={Pencil} size={14} />}
                   >
-                    edit
+                    Edit
                   </Button>
                 )}
               </>
@@ -196,7 +195,7 @@ export function RoleDetailDrawer({
           )}
 
           <section>
-            <div className="kicker mb-2">permissions matrix</div>
+            <div className="kicker mb-2">Permissions matrix</div>
             {resourcesQuery.data ? (
               <PermissionsMatrix
                 resources={resourcesQuery.data.resources}
@@ -212,23 +211,43 @@ export function RoleDetailDrawer({
 
           {isSystem && (
             <Callout tone="info" icon={Lock}>
-              system role · permissions are seeded at install and cannot be changed.
+              System role · permissions are seeded at install and cannot be changed.
             </Callout>
           )}
 
           {!isSystem && role.user_count > 0 && !editing && (
-            <Callout tone="warn">
-              <div className="font-mono text-[11px]">
-                <span className="kicker mr-2">in use</span>
-                this role is assigned to {role.user_count} user
-                {role.user_count > 1 ? "s" : ""}. Deletion requires unassigning
-                them first.
-              </div>
+            <Callout tone="warn" kicker="In use">
+              This role is assigned to {role.user_count} user
+              {role.user_count > 1 ? "s" : ""}. Deletion requires unassigning
+              them first.
             </Callout>
           )}
         </div>
       )}
     </SlideOver>
+    {role && (
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate()}
+        loading={deleteMutation.isPending}
+        icon={Trash2}
+        title="Delete this role?"
+        confirmLabel="Delete role"
+        cancelLabel="Keep role"
+        message={
+          <>
+            The custom role{" "}
+            <strong className="font-bold text-[var(--text-primary)]">
+              {role.name}
+            </strong>{" "}
+            and its permission set are removed. No users are assigned to it, so
+            no access changes for anyone. This cannot be undone.
+          </>
+        }
+      />
+    )}
+    </>
   );
 }
 
@@ -238,19 +257,23 @@ function Hero({
   role: { name: string; is_system_role: boolean; is_active: boolean; user_count: number };
 }) {
   return (
-    <section className="border border-line bg-bg-elev p-5">
+    <section className="rounded-2xl bg-[var(--surface-soft)] p-5">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <Badge variant={role.is_system_role ? "info" : "ok"}>
-          {role.is_system_role ? "system" : "custom"}
-        </Badge>
-        <Badge variant={role.is_active ? "ok" : "neutral"}>
-          {role.is_active ? "active" : "disabled"}
-        </Badge>
+        <StatusBadge
+          icon={Lock}
+          label={role.is_system_role ? "System" : "Custom"}
+          tone={role.is_system_role ? "info" : "muted"}
+        />
+        <StatusBadge
+          icon={role.is_active ? CheckCircle2 : Ban}
+          label={role.is_active ? "Active" : "Disabled"}
+          tone={role.is_active ? "ok" : "muted"}
+        />
       </div>
-      <div className="font-mono tabular text-[22px] leading-none text-ink">
+      <div className="text-[22px] font-bold tabular leading-none text-[var(--text-primary)] tracking-[-0.01em]">
         {role.name}
       </div>
-      <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-muted">
+      <div className="mt-3 flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
         <Icon icon={UsersIcon} size={12} />
         {role.user_count} user{role.user_count !== 1 ? "s" : ""} assigned
       </div>
@@ -271,12 +294,12 @@ function Facts({
 }) {
   return (
     <section>
-      <div className="kicker mb-3">facts</div>
+      <div className="kicker mb-3">Facts</div>
       <div>
-        <MetricRow label="description" value={description ?? "—"} />
-        <MetricRow label="users" value={`${userCount}`} />
-        <MetricRow label="created" value={formatRelativeTime(createdAt)} />
-        <MetricRow label="updated" value={formatRelativeTime(updatedAt)} />
+        <MetricRow label="Description" value={description ?? "—"} />
+        <MetricRow label="Users" value={`${userCount}`} />
+        <MetricRow label="Created" value={formatRelativeTime(createdAt)} />
+        <MetricRow label="Updated" value={formatRelativeTime(updatedAt)} />
       </div>
     </section>
   );
@@ -300,18 +323,20 @@ function EditFields({
   return (
     <section className="space-y-4">
       <div>
-        <label className="block kicker mb-1.5" htmlFor="role-name">
-          name
+        <label
+          className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
+          htmlFor="role-name"
+        >
+          Name
         </label>
-        <Input
-          id="role-name"
-          value={name}
-          onChange={(e) => onName(e.target.value)}
-        />
+        <Input id="role-name" value={name} onChange={(e) => onName(e.target.value)} />
       </div>
       <div>
-        <label className="block kicker mb-1.5" htmlFor="role-desc">
-          description
+        <label
+          className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
+          htmlFor="role-desc"
+        >
+          Description
         </label>
         <Textarea
           id="role-desc"
@@ -320,16 +345,9 @@ function EditFields({
           onChange={(e) => onDescription(e.target.value)}
         />
       </div>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="checkbox"
-          className="h-3.5 w-3.5 accent-signal"
-          checked={active}
-          onChange={(e) => onActive(e.target.checked)}
-        />
-        <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
-          active
-        </span>
+      <label className="flex items-center gap-2.5 cursor-pointer">
+        <Checkbox checked={active} onChange={(e) => onActive(e.target.checked)} />
+        <span className="text-[13px] text-[var(--text-primary)] font-medium">Active</span>
       </label>
     </section>
   );

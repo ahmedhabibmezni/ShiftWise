@@ -1,7 +1,9 @@
+import { LiveIndicator } from "@/components/ui/LiveIndicator";
+
 export function Footer({
   uptime = "12d 04:11:23",
-  region = "paris, fr",
-  environment = "production",
+  region = "Paris, FR",
+  environment = "Production",
   version = "2.4.1",
 }: {
   uptime?: string;
@@ -11,34 +13,33 @@ export function Footer({
 }) {
   const buildHash = (typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev") as string;
 
-  const items: { label: string; value: string; signal?: boolean }[] = [
-    { label: "env", value: environment, signal: true },
-    { label: "build", value: buildHash },
-    { label: "rev", value: `v${version}` },
-    { label: "region", value: region },
-    { label: "uptime", value: uptime },
+  const items: { label: string; value: string; tone?: "ok" | "muted" }[] = [
+    { label: "Env", value: environment, tone: "ok" },
+    { label: "Build", value: buildHash, tone: "muted" },
+    { label: "Rev", value: `v${version}`, tone: "muted" },
+    { label: "Region", value: region, tone: "muted" },
+    { label: "Uptime", value: uptime, tone: "muted" },
   ];
 
   return (
-    <footer className="h-9 px-6 flex items-center justify-between border-t border-line bg-bg-elev">
-      <div className="flex items-center gap-1.5">
-        <span
-          aria-hidden
-          className="block h-1 w-1 bg-ok rounded-full"
-          style={{ animation: "shiftwise-pulse 2.4s var(--ease-out) infinite" }}
-        />
-        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
-          all systems operational
-        </span>
-      </div>
+    <footer className="px-2 flex items-center justify-between gap-4 flex-wrap pt-1">
+      <LiveIndicator tone="ok" label="All systems operational" />
       <div className="flex items-center gap-5 overflow-x-auto">
         {items.map((it) => (
           <span
             key={it.label}
-            className="flex items-center gap-1.5 font-mono text-[10px] uppercase tabular shrink-0"
+            className="flex items-center gap-1.5 text-[11px] tabular shrink-0"
           >
-            <span className="text-ink-faint">{it.label}</span>
-            <span className={it.signal ? "text-signal" : "text-ink"}>
+            <span className="text-[var(--text-muted)] font-medium">{it.label}</span>
+            <span
+              className="font-bold"
+              style={{
+                color:
+                  it.tone === "ok"
+                    ? "var(--alert-success-light)"
+                    : "var(--text-primary)",
+              }}
+            >
               {it.value}
             </span>
           </span>

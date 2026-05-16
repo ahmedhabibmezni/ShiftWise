@@ -1,71 +1,100 @@
+import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { Icon } from "./Icon";
 
-type Tone = "signal" | "info";
+type IconTone = "accent" | "blue" | "success" | "warn" | "muted";
 
-const TONES: Record<Tone, { bg: string; ink: string; rule: string }> = {
-  signal: { bg: "var(--signal)", ink: "var(--signal-ink)", rule: "rgba(255,255,255,0.25)" },
-  info: { bg: "var(--info)", ink: "var(--info-ink)", rule: "rgba(255,255,255,0.18)" },
+const ICON_CLASS: Record<IconTone, string> = {
+  accent:  "icon-container icon-container--accent",
+  blue:    "icon-container icon-container--blue",
+  success: "icon-container icon-container--success",
+  warn:    "icon-container icon-container--warn",
+  muted:   "icon-container icon-container--muted",
 };
 
+/**
+ * KPI card — the canonical Vision UI metric tile.
+ *
+ *   ┌────────────────────────────────────┐
+ *   │  Label              ┌──────────┐   │
+ *   │  12,847 +8%         │  icon    │   │
+ *   └────────────────────────────────────┘
+ *
+ * Wraps a glass card and adds a 45×45 gradient icon container.
+ */
 export function KPIPrimary({
   label,
   value,
-  tone = "signal",
-  headline,
-  children,
-  cta,
-  onCta,
+  delta,
+  deltaTone = "up",
+  icon: IconComponent,
+  iconTone = "accent",
   className,
+  href,
+  onClick,
+  children,
 }: {
   label: string;
-  value?: string;
-  tone?: Tone;
-  headline?: string;
-  children?: ReactNode;
-  cta?: string;
-  onCta?: () => void;
+  value: ReactNode;
+  delta?: ReactNode;
+  deltaTone?: "up" | "down" | "neutral";
+  icon: LucideIcon;
+  iconTone?: IconTone;
   className?: string;
+  href?: string;
+  onClick?: () => void;
+  children?: ReactNode;
 }) {
-  const t = TONES[tone];
+  const Tag = href ? "a" : onClick ? "button" : "div";
+  const props: Record<string, unknown> = href
+    ? { href }
+    : onClick
+      ? { type: "button", onClick }
+      : {};
+
   return (
-    <section
-      className={cn("flex flex-col", className)}
-      style={{ backgroundColor: t.bg, color: t.ink }}
-    >
-      <div className="p-8 flex-1">
-        <div className="text-h3 lowercase opacity-95">{label}</div>
-        {value && (
-          <div
-            className="text-display mt-6 tabular"
-            style={{ fontFeatureSettings: '"tnum"' }}
-          >
-            {value}
-          </div>
-        )}
-        {headline && <div className="text-h2 lowercase mt-4 max-w-xl">{headline}</div>}
-        {children && (
-          <div className="mt-6">
-            {value && (
-              <div className="h-px mb-4" style={{ backgroundColor: t.rule }} />
-            )}
-            {children}
-          </div>
-        )}
-      </div>
-      {cta && (
-        <button
-          type="button"
-          onClick={onCta}
-          className="h-12 px-6 flex items-center justify-between text-left text-[14px] font-semibold border-t transition-colors duration-150 hover:brightness-95"
-          style={{ borderColor: t.rule, color: t.ink }}
-        >
-          <span className="lowercase">{cta}</span>
-          <Icon icon={ArrowUpRight} size={20} />
-        </button>
+    <Tag
+      {...props}
+      className={cn(
+        "glass-card text-left p-[22px] block w-full",
+        (href || onClick) && "transition-transform duration-200",
+        className,
       )}
-    </section>
+    >
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex flex-col gap-0.5">
+          <div className="text-[12px] font-medium text-[var(--text-secondary)]">
+            {label}
+          </div>
+          <div className="flex items-baseline gap-2 mt-0.5">
+            <span className="text-[18px] font-bold tracking-[-0.01em] text-[var(--text-primary)] tabular leading-none">
+              {value}
+            </span>
+            {delta && (
+              <span
+                className="text-[12px] font-bold tabular leading-none"
+                style={{
+                  color:
+                    deltaTone === "down"
+                      ? "var(--alert-critical)"
+                      : deltaTone === "neutral"
+                        ? "var(--text-muted)"
+                        : "var(--alert-success-light)",
+                }}
+              >
+                {delta}
+              </span>
+            )}
+          </div>
+        </div>
+        <span
+          aria-hidden
+          className={cn(ICON_CLASS[iconTone], "w-[45px] h-[45px] rounded-xl shrink-0")}
+        >
+          <IconComponent size={20} strokeWidth={1.75} />
+        </span>
+      </div>
+      {children && <div className="mt-4">{children}</div>}
+    </Tag>
   );
 }

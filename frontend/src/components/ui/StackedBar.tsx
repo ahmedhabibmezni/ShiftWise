@@ -24,8 +24,8 @@ export function StackedBar({
       <div
         role="img"
         aria-label="Distribution"
-        className="flex w-full overflow-hidden rounded-sm bg-bg-elev-2"
-        style={{ height }}
+        className="flex w-full overflow-hidden rounded-full"
+        style={{ height, backgroundColor: "var(--surface-soft-strong)" }}
       >
         {segments.map((s) => {
           const pct = (s.value / total) * 100;
@@ -35,7 +35,7 @@ export function StackedBar({
               key={s.key}
               title={`${s.label}: ${s.value}`}
               style={{ width: `${pct}%`, backgroundColor: s.color }}
-              className="h-full"
+              className="h-full transition-[width] duration-[var(--dur-slow)]"
             />
           );
         })}
@@ -47,16 +47,16 @@ export function StackedBar({
             return (
               <li
                 key={s.key}
-                className="flex items-center gap-2 font-mono text-[11px] tabular text-ink-muted"
+                className="flex items-center gap-2 text-[11px] tabular text-[var(--text-secondary)]"
               >
                 <span
                   aria-hidden
-                  className="block h-2 w-2 shrink-0"
+                  className="block h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: s.color }}
                 />
-                <span className="lowercase">{s.label}</span>
-                <span className="text-ink">{s.value}</span>
-                <span className="text-ink-faint">{pct.toFixed(0)}%</span>
+                <span className="font-medium">{s.label}</span>
+                <span className="text-[var(--text-primary)] font-bold">{s.value}</span>
+                <span className="text-[var(--text-muted)]">{pct.toFixed(0)}%</span>
               </li>
             );
           })}

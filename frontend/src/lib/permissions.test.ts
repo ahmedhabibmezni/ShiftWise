@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasPermission, primaryRole } from "./permissions";
+import { hasPermission, isSuperAdminUser, primaryRole } from "./permissions";
 import type { Role, User } from "@/api/types";
 
 function makeRole(name: string): Role {
@@ -26,6 +26,8 @@ function makeUser(over: Partial<User> = {}): User {
     is_active: true,
     is_verified: true,
     is_superuser: false,
+    last_login_at: null,
+    last_login_ip: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     roles: [],
@@ -86,5 +88,24 @@ describe("primaryRole", () => {
   it("falls back to the first role when none is in the standard set", () => {
     const u = makeUser({ roles: [makeRole("custom-op")] });
     expect(primaryRole(u)).toBe("custom-op");
+  });
+});
+
+describe("isSuperAdminUser", () => {
+  it("returns false for a null user", () => {
+    expect(isSuperAdminUser(null)).toBe(false);
+  });
+
+  it("returns true when the is_superuser flag is set", () => {
+    expect(isSuperAdminUser(makeUser({ is_superuser: true }))).toBe(true);
+  });
+
+  it("returns true when the user carries the super_admin role", () => {
+    const u = makeUser({ is_superuser: false, roles: [makeRole("super_admin")] });
+    expect(isSuperAdminUser(u)).toBe(true);
+  });
+
+  it("returns false for an ordinary user without the flag or role", () => {
+    expect(isSuperAdminUser(makeUser({ roles: [makeRole("admin")] }))).toBe(false);
   });
 });

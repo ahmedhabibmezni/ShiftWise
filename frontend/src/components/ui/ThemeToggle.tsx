@@ -1,8 +1,13 @@
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
-import { Icon } from "./Icon";
+import { cn } from "@/lib/cn";
 
-export function ThemeToggle() {
+/**
+ * Sun/moon glass-card pill. The icons crossfade + rotate based on the
+ * active theme (cf. dashboard-target.html). Default size 36×36; pass a
+ * className to override.
+ */
+export function ThemeToggle({ className }: { className?: string }) {
   const { theme, toggle } = useTheme();
   const next = theme === "dark" ? "light" : "dark";
   return (
@@ -11,9 +16,34 @@ export function ThemeToggle() {
       onClick={toggle}
       aria-label={`Switch to ${next} theme`}
       title={`Switch to ${next} theme`}
-      className="h-10 w-10 inline-flex items-center justify-center rounded-sm border border-transparent text-ink-muted hover:bg-bg-elev hover:text-ink transition-colors duration-150 focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1"
+      className={cn(
+        "glass-card relative inline-flex items-center justify-center",
+        "h-9 w-9 rounded-xl text-accent-light",
+        "transition-colors duration-200 hover:text-accent-primary",
+        "overflow-hidden",
+        className,
+      )}
     >
-      <Icon icon={theme === "dark" ? Sun : Moon} size={20} />
+      <Sun
+        size={16}
+        strokeWidth={2}
+        className={cn(
+          "absolute transition-all duration-[var(--dur-slow)]",
+          theme === "dark"
+            ? "opacity-0 -rotate-90 scale-50"
+            : "opacity-100 rotate-0 scale-100",
+        )}
+      />
+      <Moon
+        size={16}
+        strokeWidth={2}
+        className={cn(
+          "absolute transition-all duration-[var(--dur-slow)]",
+          theme === "dark"
+            ? "opacity-100 rotate-0 scale-100"
+            : "opacity-0 rotate-90 scale-50",
+        )}
+      />
     </button>
   );
 }

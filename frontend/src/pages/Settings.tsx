@@ -3,10 +3,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AxiosError } from "axios";
-import { KeyRound, Save, UserCog } from "lucide-react";
+import { Ban, CheckCircle2, KeyRound, Save, UserCog } from "lucide-react";
 import toast from "react-hot-toast";
 import { z } from "zod";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { Icon } from "@/components/ui/Icon";
@@ -28,12 +28,15 @@ function describeError(err: unknown, fallback: string): string {
 }
 
 const profileSchema = z.object({
-  email: z.string().email("invalid email").max(255),
+  email: z.string().email("Invalid email address").max(255),
   username: z
     .string()
-    .min(3, "min 3 characters")
+    .min(3, "Must be at least 3 characters")
     .max(100)
-    .regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/, "must start with a letter — letters, digits, . _ -"),
+    .regex(
+      /^[a-zA-Z][a-zA-Z0-9._-]*$/,
+      "Must start with a letter (letters, digits, . _ - allowed)",
+    ),
   first_name: z.string().max(100).optional().or(z.literal("")),
   last_name: z.string().max(100).optional().or(z.literal("")),
 });
@@ -43,22 +46,22 @@ type ProfileValues = z.infer<typeof profileSchema>;
 // turns a 400 round-trip into an inline error.
 const passwordSchema = z
   .object({
-    current_password: z.string().min(1, "required"),
+    current_password: z.string().min(1, "Current password is required"),
     new_password: z
       .string()
-      .min(8, "min 8 characters")
-      .regex(/[A-Z]/, "must contain an uppercase letter")
-      .regex(/[a-z]/, "must contain a lowercase letter")
-      .regex(/\d/, "must contain a digit")
-      .regex(/[!@#$%^&*(),.?":{}|<>]/, "must contain a special character"),
-    confirm: z.string().min(1, "required"),
+      .min(8, "Must be at least 8 characters")
+      .regex(/[A-Z]/, "Must contain an uppercase letter")
+      .regex(/[a-z]/, "Must contain a lowercase letter")
+      .regex(/\d/, "Must contain a digit")
+      .regex(/[!@#$%^&*(),.?":{}|<>]/, "Must contain a special character"),
+    confirm: z.string().min(1, "Confirm your new password"),
   })
   .refine((v) => v.new_password === v.confirm, {
-    message: "passwords do not match",
+    message: "Passwords do not match",
     path: ["confirm"],
   })
   .refine((v) => v.current_password !== v.new_password, {
-    message: "new password must differ from the current one",
+    message: "New password must differ from the current one",
     path: ["new_password"],
   });
 type PasswordValues = z.infer<typeof passwordSchema>;
@@ -68,18 +71,16 @@ export default function Settings() {
 
   if (!user) {
     return (
-      <div className="max-w-[1440px] mx-auto p-6 md:p-8">
-        <Callout tone="err">unable to load your account — please log in again.</Callout>
+      <div>
+        <Callout tone="err">Unable to load your account. Please log in again.</Callout>
       </div>
     );
   }
 
   return (
-    <div className="max-w-[960px] mx-auto p-6 md:p-8 space-y-6">
+    <div className="max-w-[960px] mx-auto flex flex-col gap-6">
       <PageHeader
-        kicker="system"
-        title="settings"
-        breadcrumbs={[{ label: "console" }, { label: "system" }, { label: "settings" }]}
+        title="Settings"
         description="Your account, credentials, and session-scoped preferences."
       />
 
@@ -95,15 +96,17 @@ export default function Settings() {
 function IdentityCard({ user }: { user: User }) {
   const role = primaryRole(user) ?? "member";
   return (
-    <Panel density="compact" kicker="signed in as" title={user.full_name || user.username}>
+    <Panel kicker="Signed in as" title={user.full_name || user.username}>
       <div className="flex items-center gap-3 flex-wrap mt-2">
         <RoleBadge role={role} />
-        <Badge variant={user.is_active ? "ok" : "neutral"}>
-          {user.is_active ? "active" : "inactive"}
-        </Badge>
-        {user.is_verified && <Badge variant="info">verified</Badge>}
-        <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted">
-          tenant · {user.tenant_id}
+        <StatusBadge
+          icon={user.is_active ? CheckCircle2 : Ban}
+          label={user.is_active ? "Active" : "Inactive"}
+          tone={user.is_active ? "ok" : "muted"}
+        />
+        {user.is_verified && <StatusBadge icon={CheckCircle2} label="Verified" tone="info" />}
+        <span className="text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)]">
+          Tenant · {user.tenant_id}
         </span>
       </div>
     </Panel>
@@ -160,11 +163,11 @@ function ProfileSection({ user }: { user: User }) {
       return updateUser(user.id, payload);
     },
     onSuccess: (next) => {
-      toast.success("profile saved");
-      // Push the new user object into the auth store so the sidebar,
-      // RoleStripe, and header pick it up without a hard refresh. /me is
-      // read once at boot by AuthGate (no React Query), so there's nothing
-      // to invalidate — the store is the authoritative source.
+      toast.success("Profile saved");
+      // Push the new user object into the auth store so the sidebar and
+      // header pick it up without a hard refresh. /me is read once at boot
+      // by AuthGate (no React Query), so there's nothing to invalidate —
+      // the store is the authoritative source.
       setUser(next);
       queryClient.invalidateQueries({ queryKey: ["users"] });
       reset({
@@ -174,16 +177,16 @@ function ProfileSection({ user }: { user: User }) {
         last_name: next.last_name ?? "",
       });
     },
-    onError: (err) => toast.error(describeError(err, "save failed")),
+    onError: (err) => toast.error(describeError(err, "Save failed")),
   });
 
   const onSubmit: SubmitHandler<ProfileValues> = (values) => mutation.mutate(values);
 
   return (
     <Panel
-      kicker="profile"
-      title="account details"
-      action={<Icon icon={UserCog} size={16} className="text-ink-faint" />}
+      kicker="Profile"
+      title="Account Details"
+      action={<Icon icon={UserCog} size={16} className="text-[var(--text-muted)]" />}
     >
       <form
         id="settings-profile-form"
@@ -191,7 +194,7 @@ function ProfileSection({ user }: { user: User }) {
         noValidate
         className="space-y-4 mt-2"
       >
-        <Field id="set-email" label="email" error={errors.email?.message}>
+        <Field id="set-email" label="Email" error={errors.email?.message}>
           <Input
             id="set-email"
             type="email"
@@ -201,7 +204,7 @@ function ProfileSection({ user }: { user: User }) {
           />
         </Field>
 
-        <Field id="set-username" label="username" error={errors.username?.message}>
+        <Field id="set-username" label="Username" error={errors.username?.message}>
           <Input
             id="set-username"
             autoComplete="username"
@@ -211,7 +214,7 @@ function ProfileSection({ user }: { user: User }) {
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field id="set-first" label="first name" error={errors.first_name?.message}>
+          <Field id="set-first" label="First Name" error={errors.first_name?.message}>
             <Input
               id="set-first"
               autoComplete="given-name"
@@ -219,7 +222,7 @@ function ProfileSection({ user }: { user: User }) {
               {...register("first_name")}
             />
           </Field>
-          <Field id="set-last" label="last name" error={errors.last_name?.message}>
+          <Field id="set-last" label="Last Name" error={errors.last_name?.message}>
             <Input
               id="set-last"
               autoComplete="family-name"
@@ -233,12 +236,11 @@ function ProfileSection({ user }: { user: User }) {
           <Button
             type="submit"
             variant="primary"
-            uppercase
             loading={isSubmitting || mutation.isPending}
             disabled={!isDirty}
             leadingIcon={<Icon icon={Save} size={14} />}
           >
-            save profile
+            Save Profile
           </Button>
         </div>
       </form>
@@ -267,22 +269,22 @@ function PasswordSection({ user }: { user: User }) {
       // backend won't notice; only the new password is shipped.
       updateUser(user.id, { password: values.new_password }),
     onSuccess: () => {
-      toast.success("password updated · keep it safe");
+      toast.success("Password updated · keep it safe");
       reset();
     },
-    onError: (err) => toast.error(describeError(err, "password update failed")),
+    onError: (err) => toast.error(describeError(err, "Password update failed")),
   });
 
   const onSubmit: SubmitHandler<PasswordValues> = (values) => mutation.mutate(values);
 
   return (
     <Panel
-      kicker="security"
-      title="change password"
-      action={<Icon icon={KeyRound} size={16} className="text-ink-faint" />}
+      kicker="Security"
+      title="Change Password"
+      action={<Icon icon={KeyRound} size={16} className="text-[var(--text-muted)]" />}
     >
       <Callout tone="info" className="mt-2">
-        rotate periodically · 8+ chars · upper + lower + digit + special.
+        Rotate periodically. Minimum 8 characters with uppercase, lowercase, digit, and special character.
       </Callout>
 
       <form
@@ -293,7 +295,7 @@ function PasswordSection({ user }: { user: User }) {
       >
         <Field
           id="set-current"
-          label="current password"
+          label="Current Password"
           error={errors.current_password?.message}
         >
           <Input
@@ -307,7 +309,7 @@ function PasswordSection({ user }: { user: User }) {
 
         <Field
           id="set-new"
-          label="new password"
+          label="New Password"
           error={errors.new_password?.message}
         >
           <Input
@@ -319,7 +321,7 @@ function PasswordSection({ user }: { user: User }) {
           />
         </Field>
 
-        <Field id="set-confirm" label="confirm" error={errors.confirm?.message}>
+        <Field id="set-confirm" label="Confirm" error={errors.confirm?.message}>
           <Input
             id="set-confirm"
             type="password"
@@ -333,11 +335,10 @@ function PasswordSection({ user }: { user: User }) {
           <Button
             type="submit"
             variant="primary"
-            uppercase
             loading={isSubmitting || mutation.isPending}
             leadingIcon={<Icon icon={KeyRound} size={14} />}
           >
-            change password
+            Change Password
           </Button>
         </div>
       </form>
@@ -360,7 +361,7 @@ function Field({
     <div>
       <label
         htmlFor={id}
-        className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
+        className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
       >
         {label}
       </label>
@@ -368,7 +369,7 @@ function Field({
       {error && (
         <div
           role="alert"
-          className="mt-1 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
+          className="mt-1.5 text-[12px] text-[var(--alert-critical)]"
         >
           {error}
         </div>

@@ -1,23 +1,33 @@
 import type { ReactNode } from "react";
-import { AlertCircle, AlertTriangle, Info, Zap } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Icon } from "./Icon";
 import { cn } from "@/lib/cn";
 
-type Tone = "err" | "warn" | "info" | "signal";
+type Tone = "err" | "warn" | "info" | "signal" | "ok";
 
 const TONE_BG: Record<Tone, string> = {
-  err: "border-err/40 bg-err/5",
-  warn: "border-warn/40 bg-warn/5",
-  info: "border-info/40 bg-info/5",
-  signal: "border-signal/40 bg-signal/5",
+  err:    "rgba(224, 61, 61, 0.08)",
+  warn:   "rgba(232, 146, 42, 0.08)",
+  info:   "rgba(62, 111, 212, 0.08)",
+  signal: "rgba(230, 38, 0, 0.08)",
+  ok:     "rgba(1, 181, 116, 0.08)",
 };
 
-const TONE_TEXT: Record<Tone, string> = {
-  err: "text-err",
-  warn: "text-warn",
-  info: "text-info-soft",
-  signal: "text-signal",
+const TONE_BORDER: Record<Tone, string> = {
+  err:    "rgba(224, 61, 61, 0.3)",
+  warn:   "rgba(232, 146, 42, 0.3)",
+  info:   "rgba(62, 111, 212, 0.3)",
+  signal: "rgba(230, 38, 0, 0.3)",
+  ok:     "rgba(1, 181, 116, 0.3)",
+};
+
+const TONE_FG: Record<Tone, string> = {
+  err:    "var(--alert-critical)",
+  warn:   "var(--alert-high)",
+  info:   "var(--blue-mid)",
+  signal: "var(--accent-light)",
+  ok:     "var(--alert-success-light)",
 };
 
 const TONE_ICON: Record<Tone, LucideIcon> = {
@@ -25,6 +35,7 @@ const TONE_ICON: Record<Tone, LucideIcon> = {
   warn: AlertTriangle,
   info: Info,
   signal: Zap,
+  ok: CheckCircle2,
 };
 
 export function Callout({
@@ -48,25 +59,29 @@ export function Callout({
     <div
       role={role}
       className={cn(
-        "flex items-start gap-2.5 border rounded-sm px-3 py-2",
-        TONE_BG[tone],
+        "flex items-start gap-3 rounded-xl px-4 py-3 border",
         className,
       )}
+      style={{
+        background: TONE_BG[tone],
+        borderColor: TONE_BORDER[tone],
+      }}
     >
       {IconCmp && (
-        <span className={cn("shrink-0 mt-[1px]", TONE_TEXT[tone])}>
-          <Icon icon={IconCmp} size={14} />
+        <span className="shrink-0 mt-[1px]" style={{ color: TONE_FG[tone] }}>
+          <Icon icon={IconCmp} size={16} />
         </span>
       )}
-      <div className="min-w-0 flex-1 font-mono text-[11px] uppercase tracking-[0.04em] leading-relaxed">
+      <div className="min-w-0 flex-1 text-[13px] leading-relaxed">
         {hasKicker && (
-          <div className={cn("font-semibold mb-0.5", TONE_TEXT[tone])}>
+          <div
+            className="font-bold mb-0.5 uppercase tracking-[0.04em] text-[10px]"
+            style={{ color: TONE_FG[tone] }}
+          >
             {kicker}
           </div>
         )}
-        <div className={hasKicker ? "text-ink normal-case tracking-normal" : TONE_TEXT[tone]}>
-          {children}
-        </div>
+        <div className="text-[var(--text-primary)]">{children}</div>
       </div>
     </div>
   );

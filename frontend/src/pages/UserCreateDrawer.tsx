@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { createUser, listRoles } from "@/api/users";
+import { SUPER_ADMIN_ROLE } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
 
 // Mirrors the backend UserCreate password validator. Keeping the messages
@@ -18,32 +19,32 @@ import { useAuthStore } from "@/store/auth";
 // fails — we surface the same constraint locally.
 const passwordRules = z
   .string()
-  .min(8, "min 8 characters")
-  .regex(/[A-Z]/, "must contain an uppercase letter")
-  .regex(/[a-z]/, "must contain a lowercase letter")
-  .regex(/\d/, "must contain a digit")
-  .regex(/[!@#$%^&*(),.?":{}|<>]/, "must contain a special character");
+  .min(8, "Must be at least 8 characters")
+  .regex(/[A-Z]/, "Must contain an uppercase letter")
+  .regex(/[a-z]/, "Must contain a lowercase letter")
+  .regex(/\d/, "Must contain a digit")
+  .regex(/[!@#$%^&*(),.?":{}|<>]/, "Must contain a special character");
 
 const createSchema = z.object({
-  email: z.string().min(1, "email required").email("invalid email"),
+  email: z.string().min(1, "Email is required").email("Invalid email address"),
   username: z
     .string()
-    .min(3, "min 3 characters")
+    .min(3, "Must be at least 3 characters")
     .max(100)
     .regex(
       /^[a-zA-Z][a-zA-Z0-9._-]*$/,
-      "letters, digits, . _ - only; must start with a letter",
+      "Must start with a letter (letters, digits, . _ - allowed)",
     ),
   first_name: z.string().max(100).optional().or(z.literal("")),
   last_name: z.string().max(100).optional().or(z.literal("")),
   tenant_id: z
     .string()
-    .min(1, "tenant required")
+    .min(1, "Tenant is required")
     .max(100)
-    .regex(/^[a-z0-9-]+$/, "lowercase letters, digits and hyphens only"),
+    .regex(/^[a-z0-9-]+$/, "Lowercase letters, digits, and hyphens only"),
   is_active: z.boolean(),
   password: passwordRules,
-  role_id: z.string().min(1, "role required"),
+  role_id: z.string().min(1, "Role is required"),
 });
 
 type CreateFormValues = z.infer<typeof createSchema>;
@@ -131,17 +132,27 @@ export function UserCreateDrawer({
     mutation.mutate(values);
   };
 
-  const roles = rolesQuery.data ?? [];
+  // A non-superuser cannot be granted the super_admin role — the backend
+  // rejects it with 403. Hide the option so the form only offers roles the
+  // current operator can actually assign.
+  const isSuperuser = currentUser?.is_superuser ?? false;
+  const roles = useMemo(
+    () =>
+      (rolesQuery.data ?? []).filter(
+        (r) => isSuperuser || r.name !== SUPER_ADMIN_ROLE,
+      ),
+    [rolesQuery.data, isSuperuser],
+  );
 
   return (
     <SlideOver
       open={open}
       onClose={onClose}
-      title="new user"
+      title="New User"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} type="button">
-            cancel
+            Cancel
           </Button>
           <Button
             type="submit"
@@ -150,7 +161,7 @@ export function UserCreateDrawer({
             loading={isSubmitting || mutation.isPending}
             disabled={mutation.isPending}
           >
-            create
+            Create
           </Button>
         </>
       }
@@ -161,7 +172,7 @@ export function UserCreateDrawer({
         noValidate
         className="space-y-5"
       >
-        <Field id="u-email" label="email" error={errors.email?.message}>
+        <Field id="u-email" label="Email" error={errors.email?.message}>
           <Input
             id="u-email"
             type="email"
@@ -172,7 +183,7 @@ export function UserCreateDrawer({
           />
         </Field>
 
-        <Field id="u-username" label="username" error={errors.username?.message}>
+        <Field id="u-username" label="Username" error={errors.username?.message}>
           <Input
             id="u-username"
             autoComplete="off"
@@ -184,7 +195,7 @@ export function UserCreateDrawer({
         <div className="grid grid-cols-2 gap-3">
           <Field
             id="u-first_name"
-            label="first name"
+            label="First Name"
             error={errors.first_name?.message}
           >
             <Input
@@ -196,7 +207,7 @@ export function UserCreateDrawer({
           </Field>
           <Field
             id="u-last_name"
-            label="last name"
+            label="Last Name"
             error={errors.last_name?.message}
           >
             <Input
@@ -210,11 +221,11 @@ export function UserCreateDrawer({
 
         <Field
           id="u-tenant_id"
-          label="tenant"
+          label="Tenant"
           error={errors.tenant_id?.message}
           hint={
             currentUser
-              ? `your tenant: ${currentUser.tenant_id}`
+              ? `Your tenant: ${currentUser.tenant_id}`
               : undefined
           }
         >
@@ -225,7 +236,7 @@ export function UserCreateDrawer({
           />
         </Field>
 
-        <Field id="u-role_id" label="role" error={errors.role_id?.message}>
+        <Field id="u-role_id" label="Role" error={errors.role_id?.message}>
           <Select
             id="u-role_id"
             invalid={!!errors.role_id}
@@ -233,12 +244,12 @@ export function UserCreateDrawer({
             {...register("role_id")}
           >
             <option value="">
-              {rolesQuery.isPending ? "loading…" : "select a role"}
+              {rolesQuery.isPending ? "Loading…" : "Select a role"}
             </option>
             {roles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
-                {r.description ? ` — ${r.description}` : ""}
+                {r.description ? ` · ${r.description}` : ""}
               </option>
             ))}
           </Select>
@@ -246,9 +257,9 @@ export function UserCreateDrawer({
 
         <Field
           id="u-password"
-          label="password"
+          label="Password"
           error={errors.password?.message}
-          hint="≥ 8 chars · upper · lower · digit · special"
+          hint="Minimum 8 characters with uppercase, lowercase, digit, and special character."
         >
           <Input
             id="u-password"
@@ -259,10 +270,10 @@ export function UserCreateDrawer({
           />
         </Field>
 
-        <label className="flex items-center gap-2 cursor-pointer">
+        <label className="flex items-center gap-2.5 cursor-pointer">
           <Checkbox {...register("is_active")} />
-          <span className="font-mono text-[11px] uppercase tracking-[0.05em] text-ink">
-            account active
+          <span className="text-[13px] text-[var(--text-primary)] font-medium">
+            Account active
           </span>
         </label>
       </form>
@@ -287,19 +298,16 @@ function Field({
     <div>
       <label
         htmlFor={id}
-        className="block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted mb-1.5"
+        className="block text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--text-secondary)] mb-1.5"
       >
         {label}
       </label>
       {children}
       {hint && !error && (
-        <div className="mt-1 font-mono text-[10px] text-ink-muted">{hint}</div>
+        <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">{hint}</div>
       )}
       {error && (
-        <div
-          role="alert"
-          className="mt-1 font-mono text-[10px] uppercase tracking-[0.04em] text-err"
-        >
+        <div role="alert" className="mt-1.5 text-[12px] text-[var(--alert-critical)]">
           {error}
         </div>
       )}

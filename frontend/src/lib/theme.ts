@@ -1,6 +1,6 @@
 export type Theme = "light" | "dark";
 
-const STORAGE_KEY = "shiftwise.theme";
+const STORAGE_KEY = "shiftwise-theme";
 
 export function getStoredTheme(): Theme | null {
   try {
@@ -12,12 +12,12 @@ export function getStoredTheme(): Theme | null {
 }
 
 export function getSystemTheme(): Theme {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 export function getCurrentTheme(): Theme {
   const attr = document.documentElement.getAttribute("data-theme");
-  return attr === "dark" ? "dark" : "light";
+  return attr === "light" ? "light" : "dark";
 }
 
 export function applyTheme(theme: Theme): void {

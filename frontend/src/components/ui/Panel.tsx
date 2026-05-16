@@ -1,24 +1,55 @@
-import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-type Tone = "default" | "elevated" | "inset" | "signal" | "info";
 type Density = "comfortable" | "compact";
+type IconTone = "accent" | "blue" | "success" | "warn" | "muted";
 
-const TONES: Record<Tone, string> = {
-  default: "bg-bg-elev border border-line",
-  elevated: "bg-bg-elev border border-line shadow-[var(--shadow-elev)]",
-  inset: "bg-bg-inset border border-line",
-  signal: "bg-signal text-signal-ink border border-transparent",
-  info: "bg-info text-info-ink border border-transparent",
+const ICON_CLASS_BY_TONE: Record<IconTone, string> = {
+  accent: "icon-container icon-container--accent",
+  blue: "icon-container icon-container--blue",
+  success: "icon-container icon-container--success",
+  warn: "icon-container icon-container--warn",
+  muted: "icon-container icon-container--muted",
 };
 
+// Map legacy iconTone names to the new icon-container variants so callers
+// that still pass `iconTone="signal"` keep working.
+const LEGACY_ICON_TONE_MAP: Record<string, IconTone> = {
+  ok: "success",
+  warn: "warn",
+  err: "accent",
+  signal: "accent",
+  info: "blue",
+};
+
+/**
+ * Panel — the foundational glass card primitive.
+ *
+ * Recipe (per DESIGN.md):
+ *   background:        var(--card-gradient)
+ *   backdrop-filter:   blur(120px)
+ *   border-radius:     20px
+ *   box-shadow:        var(--card-shadow)
+ *   + ::before 1px gradient border via mask-composite
+ *
+ * The body radial orbs (declared on body::before in base.css) bleed through
+ * the 120px blur. DO NOT apply opacity/transform/filter/will-change/mask
+ * to any ANCESTOR of this element — it creates a backdrop-root and silently
+ * breaks the blur. The .sw-mount wrapper does transform but is intentionally
+ * a sibling-level animation wrapper, not an ancestor of further glass cards.
+ *
+ * Every Panel is a glass card. There is no solid-fill variant: surfaces that
+ * need a coloured fill (the hero) layer a gradient overlay over the glass.
+ */
 export function Panel({
+  icon: PanelIcon,
+  iconTone,
   kicker,
   title,
   hint,
   action,
   footer,
-  tone = "default",
   density = "comfortable",
   className,
   bodyClassName,
@@ -26,13 +57,16 @@ export function Panel({
   interactive,
   onClick,
   asSection = true,
+  variant = "default",
+  style,
 }: {
+  icon?: LucideIcon;
+  iconTone?: IconTone | "ok" | "warn" | "err" | "signal" | "info";
   kicker?: string;
   title?: ReactNode;
   hint?: ReactNode;
   action?: ReactNode;
   footer?: ReactNode;
-  tone?: Tone;
   density?: Density;
   className?: string;
   bodyClassName?: string;
@@ -40,63 +74,95 @@ export function Panel({
   interactive?: boolean;
   onClick?: () => void;
   asSection?: boolean;
+  /** "lite" reduces blur to 60px for pages with many cards. */
+  variant?: "default" | "lite" | "nested";
+  style?: CSSProperties;
 }) {
   const Tag = asSection ? "section" : "div";
-  const hasHeader = !!(kicker || title || action);
+  const hasHeader = !!(kicker || title || action || PanelIcon);
+
+  const normalisedIconTone = iconTone
+    ? (LEGACY_ICON_TONE_MAP[iconTone] ?? (iconTone as IconTone))
+    : "accent";
+  const iconClass = ICON_CLASS_BY_TONE[normalisedIconTone];
+
+  const variantClass =
+    variant === "lite"
+      ? "glass-card glass-card--lite"
+      : variant === "nested"
+        ? "glass-card--nested"
+        : "glass-card";
+
   return (
     <Tag
       onClick={onClick}
+      style={style}
       className={cn(
-        "relative flex flex-col rounded-sm overflow-hidden",
-        TONES[tone],
+        "relative flex flex-col overflow-hidden",
+        variantClass,
         interactive &&
-          "cursor-pointer transition-[box-shadow,border-color,transform] duration-200 hover:shadow-[var(--shadow-hover)] hover:border-line-strong",
+          "cursor-pointer transition-shadow duration-200 hover:shadow-[var(--shadow-hover)]",
         className,
       )}
     >
       {hasHeader && (
         <header
           className={cn(
-            "flex items-start justify-between gap-3",
-            density === "compact" ? "px-4 pt-3 pb-2" : "px-6 pt-5 pb-3",
+            "relative flex items-start justify-between gap-3 z-[1]",
+            density === "compact" ? "px-5 pt-4 pb-2" : "px-6 pt-5 pb-3",
           )}
         >
-          <div className="min-w-0 flex-1">
-            {kicker && <div className="kicker mb-1.5">{kicker}</div>}
-            {title && (
-              <h3
-                className={cn(
-                  "lowercase leading-tight truncate",
-                  density === "compact" ? "text-h3" : "text-h2",
-                )}
+          <div className="min-w-0 flex-1 flex items-start gap-3">
+            {PanelIcon && (
+              <span
+                aria-hidden
+                className={cn(iconClass, "shrink-0 mt-0.5 w-9 h-9 rounded-xl")}
               >
-                {title}
-              </h3>
+                <PanelIcon size={16} strokeWidth={1.75} />
+              </span>
             )}
-            {hint && (
-              <div className="mt-1 font-mono text-[11px] text-ink-muted lowercase">
-                {hint}
-              </div>
-            )}
+            <div className="min-w-0 flex-1">
+              {kicker && <div className="kicker mb-1.5">{kicker}</div>}
+              {title && (
+                <h3
+                  className={cn(
+                    "leading-tight truncate font-bold text-[var(--text-primary)]",
+                    density === "compact"
+                      ? "text-[14px]"
+                      : "text-[18px] tracking-[-0.01em]",
+                  )}
+                >
+                  {title}
+                </h3>
+              )}
+              {hint && (
+                <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                  {hint}
+                </div>
+              )}
+            </div>
           </div>
           {action && <div className="shrink-0 flex items-center gap-2">{action}</div>}
         </header>
       )}
+
       <div
         className={cn(
-          density === "compact" ? "px-4 pb-3" : "px-6 pb-5",
-          !hasHeader && (density === "compact" ? "pt-3" : "pt-5"),
+          "relative z-[1]",
+          density === "compact" ? "px-5 pb-4" : "px-6 pb-5",
+          !hasHeader && (density === "compact" ? "pt-4" : "pt-5"),
           "flex-1",
           bodyClassName,
         )}
       >
         {children}
       </div>
+
       {footer && (
         <footer
           className={cn(
-            "border-t border-line bg-bg-inset/60",
-            density === "compact" ? "px-4 py-2" : "px-6 py-3",
+            "relative z-[1] border-t border-[var(--hairline)]",
+            density === "compact" ? "px-5 py-2" : "px-6 py-3",
           )}
         >
           {footer}

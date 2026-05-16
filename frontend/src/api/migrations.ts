@@ -27,6 +27,11 @@ export const MIGRATION_STRATEGIES = [
 export type MigrationStatus = (typeof MIGRATION_STATUSES)[number];
 export type MigrationStrategy = (typeof MIGRATION_STRATEGIES)[number];
 
+/** Title-cases a strategy enum value for display (the API stores them lowercase). */
+export function formatStrategy(strategy: MigrationStrategy): string {
+  return strategy.charAt(0).toUpperCase() + strategy.slice(1);
+}
+
 /**
  * Statuses where the worker is actively progressing the migration.
  * Mirrors `Migration.is_active` on the backend model.

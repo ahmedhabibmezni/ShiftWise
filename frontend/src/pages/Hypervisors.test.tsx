@@ -109,7 +109,7 @@ describe("Hypervisors page", () => {
     expect(await screen.findByText("vsphere-prod")).toBeInTheDocument();
     expect(screen.getByText("kvm-lab")).toBeInTheDocument();
     expect(screen.getAllByText(/active/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/1–2 \/ 2/)).toBeInTheDocument();
+    expect(screen.getByText(/1–2 of 2/)).toBeInTheDocument();
   });
 
   it("forwards filters to the API and re-queries", async () => {
@@ -238,7 +238,6 @@ describe("Hypervisors page", () => {
 
   it("deletes a hypervisor after confirmation", async () => {
     let deleted = false;
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const target = makeHypervisor({ id: 11, name: "stale-host" });
     server.use(
       http.get("/api/v1/hypervisors", () =>
@@ -266,8 +265,12 @@ describe("Hypervisors page", () => {
     const dialog = await screen.findByRole("dialog", { name: /stale-host/i });
     await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
 
+    const confirm = await screen.findByRole("alertdialog");
+    await user.click(
+      within(confirm).getByRole("button", { name: /delete hypervisor/i }),
+    );
+
     await waitFor(() => expect(deleted).toBe(true));
-    confirmSpy.mockRestore();
   });
 
   it("surfaces an error banner when the list fails", async () => {
@@ -280,7 +283,7 @@ describe("Hypervisors page", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/failed to load hypervisors/i),
+      await screen.findByText(/could not load hypervisors/i),
     ).toBeInTheDocument();
   });
 
@@ -316,7 +319,7 @@ describe("Hypervisors page", () => {
     renderPage();
 
     await screen.findByText("view-only-host");
-    expect(screen.queryByRole("button", { name: /add source/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /new hypervisor/i })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "view-only-host" }));
     const dialog = await screen.findByRole("dialog", { name: /view-only-host/i });

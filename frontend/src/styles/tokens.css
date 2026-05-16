@@ -1,74 +1,219 @@
-:root[data-theme="dark"] {
-  --bg: #0d0f13;
-  --bg-elev: #14171d;
-  --bg-elev-2: #1c2028;
-  --bg-inset: #090b0e;
-  --ink: #f4f2ec;
-  --ink-strong: #ffffff;
-  --ink-muted: #8b8a83;
-  --ink-faint: #56554f;
-  --line: #232730;
-  --line-strong: #353a44;
-  --signal: #00b5d6;
-  --signal-soft: #34cef0;
-  --signal-ink: #0d0f13;
-  --info: #2b4a6f;
-  --info-soft: #4972a5;
-  --info-ink: #f4f2ec;
-  --ok: #3faf5f;
-  --ok-soft: #5cd882;
-  --warn: #d4a017;
-  --warn-soft: #f0bd3a;
-  --err: #d04030;
-  --err-soft: #ec6b5d;
+/* =============================================================================
+   ShiftWise design tokens — Vision UI depth model with OpenShift red-orange.
+   Dark mode is canonical; light mode is a structural mirror.
 
-  --tint-pct: 0.14;
-  --shadow-elev: 0 1px 0 rgba(255, 255, 255, 0.02), 0 12px 32px -16px rgba(0, 0, 0, 0.6);
-  --shadow-hover: 0 1px 0 rgba(255, 255, 255, 0.03), 0 18px 40px -16px rgba(0, 0, 0, 0.7);
-  --grain-opacity: 0.035;
-  --grain-blend: screen;
+   Token policy:
+   - Brand accent (#E62600) is IDENTICAL across both modes.
+   - Legacy aliases (--bg, --ink, --signal, --line, etc.) are kept so the rest
+     of the codebase continues to compile while pages migrate to the new tokens.
+   ========================================================================== */
+
+:root,
+:root[data-theme="dark"] {
+  /* Pin native form controls (select popups, date pickers, popup scrollbars)
+     to the active theme. The index.html <meta> only advertises support — it
+     does not tell the browser which scheme to actually paint. */
+  color-scheme: dark;
+
+  /* ------- Body substrate ------- */
+  --bg-app: #060B28;
+  --bg-app-mid: #0A0E2C;
+  --bg-app-deep: #0F1535;
+
+  /* ------- Glass card recipe ------- */
+  --card-grad-start: rgba(6, 11, 40, 0.94);
+  --card-grad-end: rgba(10, 14, 35, 0.49);
+  --card-gradient: linear-gradient(127.09deg, var(--card-grad-start) 19.41%, var(--card-grad-end) 76.65%);
+  --card-blur: blur(120px);
+  --card-blur-lite: blur(60px);
+  --card-shadow: 0 3.5px 5.5px rgba(0, 0, 0, 0.02);
+  --card-border-grad: linear-gradient(127deg, rgba(255, 255, 255, 0.21) 19.41%, rgba(255, 255, 255, 0) 76.65%);
+
+  /* Subtle surface for nested chips/rows inside cards */
+  --surface-soft: rgba(255, 255, 255, 0.04);
+  --surface-soft-strong: rgba(255, 255, 255, 0.07);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-faint: rgba(255, 255, 255, 0.04);
+
+  /* ------- Brand (identical across modes) ------- */
+  --accent-deep: #812300;
+  --accent-primary: #E62600;
+  --accent-light: #FF7A2F;
+  --accent-tint: rgba(230, 38, 0, 0.12);
+  --accent-tint-soft: rgba(230, 38, 0, 0.06);
+
+  /* ------- Infrastructure blues ------- */
+  --blue-deep: #1F3F8A;
+  --blue-base: #2651B2;
+  --blue-mid: #3E6FD4;
+
+  /* ------- Alert / status ------- */
+  --alert-critical: #E03D3D;
+  --alert-high: #E8922A;
+  --alert-medium: #D4C137;
+  --alert-low: #4A7FC4;
+  --alert-success: #01B574;
+  --alert-success-light: #2ECC8A;
+
+  /* ------- Typography ------- */
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0AEC0;
+  /* Lifted from #718096 (~4.0:1) to clear WCAG AA 4.5:1 on the card substrate. */
+  --text-muted: #8A98AD;
+
+  /* ------- Body orbs ------- */
+  --orb-1: rgba(230, 38, 0, 0.30);
+  --orb-2: rgba(38, 81, 178, 0.35);
+  --orb-3: rgba(255, 122, 47, 0.20);
+  --orb-4: rgba(31, 63, 138, 0.25);
+
+  /* ------- Composite gradients ------- */
+  --hero-gradient: linear-gradient(135deg, rgba(15, 21, 53, 0.6) 0%, rgba(230, 38, 0, 0.18) 100%);
+  --sidebar-card-gradient: linear-gradient(135deg, #1F3F8A 0%, #E62600 100%);
+
+  /* ------- Shadows ------- */
+  --shadow-card: 0 3.5px 5.5px rgba(0, 0, 0, 0.02);
+  --shadow-card-hover: 0 18px 40px -16px rgba(0, 0, 0, 0.5);
+  --shadow-accent: 0 4px 12px rgba(230, 38, 0, 0.4);
+  --shadow-blue: 0 4px 12px rgba(31, 63, 138, 0.45);
+  --shadow-success: 0 3px 10px rgba(1, 181, 116, 0.4);
+
+  /* ------- Focus ring ------- */
+  --focus-ring: 0 0 0 3px rgba(230, 38, 0, 0.25);
+
+  /* =========== LEGACY ALIASES (do not remove yet — pages migrate gradually) =========== */
+  --bg: var(--bg-app);
+  --bg-elev: var(--bg-app-mid);
+  --bg-elev-2: var(--bg-app-deep);
+  --bg-inset: #04081E;
+  --ink: var(--text-primary);
+  --ink-strong: #FFFFFF;
+  --ink-muted: var(--text-secondary);
+  --ink-faint: var(--text-muted);
+  --line: var(--hairline);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --signal: var(--accent-primary);
+  --signal-soft: var(--accent-light);
+  --signal-ink: #FFFFFF;
+  --info: var(--blue-deep);
+  --info-soft: var(--blue-mid);
+  --info-ink: #FFFFFF;
+  --ok: var(--alert-success);
+  --ok-soft: var(--alert-success-light);
+  --warn: var(--alert-high);
+  --warn-soft: #F4B870;
+  --err: var(--alert-critical);
+  --err-soft: #F47373;
+
+  --shadow-elev: var(--shadow-card);
+  --shadow-hover: var(--shadow-card-hover);
 }
 
 :root[data-theme="light"] {
-  --bg: #ecede5;
-  --bg-elev: #e3e5db;
-  --bg-elev-2: #cfd2c5;
-  --bg-inset: #f3f4ed;
-  --ink: #13150f;
-  --ink-strong: #000000;
-  --ink-muted: #575a51;
-  --ink-faint: #90948a;
-  --line: #13150f;
-  --line-strong: #000000;
-  --signal: #017d9c;
-  --signal-soft: #0494b6;
-  --signal-ink: #ffffff;
-  --info: #244062;
-  --info-soft: #3d6293;
-  --info-ink: #ecede5;
-  --ok: #1f7a3a;
-  --ok-soft: #2fa050;
-  --warn: #b8860b;
-  --warn-soft: #d8a52a;
-  --err: #b53024;
-  --err-soft: #d04a3c;
+  color-scheme: light;
 
-  --tint-pct: 0.1;
-  --shadow-elev: 0 1px 0 rgba(0, 0, 0, 0.04), 0 12px 28px -18px rgba(19, 21, 15, 0.25);
-  --shadow-hover: 0 1px 0 rgba(0, 0, 0, 0.06), 0 18px 36px -18px rgba(19, 21, 15, 0.35);
-  --grain-opacity: 0.06;
-  --grain-blend: multiply;
+  --bg-app: #F4F6FB;
+  --bg-app-mid: #EAEEF7;
+  --bg-app-deep: #E0E7F4;
+
+  --card-grad-start: rgba(255, 255, 255, 0.94);
+  --card-grad-end: rgba(255, 255, 255, 0.49);
+  --card-gradient: linear-gradient(127.09deg, var(--card-grad-start) 19.41%, var(--card-grad-end) 76.65%);
+  --card-blur: blur(120px);
+  --card-blur-lite: blur(60px);
+  --card-shadow: 0 3.5px 12px rgba(31, 41, 80, 0.08);
+  --card-border-grad: linear-gradient(127deg, rgba(31, 63, 138, 0.15) 19.41%, rgba(31, 63, 138, 0) 76.65%);
+
+  --surface-soft: rgba(15, 21, 53, 0.03);
+  --surface-soft-strong: rgba(15, 21, 53, 0.05);
+  --hairline: rgba(15, 21, 53, 0.08);
+  --hairline-faint: rgba(15, 21, 53, 0.04);
+
+  --accent-deep: #812300;
+  --accent-primary: #E62600;
+  --accent-light: #FF7A2F;
+  --accent-tint: rgba(230, 38, 0, 0.10);
+  --accent-tint-soft: rgba(230, 38, 0, 0.05);
+
+  --blue-deep: #1F3F8A;
+  --blue-base: #2651B2;
+  --blue-mid: #3E6FD4;
+
+  --alert-critical: #C72525;
+  --alert-high: #C97718;
+  --alert-medium: #A8961F;
+  --alert-low: #3A6BB0;
+  --alert-success: #1F9D6A;
+  --alert-success-light: #2ECC8A;
+
+  --text-primary: #0F1535;
+  --text-secondary: #4A546E;
+  /* Deepened from #8893B0 (~3.0:1) to clear WCAG AA 4.5:1 on light glass. */
+  --text-muted: #5E6A85;
+
+  /* Deeper than a first pass suggests: too faint and the glass cards flatten
+     into plain white panels and lose the depth model in light mode. */
+  --orb-1: rgba(230, 38, 0, 0.26);
+  --orb-2: rgba(38, 81, 178, 0.26);
+  --orb-3: rgba(255, 122, 47, 0.20);
+  --orb-4: rgba(31, 63, 138, 0.18);
+
+  --hero-gradient: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(230, 38, 0, 0.10) 100%);
+  --sidebar-card-gradient: linear-gradient(135deg, #3E6FD4 0%, #E62600 100%);
+
+  --shadow-card: 0 3.5px 12px rgba(31, 41, 80, 0.08);
+  --shadow-card-hover: 0 18px 36px -18px rgba(19, 21, 15, 0.35);
+  --shadow-accent: 0 4px 12px rgba(230, 38, 0, 0.35);
+  --shadow-blue: 0 4px 12px rgba(31, 63, 138, 0.30);
+  --shadow-success: 0 3px 10px rgba(31, 157, 106, 0.35);
+
+  --focus-ring: 0 0 0 3px rgba(230, 38, 0, 0.20);
+
+  /* ===== Legacy aliases ===== */
+  --bg: var(--bg-app);
+  --bg-elev: #FFFFFF;
+  --bg-elev-2: var(--bg-app-deep);
+  --bg-inset: var(--bg-app-mid);
+  --ink: var(--text-primary);
+  --ink-strong: #000000;
+  --ink-muted: var(--text-secondary);
+  --ink-faint: var(--text-muted);
+  --line: var(--hairline);
+  --line-strong: rgba(15, 21, 53, 0.18);
+  --signal: var(--accent-primary);
+  --signal-soft: var(--accent-light);
+  --signal-ink: #FFFFFF;
+  --info: var(--blue-deep);
+  --info-soft: var(--blue-mid);
+  --info-ink: #FFFFFF;
+  --ok: var(--alert-success);
+  --ok-soft: var(--alert-success-light);
+  --warn: var(--alert-high);
+  --warn-soft: #F4B870;
+  --err: var(--alert-critical);
+  --err-soft: #F47373;
+
+  --shadow-elev: var(--shadow-card);
+  --shadow-hover: var(--shadow-card-hover);
 }
 
 :root {
-  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Real monospace for technical identifiers (IPs, UUIDs, hosts, paths) so
+     they stay column-aligned. System stack — no extra web font. */
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "SF Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
 
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.2, 0.6, 0.2, 1);
+  /* ease-out-quint — snappy deceleration, no overshoot (DESIGN.md: no bounce). */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
   --dur-fast: 120ms;
   --dur: 200ms;
-  --dur-slow: 320ms;
+  --dur-slow: 280ms;
+
+  --radius-card: 20px;
+  --radius-card-sm: 14px;
+  --radius-pill: 999px;
 
   --z-overlay: 40;
   --z-modal: 50;

@@ -3,12 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import {
   ArrowRight,
-  Home,
+  ArrowRightLeft,
+  BarChart3,
+  LayoutDashboard,
   LogOut,
   Monitor,
   Moon,
   Server,
+  Settings2,
+  ShieldCheck,
   Sun,
+  Users as UsersIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Icon } from "@/components/ui/Icon";
@@ -47,46 +52,23 @@ export function CommandPalette() {
 
   const commands = useMemo<Command[]>(
     () => [
-      {
-        id: "go-overview",
-        label: "go to overview",
-        hint: "/",
-        group: "navigate",
-        icon: Home,
-        run: () => navigate("/"),
-      },
-      {
-        id: "go-hypervisors",
-        label: "go to hypervisors",
-        hint: "/hypervisors",
-        group: "navigate",
-        icon: Server,
-        run: () => navigate("/hypervisors"),
-      },
-      {
-        id: "go-vms",
-        label: "go to virtual machines",
-        hint: "/vms",
-        group: "navigate",
-        icon: Monitor,
-        run: () => navigate("/vms"),
-      },
+      { id: "go-overview",    label: "Go to Dashboard",        hint: "/",            group: "Navigate",    icon: LayoutDashboard, run: () => navigate("/") },
+      { id: "go-hypervisors", label: "Go to Hypervisors",      hint: "/hypervisors", group: "Navigate",    icon: Server,          run: () => navigate("/hypervisors") },
+      { id: "go-vms",         label: "Go to Virtual Machines", hint: "/vms",         group: "Navigate",    icon: Monitor,         run: () => navigate("/vms") },
+      { id: "go-migrations",  label: "Go to Migrations",       hint: "/migrations",  group: "Navigate",    icon: ArrowRightLeft,  run: () => navigate("/migrations") },
+      { id: "go-reports",     label: "Go to Reports",          hint: "/reports",     group: "Navigate",    icon: BarChart3,       run: () => navigate("/reports") },
+      { id: "go-users",       label: "Go to Users",            hint: "/users",       group: "Navigate",    icon: UsersIcon,       run: () => navigate("/users") },
+      { id: "go-roles",       label: "Go to Roles",            hint: "/roles",       group: "Navigate",    icon: ShieldCheck,     run: () => navigate("/roles") },
+      { id: "go-settings",    label: "Go to Settings",         hint: "/settings",    group: "Navigate",    icon: Settings2,       run: () => navigate("/settings") },
       {
         id: "toggle-theme",
-        label: theme === "dark" ? "switch to light theme" : "switch to dark theme",
-        hint: theme === "dark" ? "light" : "dark",
-        group: "preferences",
+        label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+        hint: theme === "dark" ? "Light" : "Dark",
+        group: "Preferences",
         icon: theme === "dark" ? Sun : Moon,
         run: () => toggle(),
       },
-      {
-        id: "logout",
-        label: "log out",
-        hint: "end session",
-        group: "session",
-        icon: LogOut,
-        run: () => logoutMutation.mutate(),
-      },
+      { id: "logout", label: "Log out", hint: "End session", group: "Session", icon: LogOut, run: () => logoutMutation.mutate() },
     ],
     [navigate, theme, toggle, logoutMutation],
   );
@@ -157,7 +139,12 @@ export function CommandPalette() {
         type="button"
         aria-label="Close command palette"
         onClick={close}
-        className="absolute inset-0 bg-[rgba(0,0,0,0.5)]"
+        className="absolute inset-0"
+        style={{
+          background: "rgba(6, 11, 40, 0.55)",
+          backdropFilter: "blur(2px)",
+          WebkitBackdropFilter: "blur(2px)",
+        }}
         tabIndex={-1}
       />
       <div
@@ -165,26 +152,33 @@ export function CommandPalette() {
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="relative w-full max-w-[560px] bg-bg border border-line-strong rounded-sm shadow-[var(--shadow-hover)] overflow-hidden"
+        className="glass-card relative w-full max-w-[600px] overflow-hidden"
       >
-        <header className="h-12 px-4 flex items-center justify-between border-b border-line bg-bg-elev">
-          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted">
+        <header className="relative z-[1] h-12 px-4 flex items-center justify-between border-b border-[var(--hairline)]">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)]">
             <Kbd>⌘</Kbd>
             <Kbd>K</Kbd>
-            <span>command palette</span>
+            <span>Command palette</span>
           </div>
-          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
             <Kbd>↑↓</Kbd>
-            navigate
-            <span className="text-ink-faint">·</span>
+            Navigate
+            <span>·</span>
             <Kbd>↵</Kbd>
-            run
-            <span className="text-ink-faint">·</span>
-            <Kbd>esc</Kbd>
-            close
+            Run
+            <span>·</span>
+            <Kbd>Esc</Kbd>
+            Close
           </div>
         </header>
-        <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label="Commands"
+          tabIndex={0}
+          aria-activedescendant={`cmd-opt-${commands[selected]?.id ?? ""}`}
+          className="relative z-[1] max-h-[60vh] overflow-y-auto py-2 outline-none"
+        >
           {Object.entries(groups).map(([group, list]) => (
             <div key={group} className="px-2 pb-2">
               <div className="kicker px-3 pt-2 pb-1">{group}</div>
@@ -195,30 +189,38 @@ export function CommandPalette() {
                 return (
                   <button
                     key={command.id}
+                    id={`cmd-opt-${command.id}`}
                     type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    tabIndex={-1}
                     onClick={runSelected}
                     onMouseEnter={() => setSelected(currentIndex)}
-                    className={`w-full flex items-center gap-3 h-10 px-3 rounded-sm text-left transition-colors duration-100 ${
+                    className={`w-full flex items-center gap-3 h-10 px-3 rounded-xl text-left transition-colors duration-200 ${
                       isSelected
-                        ? "bg-bg-elev-2 text-ink"
-                        : "text-ink-muted hover:bg-bg-elev"
+                        ? "bg-[var(--surface-soft-strong)] text-[var(--text-primary)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--surface-soft)]"
                     }`}
                   >
                     <Icon
                       icon={command.icon}
                       size={14}
-                      className={isSelected ? "text-signal" : ""}
+                      className={isSelected ? "text-[var(--accent-light)]" : ""}
                     />
-                    <span className="flex-1 font-mono text-[12px] lowercase tracking-[0.02em]">
+                    <span className="flex-1 text-[13px] font-medium tracking-[0.005em]">
                       {command.label}
                     </span>
                     {command.hint && (
-                      <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+                      <span className="text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
                         {command.hint}
                       </span>
                     )}
                     {isSelected && (
-                      <Icon icon={ArrowRight} size={12} className="text-signal" />
+                      <Icon
+                        icon={ArrowRight}
+                        size={12}
+                        className="text-[var(--accent-light)]"
+                      />
                     )}
                   </button>
                 );

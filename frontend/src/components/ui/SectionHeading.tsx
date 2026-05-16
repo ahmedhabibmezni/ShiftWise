@@ -15,8 +15,10 @@ export function SectionHeading({
   return (
     <header className={cn("flex items-end justify-between gap-4 mb-4", className)}>
       <div>
-        {kicker && <div className="kicker mb-1">{kicker}</div>}
-        <h2 className="text-h2 lowercase">{title}</h2>
+        {kicker && <div className="kicker mb-1.5">{kicker}</div>}
+        <h2 className="text-[18px] font-bold tracking-[-0.01em] text-[var(--text-primary)]">
+          {title}
+        </h2>
       </div>
       {action}
     </header>

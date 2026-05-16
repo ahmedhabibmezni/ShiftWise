@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Lock, ShieldCheck } from "lucide-react";
+import { Lock, ShieldCheck, Check } from "lucide-react";
 import { ALL_ACTIONS, ROLE_ACTIONS, type RoleAction } from "@/api/roles";
 import type { RolePermissions } from "@/api/roles";
 import { Icon } from "./Icon";
@@ -56,21 +56,21 @@ export function PermissionsMatrix({
   };
 
   return (
-    <div className="border border-line bg-bg-elev overflow-hidden">
+    <div className="rounded-2xl overflow-hidden border border-[var(--hairline)]">
       <table className="w-full border-collapse">
         <thead>
-          <tr className="border-b border-line bg-bg-elev-2">
-            <th className="text-left px-3 py-2 kicker">resource</th>
+          <tr className="border-b border-[var(--hairline)]">
+            <th className="text-left px-4 py-3 kicker">Resource</th>
             {ROLE_ACTIONS.map((a) => (
-              <th key={a} className="text-center px-2 py-2 kicker w-16">
+              <th key={a} className="text-center px-2 py-3 kicker w-16">
                 {a}
               </th>
             ))}
             <th
-              className="text-center px-2 py-2 kicker w-16"
+              className="text-center px-2 py-3 kicker w-16"
               title="grant all actions on this resource"
             >
-              all
+              All
             </th>
           </tr>
         </thead>
@@ -80,11 +80,16 @@ export function PermissionsMatrix({
             const wild = list.includes(ALL_ACTIONS);
             const hint = describeResource?.(resource);
             return (
-              <tr key={resource} className="border-b border-line/50 last:border-b-0">
-                <td className="px-3 py-2 align-middle">
-                  <div className="font-mono text-[12px] text-ink">{resource}</div>
+              <tr
+                key={resource}
+                className="border-b border-[var(--hairline-faint)] last:border-b-0"
+              >
+                <td className="px-4 py-3 align-middle">
+                  <div className="text-[13px] font-bold text-[var(--text-primary)]">
+                    {resource}
+                  </div>
                   {hint && (
-                    <div className="font-mono text-[10px] text-ink-muted lowercase mt-0.5">
+                    <div className="text-[11px] text-[var(--text-muted)] mt-0.5">
                       {hint}
                     </div>
                   )}
@@ -92,7 +97,7 @@ export function PermissionsMatrix({
                 {ROLE_ACTIONS.map((action) => {
                   const granted = wild || list.includes(action);
                   return (
-                    <td key={action} className="text-center px-2 py-2 align-middle">
+                    <td key={action} className="text-center px-2 py-3 align-middle">
                       <Cell
                         checked={granted}
                         disabled={readOnly || wild}
@@ -103,7 +108,7 @@ export function PermissionsMatrix({
                     </td>
                   );
                 })}
-                <td className="text-center px-2 py-2 align-middle">
+                <td className="text-center px-2 py-3 align-middle">
                   <Cell
                     checked={wild}
                     disabled={readOnly}
@@ -139,15 +144,24 @@ function Cell({
   return (
     <label
       className={cn(
-        "relative inline-flex items-center justify-center h-6 w-6 cursor-pointer",
-        "border transition-colors duration-150",
+        "relative inline-flex items-center justify-center h-7 w-7 cursor-pointer rounded-lg",
+        "border transition-all duration-200 focus-within:shadow-[var(--focus-ring)]",
         disabled && "cursor-not-allowed",
         checked
           ? accent
-            ? "bg-signal/15 border-signal text-signal"
-            : "bg-ok/15 border-ok text-ok"
-          : "bg-bg-elev-2 border-line text-ink-faint",
+            ? "border-transparent text-white shadow-[var(--shadow-accent)]"
+            : "border-transparent text-white shadow-[var(--shadow-success)]"
+          : "bg-[var(--surface-soft)] border-[var(--hairline)] text-[var(--text-muted)]",
       )}
+      style={
+        checked
+          ? {
+              background: accent
+                ? "linear-gradient(135deg, var(--accent-primary), var(--accent-light))"
+                : "linear-gradient(135deg, var(--alert-success), var(--alert-success-light))",
+            }
+          : undefined
+      }
       title={label}
     >
       <input
@@ -161,14 +175,12 @@ function Cell({
       />
       {checked ? (
         accent ? (
-          <Icon icon={ShieldCheck} size={12} />
+          <Icon icon={ShieldCheck} size={13} strokeWidth={2.25} />
         ) : (
-          <span aria-hidden className="font-mono text-[12px]">
-            ✓
-          </span>
+          <Icon icon={Check} size={14} strokeWidth={2.5} />
         )
       ) : wildLocked ? (
-        <Icon icon={Lock} size={10} />
+        <Icon icon={Lock} size={11} />
       ) : null}
     </label>
   );

@@ -11,25 +11,31 @@ export type BadgeVariant =
   | "critical"
   | "high"
   | "medium"
-  | "low";
+  | "low"
+  | "run";
 
-const COLOR: Record<BadgeVariant, string> = {
-  ok: "var(--ok)",
-  partial: "var(--warn)",
-  incompatible: "var(--err)",
-  info: "var(--info)",
-  warn: "var(--warn)",
-  neutral: "var(--ink-muted)",
-  critical: "var(--err)",
-  high: "var(--signal)",
-  medium: "var(--warn)",
-  low: "var(--info)",
+const TONES: Record<BadgeVariant, { bg: string; fg: string }> = {
+  ok:           { bg: "rgba(1, 181, 116, 0.18)",  fg: "var(--alert-success-light)" },
+  partial:      { bg: "rgba(232, 146, 42, 0.18)", fg: "var(--alert-high)" },
+  incompatible: { bg: "rgba(224, 61, 61, 0.18)",  fg: "var(--alert-critical)" },
+  info:         { bg: "rgba(62, 111, 212, 0.18)", fg: "var(--blue-mid)" },
+  warn:         { bg: "rgba(232, 146, 42, 0.18)", fg: "var(--alert-high)" },
+  neutral:      { bg: "var(--surface-soft-strong)", fg: "var(--text-muted)" },
+  critical:     { bg: "rgba(224, 61, 61, 0.18)",  fg: "var(--alert-critical)" },
+  high:         { bg: "rgba(230, 38, 0, 0.18)",   fg: "var(--accent-light)" },
+  medium:       { bg: "rgba(212, 193, 55, 0.18)", fg: "var(--alert-medium)" },
+  low:          { bg: "rgba(74, 127, 196, 0.18)", fg: "var(--alert-low)" },
+  run:          { bg: "rgba(230, 38, 0, 0.18)",   fg: "var(--accent-light)" },
 };
 
+/**
+ * Uppercase micro pill — the canonical ShiftWise status chip.
+ * Renders as a `.status-chip` from base.css with tone-specific colours.
+ */
 export function Badge({
   variant = "neutral",
   children,
-  dot = true,
+  dot = false,
   className,
 }: {
   variant?: BadgeVariant;
@@ -37,25 +43,17 @@ export function Badge({
   dot?: boolean;
   className?: string;
 }) {
-  const c = COLOR[variant];
+  const tone = TONES[variant];
   return (
     <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5",
-        "font-mono uppercase text-[11px] font-medium tracking-[0.04em] tabular",
-        className,
-      )}
-      style={{
-        color: c,
-        borderColor: "transparent",
-        backgroundColor: `color-mix(in srgb, ${c} calc(var(--tint-pct) * 100%), transparent)`,
-      }}
+      className={cn("status-chip tabular", className)}
+      style={{ background: tone.bg, color: tone.fg }}
     >
       {dot && (
         <span
           aria-hidden
-          className="block h-1.5 w-1.5"
-          style={{ backgroundColor: c }}
+          className="block h-1.5 w-1.5 rounded-full"
+          style={{ background: tone.fg }}
         />
       )}
       {children}

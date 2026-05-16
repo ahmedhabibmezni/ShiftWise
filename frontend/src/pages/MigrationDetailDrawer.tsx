@@ -1,15 +1,20 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Ban, ListTree, Play, ScrollText } from "lucide-react";
 import toast from "react-hot-toast";
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Icon } from "@/components/ui/Icon";
 import { MetricRow } from "@/components/ui/MetricRow";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SlideOver } from "@/components/ui/SlideOver";
+import {
+  MigrationStatusBadge,
+  type MigrationStatusKey,
+} from "@/components/ui/StatusBadge";
 import {
   ACTIVE_MIGRATION_STATUSES,
   cancelMigration,
@@ -21,15 +26,15 @@ import type { Vm } from "@/api/vms";
 import { formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import type { ApiError } from "@/api/types";
-import { STATUS_VARIANT, formatDuration } from "./Migrations";
+import { formatDuration } from "./Migrations";
 
 const PIPELINE_STEPS = [
-  { key: "validating", label: "validate" },
-  { key: "preparing", label: "convert" },
-  { key: "transferring", label: "transfer" },
-  { key: "configuring", label: "adapt" },
-  { key: "starting", label: "boot" },
-  { key: "verifying", label: "verify" },
+  { key: "validating",  label: "Validate" },
+  { key: "preparing",   label: "Convert" },
+  { key: "transferring", label: "Transfer" },
+  { key: "configuring", label: "Adapt" },
+  { key: "starting",    label: "Boot" },
+  { key: "verifying",   label: "Verify" },
 ] as const;
 
 const TERMINAL_OK = new Set(["completed"]);
@@ -55,13 +60,16 @@ export function MigrationDetailDrawer({
   const queryClient = useQueryClient();
   const open = id !== null;
   const canControl = useHasPermission("migrations", "update");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  useEffect(() => {
+    if (!open) setConfirmCancel(false);
+  }, [open]);
 
   const detailQuery = useQuery({
     queryKey: ["migration", id],
     queryFn: () => getMigration(id!),
     enabled: open,
-    // Mid-flight migrations refresh every 3s so the operator can watch
-    // the pipeline advance. Terminal migrations are static — no polling.
     refetchInterval: (query) => {
       const m = query.state.data;
       if (!m) return 5_000;
@@ -72,61 +80,63 @@ export function MigrationDetailDrawer({
   const startMutation = useMutation({
     mutationFn: () => startMigration(id!),
     onSuccess: () => {
-      toast.success("migration started");
+      toast.success("Migration started");
       queryClient.invalidateQueries({ queryKey: ["migration", id] });
       queryClient.invalidateQueries({ queryKey: ["migrations"] });
       queryClient.invalidateQueries({ queryKey: ["stats", "migrations"] });
     },
-    onError: (err) => toast.error(describeError(err, "start failed")),
+    onError: (err) => toast.error(describeError(err, "Start failed")),
   });
 
   const cancelMutation = useMutation({
-    mutationFn: () => cancelMigration(id!, "cancelled from console"),
+    mutationFn: () => cancelMigration(id!, "Cancelled from console"),
     onSuccess: () => {
-      toast.success("cancellation requested");
+      toast.success("Cancellation requested");
+      setConfirmCancel(false);
       queryClient.invalidateQueries({ queryKey: ["migration", id] });
       queryClient.invalidateQueries({ queryKey: ["migrations"] });
     },
-    onError: (err) => toast.error(describeError(err, "cancel failed")),
+    onError: (err) => {
+      setConfirmCancel(false);
+      toast.error(describeError(err, "Cancel failed"));
+    },
   });
 
   const migration = detailQuery.data;
+  const migrationVm = migration
+    ? vms.find((v) => v.id === migration.vm_id)
+    : undefined;
 
   return (
+    <>
     <SlideOver
       open={open}
       onClose={onClose}
-      title={migration ? `migration #${migration.id}` : "migration"}
+      title={migration ? `Migration #${migration.id}` : "Migration"}
       footer={
         migration && (
           <>
             <Button variant="secondary" onClick={onClose}>
-              close
+              Close
             </Button>
             {canControl && migration.status === "pending" && (
               <Button
                 variant="primary"
-                uppercase
                 loading={startMutation.isPending}
                 onClick={() => startMutation.mutate()}
                 leadingIcon={<Icon icon={Play} size={14} />}
               >
-                start
+                Start
               </Button>
             )}
             {canControl && migration.is_active && migration.status !== "pending" && (
               <Button
                 variant="secondary"
-                uppercase
                 loading={cancelMutation.isPending}
-                onClick={() => {
-                  if (window.confirm(`cancel migration #${migration.id}? this cannot be undone.`)) {
-                    cancelMutation.mutate();
-                  }
-                }}
+                onClick={() => setConfirmCancel(true)}
                 leadingIcon={<Icon icon={Ban} size={14} />}
               >
-                cancel
+                Cancel
               </Button>
             )}
           </>
@@ -145,54 +155,76 @@ export function MigrationDetailDrawer({
           <Pipeline migration={migration} />
           <Facts migration={migration} />
           {migration.error_message && (
-            <Callout tone="err" kicker={migration.error_code ?? "error"}>
+            <Callout tone="err" kicker={migration.error_code ?? "Error"}>
               <span className="break-words">{migration.error_message}</span>
             </Callout>
           )}
         </div>
       )}
     </SlideOver>
+    {migration && (
+      <ConfirmDialog
+        open={confirmCancel}
+        onClose={() => setConfirmCancel(false)}
+        onConfirm={() => cancelMutation.mutate()}
+        loading={cancelMutation.isPending}
+        icon={Ban}
+        title="Cancel this migration?"
+        confirmLabel="Cancel migration"
+        cancelLabel="Keep running"
+        message={
+          <>
+            Migration #{migration.id} of{" "}
+            <strong className="font-bold text-[var(--text-primary)]">
+              {migrationVm?.name ?? `vm#${migration.vm_id}`}
+            </strong>{" "}
+            stops at the current step. Transferred disk data is discarded and
+            the target VM is not created. The source VM stays untouched, so the
+            migration can be started again later.
+          </>
+        }
+      />
+    )}
+    </>
   );
 }
 
 function Hero({ migration, vms }: { migration: Migration; vms: Vm[] }) {
   const vm = vms.find((v) => v.id === migration.vm_id);
-  const variant = STATUS_VARIANT[migration.status];
-  const tone =
-    TERMINAL_OK.has(migration.status)
-      ? "ok"
-      : TERMINAL_KO.has(migration.status)
-        ? "white"
-        : "signal";
+  const tone = TERMINAL_OK.has(migration.status)
+    ? "ok"
+    : TERMINAL_KO.has(migration.status)
+      ? "err"
+      : "signal";
   return (
-    <section className="border border-line bg-bg-elev p-5">
+    <section className="rounded-2xl bg-[var(--surface-soft)] p-5">
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <Badge variant={variant}>{migration.status.replace(/_/g, " ")}</Badge>
-        <span className="kicker">strategy · {migration.strategy}</span>
+        <MigrationStatusBadge status={migration.status.toUpperCase() as MigrationStatusKey} />
+        <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-[0.04em]">
+          Strategy · {migration.strategy}
+        </span>
         {migration.requires_conversion && (
-          <span className="kicker">conversion · {migration.conversion_format ?? "qcow2"}</span>
+          <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-[0.04em]">
+            Conversion · {migration.conversion_format ?? "qcow2"}
+          </span>
         )}
       </div>
-      <div className="font-mono text-[14px] text-ink mb-1">
+      <div className="text-[15px] font-bold text-[var(--text-primary)] mb-1">
         {vm?.name ?? `vm#${migration.vm_id}`}
-        <span className="ml-2 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted">
+        <span className="ml-2 text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)]">
           → {migration.target_namespace}
         </span>
       </div>
       <div className="mt-3">
-        <ProgressBar
-          value={migration.progress_percentage}
-          variant={tone === "white" ? "white" : tone === "ok" ? "ok" : "signal"}
-          showPct
-        />
+        <ProgressBar value={migration.progress_percentage} variant={tone} showPct />
       </div>
-      <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+      <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
         <span>
-          step {migration.current_step_number} / {migration.total_steps}
+          Step {migration.current_step_number} / {migration.total_steps}
           {migration.current_step ? ` · ${migration.current_step}` : ""}
         </span>
         {migration.is_active && migration.estimated_time_remaining_seconds > 0 && (
-          <span>eta · {formatDuration(migration.estimated_time_remaining_seconds)}</span>
+          <span>ETA · {formatDuration(migration.estimated_time_remaining_seconds)}</span>
         )}
       </div>
     </section>
@@ -200,11 +232,6 @@ function Hero({ migration, vms }: { migration: Migration; vms: Vm[] }) {
 }
 
 function Pipeline({ migration }: { migration: Migration }) {
-  // Each pipeline cell reflects the status semantics:
-  //   - "done" once the migration has advanced past it,
-  //   - "active" when it matches the current status,
-  //   - "failed" on the step that broke (best-effort from current_step_number),
-  //   - "pending" otherwise.
   const currentIdx = PIPELINE_STEPS.findIndex((s) => s.key === migration.status);
   const completed = migration.status === "completed";
   const failed = migration.status === "failed";
@@ -212,23 +239,17 @@ function Pipeline({ migration }: { migration: Migration }) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Icon icon={ListTree} size={14} className="text-ink-muted" />
-        <span className="kicker">pipeline</span>
+        <Icon icon={ListTree} size={14} className="text-[var(--text-muted)]" />
+        <span className="kicker">Pipeline</span>
       </div>
       <ol className="grid grid-cols-3 gap-2">
         {PIPELINE_STEPS.map((step, idx) => {
           let state: "done" | "active" | "failed" | "pending";
-          if (completed) {
-            state = "done";
-          } else if (failed && idx === Math.max(0, migration.current_step_number - 1)) {
-            state = "failed";
-          } else if (currentIdx === idx) {
-            state = "active";
-          } else if (currentIdx > idx) {
-            state = "done";
-          } else {
-            state = "pending";
-          }
+          if (completed) state = "done";
+          else if (failed && idx === Math.max(0, migration.current_step_number - 1)) state = "failed";
+          else if (currentIdx === idx) state = "active";
+          else if (currentIdx > idx) state = "done";
+          else state = "pending";
           return <PipelineCell key={step.key} index={idx + 1} label={step.label} state={state} />;
         })}
       </ol>
@@ -245,34 +266,25 @@ function PipelineCell({
   label: string;
   state: "done" | "active" | "failed" | "pending";
 }) {
-  const color =
+  const tone =
     state === "done"
-      ? "var(--ok)"
+      ? { color: "var(--alert-success-light)", bg: "rgba(1, 181, 116, 0.10)" }
       : state === "active"
-        ? "var(--signal)"
+        ? { color: "var(--accent-light)", bg: "rgba(230, 38, 0, 0.12)" }
         : state === "failed"
-          ? "var(--err)"
-          : "var(--ink-faint)";
+          ? { color: "var(--alert-critical)", bg: "rgba(224, 61, 61, 0.10)" }
+          : { color: "var(--text-muted)", bg: "var(--surface-soft)" };
   return (
-    <li
-      className="border bg-bg-elev px-3 py-2"
-      style={{
-        borderColor: state === "pending" ? "var(--line)" : color,
-        boxShadow:
-          state === "active"
-            ? `inset 0 0 0 1px color-mix(in srgb, ${color} 60%, transparent)`
-            : undefined,
-      }}
-    >
+    <li className="rounded-xl px-3.5 py-2.5" style={{ background: tone.bg }}>
       <div
-        className="font-mono text-[10px] uppercase tracking-[0.06em]"
-        style={{ color: state === "pending" ? "var(--ink-faint)" : color }}
+        className="text-[10px] uppercase tracking-[0.04em] font-bold"
+        style={{ color: tone.color }}
       >
         {String(index).padStart(2, "0")} · {label}
       </div>
       <div
-        className="font-mono text-[10px] uppercase tracking-[0.05em] mt-0.5"
-        style={{ color: state === "pending" ? "var(--ink-faint)" : color }}
+        className="text-[10px] uppercase tracking-[0.04em] font-medium mt-0.5"
+        style={{ color: tone.color, opacity: 0.85 }}
       >
         {state}
       </div>
@@ -290,23 +302,23 @@ function Facts({ migration }: { migration: Migration }) {
       : "—";
 
   const rows: { label: string; value: string }[] = [
-    { label: "namespace", value: migration.target_namespace },
-    { label: "storage class", value: migration.target_storage_class },
-    { label: "target node", value: migration.target_node ?? "—" },
-    { label: "target vm name", value: migration.target_vm_name ?? "—" },
-    { label: "transferred", value: transferred },
-    { label: "source size", value: sourceSize },
-    { label: "transfer rate", value: rate },
-    { label: "duration", value: formatDuration(migration.duration_seconds) },
-    { label: "scheduled", value: formatRelativeTime(migration.scheduled_at) },
-    { label: "started", value: formatRelativeTime(migration.started_at) },
-    { label: "completed", value: formatRelativeTime(migration.completed_at) },
+    { label: "Namespace", value: migration.target_namespace },
+    { label: "Storage Class", value: migration.target_storage_class },
+    { label: "Target Node", value: migration.target_node ?? "—" },
+    { label: "Target VM Name", value: migration.target_vm_name ?? "—" },
+    { label: "Transferred", value: transferred },
+    { label: "Source Size", value: sourceSize },
+    { label: "Transfer Rate", value: rate },
+    { label: "Duration", value: formatDuration(migration.duration_seconds) },
+    { label: "Scheduled", value: formatRelativeTime(migration.scheduled_at) },
+    { label: "Started", value: formatRelativeTime(migration.started_at) },
+    { label: "Completed", value: formatRelativeTime(migration.completed_at) },
   ];
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
-        <Icon icon={ScrollText} size={14} className="text-ink-muted" />
-        <span className="kicker">facts</span>
+        <Icon icon={ScrollText} size={14} className="text-[var(--text-muted)]" />
+        <span className="kicker">Facts</span>
       </div>
       <div>
         {rows.map((r) => (
@@ -314,9 +326,9 @@ function Facts({ migration }: { migration: Migration }) {
         ))}
       </div>
       {migration.notes && (
-        <div className="mt-4 border border-line bg-bg-elev p-3">
-          <div className="kicker mb-1.5">notes</div>
-          <div className="font-mono text-[12px] text-ink whitespace-pre-wrap break-words">
+        <div className="mt-4 rounded-xl bg-[var(--surface-soft)] p-4">
+          <div className="kicker mb-1.5">Notes</div>
+          <div className="text-[13px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-relaxed">
             {migration.notes}
           </div>
         </div>

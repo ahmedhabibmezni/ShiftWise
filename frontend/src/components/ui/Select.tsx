@@ -18,15 +18,19 @@ export const Select = forwardRef<HTMLSelectElement, Props>(function Select(
       style={{
         backgroundImage: CHEVRON,
         backgroundRepeat: "no-repeat",
-        backgroundPosition: "right 12px center",
+        backgroundPosition: "right 14px center",
         backgroundSize: "12px 12px",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
       }}
       className={cn(
-        "w-full h-10 pl-3 pr-9 rounded-sm border bg-bg-elev text-ink appearance-none",
-        "font-sans text-[14px]",
-        "transition-[border-color] duration-150",
-        invalid ? "border-err" : "border-line hover:border-line-strong",
-        "focus:outline-none focus-visible:outline-1 focus-visible:outline-signal",
+        "w-full h-10 pl-3.5 pr-10 rounded-xl border bg-[var(--surface-soft)] appearance-none",
+        "text-[var(--text-primary)] text-[14px] font-medium",
+        "transition-all duration-200",
+        invalid
+          ? "border-[var(--alert-critical)]/60"
+          : "border-[var(--hairline)] hover:border-[var(--accent-light)]/50 focus:border-[var(--accent-primary)]/60",
+        "focus:outline-none focus:bg-[var(--surface-soft-strong)]",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         className,
       )}

@@ -1,13 +1,39 @@
-@import "@fontsource-variable/ibm-plex-sans/index.css";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
-@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/plus-jakarta-sans/800.css";
 
 @import "./styles/tokens.css";
 @import "tailwindcss";
 @import "./styles/base.css";
 
 @theme {
+  /* ----- New design system colours ----- */
+  --color-bg-app: #060B28;
+  --color-bg-app-mid: #0A0E2C;
+  --color-bg-app-deep: #0F1535;
+
+  --color-accent-primary: #E62600;
+  --color-accent-light: #FF7A2F;
+  --color-accent-deep: #812300;
+
+  --color-blue-deep: #1F3F8A;
+  --color-blue-base: #2651B2;
+  --color-blue-mid: #3E6FD4;
+
+  --color-alert-critical: #E03D3D;
+  --color-alert-high: #E8922A;
+  --color-alert-medium: #D4C137;
+  --color-alert-low: #4A7FC4;
+  --color-alert-success: #01B574;
+  --color-alert-success-light: #2ECC8A;
+
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #A0AEC0;
+  --color-text-muted: #8A98AD;
+
+  /* ----- Legacy aliases (mapped through CSS variables so light mode flips) ----- */
   --color-bg: var(--bg);
   --color-bg-elev: var(--bg-elev);
   --color-bg-elev-2: var(--bg-elev-2);
@@ -31,43 +57,55 @@
   --color-err: var(--err);
   --color-err-soft: var(--err-soft);
 
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  /* Real monospace for technical identifiers (IPs, UUIDs, hosts, VMX paths)
+     so they stay column-aligned. System stack — no extra web font. */
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "SF Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
 
   --radius-*: initial;
-  --radius-sm: 2px;
-  --radius-md: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-card: 20px;
 
   --shadow-*: initial;
   --shadow-elev: var(--shadow-elev);
   --shadow-hover: var(--shadow-hover);
+  --shadow-accent: var(--shadow-accent);
 
   --default-transition-duration: 200ms;
-  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  --default-transition-timing-function: cubic-bezier(0.2, 0.6, 0.2, 1);
 
-  --text-display: 96px;
+  /* Typography scale per DESIGN.md */
+  --text-display: 88px;
   --text-display--line-height: 0.92;
-  --text-display--font-weight: 700;
+  --text-display--font-weight: 800;
   --text-display--letter-spacing: -0.04em;
 
   --text-major: 56px;
   --text-major--line-height: 1;
-  --text-major--font-weight: 700;
+  --text-major--font-weight: 800;
   --text-major--letter-spacing: -0.025em;
 
-  --text-h1: 28px;
-  --text-h1--line-height: 1.1;
-  --text-h1--font-weight: 600;
-  --text-h1--letter-spacing: -0.015em;
+  --text-kpi: 28px;
+  --text-kpi--line-height: 1.1;
+  --text-kpi--font-weight: 700;
+  --text-kpi--letter-spacing: -0.02em;
 
-  --text-h2: 20px;
-  --text-h2--line-height: 1.2;
-  --text-h2--font-weight: 600;
+  --text-h1: 22px;
+  --text-h1--line-height: 1.2;
+  --text-h1--font-weight: 700;
+  --text-h1--letter-spacing: -0.01em;
+
+  --text-h2: 18px;
+  --text-h2--line-height: 1.25;
+  --text-h2--font-weight: 700;
   --text-h2--letter-spacing: -0.01em;
 
   --text-h3: 14px;
   --text-h3--line-height: 1.3;
-  --text-h3--font-weight: 600;
+  --text-h3--font-weight: 700;
 
   --text-body: 14px;
   --text-body--line-height: 1.55;
@@ -75,34 +113,21 @@
 
   --text-meta: 12px;
   --text-meta--line-height: 1.4;
-  --text-meta--font-weight: 400;
+  --text-meta--font-weight: 500;
 
-  --text-mono-lg: 18px;
-  --text-mono-lg--line-height: 1.3;
-  --text-mono-lg--font-weight: 500;
-
-  --text-mono: 12px;
-  --text-mono--line-height: 1.4;
-  --text-mono--font-weight: 500;
-  --text-mono--letter-spacing: 0.02em;
-
-  --text-mono-sm: 10px;
-  --text-mono-sm--line-height: 1.3;
-  --text-mono-sm--font-weight: 500;
-  --text-mono-sm--letter-spacing: 0.06em;
+  --text-micro: 10px;
+  --text-micro--line-height: 1.3;
+  --text-micro--font-weight: 700;
+  --text-micro--letter-spacing: 0.04em;
 }
 
-.font-mono,
+/* Numeric data uses Plus Jakarta + tabular-nums by default */
 .tabular {
+  font-feature-settings: "tnum";
   font-variant-numeric: tabular-nums;
 }
 
-/* Kicker — uppercase mono label used everywhere */
-.kicker {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
+/* react-hot-toast container — sit above sticky shell */
+.go2072408551 {
+  z-index: var(--z-toast) !important;
 }

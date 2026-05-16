@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <title>SHIFTWISE</title>
+    <meta name="color-scheme" content="dark light" />
+    <title>ShiftWise — Operator Console</title>
     <script>
-      // Pre-paint theme bootstrap to avoid flash
+      // Pre-paint theme bootstrap to avoid flash. Dark is canonical.
       (function () {
         try {
-          var stored = localStorage.getItem("shiftwise.theme");
-          var theme = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          var stored = localStorage.getItem("shiftwise-theme");
+          var theme = stored || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
           document.documentElement.setAttribute("data-theme", theme);
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "dark");

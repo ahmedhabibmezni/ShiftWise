@@ -24,6 +24,8 @@ function makeAuthUser(over: Partial<User> = {}): User {
     is_active: true,
     is_verified: true,
     is_superuser: false,
+    last_login_at: null,
+    last_login_ip: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     roles: [],
@@ -202,7 +204,9 @@ describe("Migrations page", () => {
 
     renderPage();
 
-    expect(await screen.findByText(/ask an operator to create one/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/an operator with migration rights/i),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new migration/i })).toBeNull();
   });
 
@@ -234,13 +238,19 @@ describe("Migrations page", () => {
     });
   });
 
-  it("opens the create drawer and posts vm_id + strategy", async () => {
+  it("lists non-migratable VMs disabled and posts an auto strategy", async () => {
     let capturedPayload: unknown = null;
     server.use(
       mockStats(),
       mockVms([
         makeVm({ id: 10, name: "ubuntu-22-prod", can_migrate: true }),
-        makeVm({ id: 11, name: "windows-2019", can_migrate: false }),
+        makeVm({
+          id: 11,
+          name: "windows-2019",
+          can_migrate: false,
+          status: "discovered",
+          compatibility_status: "unknown",
+        }),
       ]),
       mockList([]),
       http.post("/api/v1/migrations", async ({ request }) => {
@@ -260,21 +270,26 @@ describe("Migrations page", () => {
     await user.click(await screen.findByRole("button", { name: /new migration/i }));
     const dialog = await screen.findByRole("dialog", { name: /new migration/i });
 
-    // Only the migratable VM is offered — the windows-2019 row is filtered out.
+    // Every tenant VM is listed. The non-migratable one stays visible but
+    // disabled, with the reason inline — it is no longer dropped silently.
     const select = within(dialog).getByLabelText(/target vm/i);
-    const options = within(select).getAllByRole("option");
-    const labels = options.map((o) => o.textContent ?? "");
-    expect(labels.some((l) => l.includes("ubuntu-22-prod"))).toBe(true);
-    expect(labels.some((l) => l.includes("windows-2019"))).toBe(false);
+    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
+    const ubuntu = options.find((o) => o.textContent?.includes("ubuntu-22-prod"));
+    const windows = options.find((o) => o.textContent?.includes("windows-2019"));
+    expect(ubuntu?.disabled).toBe(false);
+    expect(windows?.disabled).toBe(true);
+    expect(windows?.textContent).toContain("not analyzed");
+
+    // Strategy is locked to AUTO — the analyzer picks the concrete strategy.
+    expect(within(dialog).getByLabelText(/strategy/i)).toBeDisabled();
 
     await user.selectOptions(select, "10");
-    await user.selectOptions(within(dialog).getByLabelText(/strategy/i), "conversion");
     await user.click(within(dialog).getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {
       expect(capturedPayload).toMatchObject({
         vm_id: 10,
-        strategy: "conversion",
+        strategy: "auto",
         target_storage_class: "nfs-client",
       });
     });

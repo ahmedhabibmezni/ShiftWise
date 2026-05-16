@@ -125,7 +125,7 @@ describe("Roles page", () => {
     renderPage();
 
     // The table-level empty state copy is unique to the read-only branch.
-    expect(await screen.findByText(/no roles match your search/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no matching roles/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new role/i })).toBeNull();
   });
 

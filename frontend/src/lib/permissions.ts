@@ -3,6 +3,8 @@ import { useAuthStore } from "@/store/auth";
 
 export type ResourceAction = "read" | "create" | "update" | "delete";
 
+export const SUPER_ADMIN_ROLE = "super_admin";
+
 export const ROLE_ORDER = ["super_admin", "admin", "user", "viewer"] as const;
 export type RoleName = (typeof ROLE_ORDER)[number] | (string & {});
 
@@ -36,6 +38,18 @@ export function useHasPermission(
 ): boolean {
   const user = useAuthStore((s) => s.user);
   return hasPermission(user, resource, action);
+}
+
+/**
+ * True when the user holds super-admin privileges — either the
+ * `is_superuser` flag or the `super_admin` role. Such accounts may only
+ * be created, edited or deleted by another super-admin; the backend
+ * enforces the same rule server-side.
+ */
+export function isSuperAdminUser(user: User | null): boolean {
+  if (!user) return false;
+  if (user.is_superuser) return true;
+  return user.roles.some((r) => r.name === SUPER_ADMIN_ROLE);
 }
 
 export function usePrimaryRole(): RoleName | null {

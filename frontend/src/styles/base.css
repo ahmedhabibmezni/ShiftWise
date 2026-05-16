@@ -7,15 +7,16 @@
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 html {
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--bg-app);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  transition: background-color 240ms var(--ease-out);
 }
 
 body {
@@ -23,74 +24,294 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* =========================================================================
+   BODY RADIAL ORBS — the heart of the glass depth model.
+   These bleed brand colour through every backdrop-blurred card.
+   ========================================================================= */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(900px circle at 8% 12%, var(--orb-2), transparent 50%),
+    radial-gradient(700px circle at 92% 8%, var(--orb-1), transparent 55%),
+    radial-gradient(800px circle at 88% 92%, var(--orb-3), transparent 50%),
+    radial-gradient(600px circle at 12% 88%, var(--orb-4), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(420px circle at 50% 50%, var(--orb-2), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.45;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 ::selection {
-  background: var(--signal);
-  color: var(--signal-ink);
+  background: var(--accent-primary);
+  color: white;
 }
 
+/* =========================================================================
+   Scrollbars — restrained, on-brand
+   ========================================================================= */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-elev-2);
-  border: 2px solid var(--bg);
+  background: var(--hairline);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--line-strong);
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 21, 53, 0.24);
+  background-clip: padding-box;
 }
 
-.shiftwise-checkbox:checked {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2'><polyline points='3 8 7 12 13 4'/></svg>");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 14px 14px;
+/* =========================================================================
+   GLASS CARD primitive — used by .panel, .glass-card and all Vision UI cards.
+   This is the single recipe everything else inherits.
+   ========================================================================= */
+/* `@layer components` sits below Tailwind's `utilities` layer in the cascade,
+   so callers can override these defaults with `.fixed`, `.bg-*`, etc.
+   Without the layer, this rule would win over utilities because unlayered CSS
+   beats layered CSS regardless of specificity. */
+@layer components {
+  .glass-card {
+    position: relative;
+    background: var(--card-gradient);
+    backdrop-filter: var(--card-blur);
+    -webkit-backdrop-filter: var(--card-blur);
+    box-shadow: var(--card-shadow);
+    border-radius: var(--radius-card);
+    transition: box-shadow 240ms var(--ease-out), background 240ms var(--ease-out);
+  }
 }
 
-/* === Signature: fixed grain overlay (pointer-events-none) === */
-.sw-grain {
-  position: fixed;
+.glass-card::before {
+  content: '';
+  position: absolute;
   inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--card-border-grad);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
   pointer-events: none;
-  z-index: 1;
-  opacity: var(--grain-opacity);
-  mix-blend-mode: var(--grain-blend);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-  background-size: 160px 160px;
 }
 
-/* Soft hairline grid visible behind hero panels */
-.sw-hairlines {
+/* Heavy-blur version for pages that render < 20 cards (default) */
+.glass-card--heavy {
+  backdrop-filter: var(--card-blur);
+  -webkit-backdrop-filter: var(--card-blur);
+}
+
+/* Lite version — for pages that exceed ~20 cards on screen at once.
+   `.glass-budget-lite` on a page root downgrades EVERY glass surface inside
+   it in one declaration (Panels, KPI cards, nested timeline cards), so heavy
+   pages don't need per-component plumbing. Blur drops 120px -> 60px and the
+   gradient opacity rises to compensate, per the DESIGN.md performance note. */
+.glass-card--lite,
+.glass-budget-lite .glass-card {
+  backdrop-filter: var(--card-blur-lite);
+  -webkit-backdrop-filter: var(--card-blur-lite);
+  background: linear-gradient(127.09deg,
+    rgba(6, 11, 40, 0.97) 19.41%,
+    rgba(10, 14, 35, 0.62) 76.65%);
+}
+:root[data-theme="light"] .glass-card--lite,
+:root[data-theme="light"] .glass-budget-lite .glass-card {
+  background: linear-gradient(127.09deg,
+    rgba(255, 255, 255, 0.97) 19.41%,
+    rgba(255, 255, 255, 0.62) 76.65%);
+}
+
+/* Inner / nested card (chart-card-on-card pattern) */
+.glass-card--nested {
+  background: linear-gradient(126.97deg, rgba(6, 11, 40, 0.74) 28.26%, rgba(26, 31, 55, 0.5) 91.2%);
+  backdrop-filter: blur(60px);
+  -webkit-backdrop-filter: blur(60px);
+  border-radius: var(--radius-card-sm);
+  position: relative;
+}
+:root[data-theme="light"] .glass-card--nested {
+  background: linear-gradient(126.97deg, rgba(255, 255, 255, 0.85) 28.26%, rgba(244, 247, 252, 0.65) 91.2%);
+}
+
+/* =========================================================================
+   Sidebar rail — Vision UI sidenav treatment. The translucent card gradient
+   + 120px blur, but edge-flush: NO ::before gradient border and NO radius
+   (the rail bleeds to the viewport edges). A soft shadow on the content-
+   facing edge separates it from the page instead of a hard outline.
+   ========================================================================= */
+@layer components {
+  .sidebar-rail {
+    position: relative;
+    background: var(--card-gradient);
+    backdrop-filter: var(--card-blur);
+    -webkit-backdrop-filter: var(--card-blur);
+    box-shadow: 24px 0 60px -34px rgba(0, 0, 0, 0.6);
+    transition: background 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+  }
+}
+:root[data-theme="light"] .sidebar-rail {
+  box-shadow: 24px 0 60px -34px rgba(31, 41, 80, 0.2);
+}
+
+/* =========================================================================
+   Gradient icon container — for KPI accents, sidebar active state, brand mark
+   ========================================================================= */
+.icon-container {
+  display: grid;
+  place-items: center;
+  color: white;
+  flex-shrink: 0;
+  border-radius: 12px;
+}
+.icon-container--accent {
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-light) 100%);
+  box-shadow: var(--shadow-accent);
+}
+.icon-container--blue {
+  background: linear-gradient(135deg, var(--blue-deep) 0%, var(--blue-mid) 100%);
+  box-shadow: var(--shadow-blue);
+}
+.icon-container--success {
+  background: linear-gradient(135deg, var(--alert-success), var(--alert-success-light));
+  box-shadow: var(--shadow-success);
+}
+.icon-container--warn {
+  background: linear-gradient(135deg, #C97718, var(--alert-high));
+  box-shadow: 0 3px 10px rgba(232, 146, 42, 0.35);
+}
+.icon-container--muted {
+  background: var(--surface-soft-strong);
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+/* =========================================================================
+   Status chip — uppercase micro pill
+   ========================================================================= */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  font-feature-settings: "tnum";
+}
+.status-chip--ok   { background: rgba(1, 181, 116, 0.18);  color: var(--alert-success-light); }
+.status-chip--warn { background: rgba(232, 146, 42, 0.18); color: var(--alert-high); }
+.status-chip--err  { background: rgba(224, 61, 61, 0.18);  color: var(--alert-critical); }
+.status-chip--run  { background: rgba(230, 38, 0, 0.18);   color: var(--accent-light); }
+.status-chip--info { background: rgba(62, 111, 212, 0.18); color: var(--blue-mid); }
+.status-chip--muted { background: var(--surface-soft-strong); color: var(--text-muted); }
+:root[data-theme="light"] .status-chip--ok { color: var(--alert-success); }
+:root[data-theme="light"] .status-chip--run { color: var(--accent-primary); }
+
+/* =========================================================================
+   Hairline — used inside cards to separate sections without breaking glass
+   ========================================================================= */
+.hairline {
+  border-color: var(--hairline);
+}
+
+/* =========================================================================
+   Tabular numerics
+   ========================================================================= */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* =========================================================================
+   Kickers — small uppercase labels
+   ========================================================================= */
+.kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0;
+}
+
+/* =========================================================================
+   Focus ring — accent at 25%, applied to every interactive element
+   ========================================================================= */
+:where(button, a, input, select, textarea, [role="button"]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 8px;
+}
+
+/* =========================================================================
+   Checkbox check-mark glyph (kept from the previous design)
+   ========================================================================= */
+.shiftwise-checkbox:checked {
   background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--line) 40%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--line) 40%, transparent) 1px, transparent 1px);
-  background-size: 32px 32px;
-  background-position: -1px -1px;
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.4'><polyline points='3 8 7 12 13 4'/></svg>"),
+    linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-light) 100%);
+  background-repeat: no-repeat, no-repeat;
+  background-position: center, center;
+  background-size: 12px 12px, cover;
+  border-color: transparent;
 }
 
-/* === Keyframes === */
-@keyframes shiftwise-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.92); }
+/* =========================================================================
+   Native <select> dropdown — the <option> list is painted by the browser and
+   does not inherit the translucent --surface-soft token. Without a solid
+   background the options render white-on-white in dark mode.
+   ========================================================================= */
+option,
+optgroup {
+  background-color: var(--bg-app-deep);
+  color: var(--text-primary);
 }
 
-@keyframes shiftwise-topbar {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
-}
-
-@keyframes shiftwise-shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
+/* =========================================================================
+   Keyframes
+   ========================================================================= */
 @keyframes shiftwise-mount {
-  0% { opacity: 0; transform: translateY(6px); }
+  0% { opacity: 0; transform: translateY(8px); }
   100% { opacity: 1; transform: translateY(0); }
 }
 
@@ -99,26 +320,56 @@ body {
   100% { opacity: 1; }
 }
 
-@keyframes shiftwise-marquee {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+@keyframes shiftwise-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.92); }
+}
+
+@keyframes shiftwise-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes shiftwise-topbar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 @keyframes shiftwise-blink {
-  0%, 49% { opacity: 1; }
+  0%, 49%  { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
 
-/* === Utility classes === */
+@keyframes shiftwise-marquee {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+/* Indeterminate spinner — for in-flight buttons and active-status badges.
+   Rotation on a leaf SVG, so it never becomes a backdrop-root ancestor. */
+@keyframes shiftwise-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Card mount animation — opacity + 8px rise.
+   IMPORTANT: this is applied via the .sw-mount class, NOT directly to glass cards.
+   The transform here is fine because .sw-mount sits on a wrapper, not on an
+   ancestor of a backdrop-filtered card. */
 .sw-mount {
   animation: shiftwise-mount var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--sw-i, 0) * 50ms);
+}
+
+.sw-fade {
+  animation: shiftwise-fade var(--dur-slow) var(--ease-out) both;
   animation-delay: calc(var(--sw-i, 0) * 40ms);
 }
 
 .sw-skel {
   position: relative;
   overflow: hidden;
-  background: var(--bg-elev-2);
+  background: var(--surface-soft-strong);
+  border-radius: 8px;
 }
 .sw-skel::after {
   content: "";
@@ -127,11 +378,19 @@ body {
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in srgb, var(--ink) 6%, transparent) 50%,
+    rgba(255, 255, 255, 0.06) 50%,
     transparent 100%
   );
   background-size: 200% 100%;
   animation: shiftwise-shimmer 1.6s linear infinite;
+}
+:root[data-theme="light"] .sw-skel::after {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(15, 21, 53, 0.06) 50%,
+    transparent 100%
+  );
 }
 
 .sw-caret::after {
@@ -140,18 +399,32 @@ body {
   animation: shiftwise-blink 1s steps(2, end) infinite;
 }
 
-/* Press feedback for interactive primitives */
+/* Press feedback on buttons — fine because translate is on the button itself,
+   not an ancestor of a glass card */
 .sw-press:active:not(:disabled) {
   transform: translateY(1px);
 }
 
+/* Continuous spinner. Signals an ongoing process, so it is essential motion:
+   under reduced-motion it slows down rather than freezing (see below). */
+.sw-spin {
+  animation: shiftwise-spin 0.7s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  .sw-grain { display: none; }
+  .sw-mount,
+  .sw-fade {
+    animation: shiftwise-fade var(--dur-slow) var(--ease-out) both;
+  }
+  /* A loading spinner conveys an ongoing process — freezing it after one turn
+     reads as broken. Keep it turning, slower, as a reduced-motion courtesy. */
+  .sw-spin {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
 }

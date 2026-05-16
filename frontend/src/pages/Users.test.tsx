@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -23,6 +23,8 @@ function makeAuthUser(over: Partial<User> = {}): User {
     is_active: true,
     is_verified: true,
     is_superuser: false,
+    last_login_at: null,
+    last_login_ip: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     roles: [],
@@ -48,6 +50,18 @@ function makeUserItem(over: Partial<UserListItem> = {}): UserListItem {
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-05-01T00:00:00Z",
     ...over,
+  };
+}
+
+function roleJson(id: number, name: string, description: string) {
+  return {
+    id,
+    name,
+    description,
+    is_system_role: true,
+    permissions: {},
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
   };
 }
 
@@ -400,7 +414,6 @@ describe("Users page", () => {
 
   it("deletes another user after confirmation", async () => {
     let deleted = false;
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     server.use(
       http.get("/api/v1/users", () =>
         HttpResponse.json({
@@ -446,8 +459,12 @@ describe("Users page", () => {
     const dialog = await screen.findByRole("dialog", { name: /leaver/i });
     await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
 
+    const confirm = await screen.findByRole("alertdialog");
+    await user.click(
+      within(confirm).getByRole("button", { name: /delete user/i }),
+    );
+
     await waitFor(() => expect(deleted).toBe(true));
-    confirmSpy.mockRestore();
   });
 
   it("surfaces inline validation when required fields are missing", async () => {
@@ -474,10 +491,90 @@ describe("Users page", () => {
     await user.clear(within(dialog).getByLabelText(/^tenant$/i));
     await user.click(within(dialog).getByRole("button", { name: /^create$/i }));
 
-    expect(await within(dialog).findByText(/email required/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/min 3 characters/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/tenant required/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/min 8 characters/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/role required/i)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/email is required/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/must be at least 3 characters/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/tenant is required/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/must be at least 8 characters/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/role is required/i)).toBeInTheDocument();
+  });
+
+  it("omits the super_admin role from the create drawer for a non-superuser", async () => {
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({ items: [], total: 0, page: 1, page_size: 25, pages: 0 }),
+      ),
+      http.get("/api/v1/roles", () =>
+        HttpResponse.json([
+          roleJson(1, "super_admin", "Full platform access"),
+          roleJson(2, "admin", "Tenant administrator"),
+          roleJson(3, "user", "Standard operator"),
+        ]),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /new user/i }));
+    const dialog = await screen.findByRole("dialog", { name: /new user/i });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("option", { name: /tenant administrator/i }),
+      ).toBeInTheDocument(),
+    );
+    const roleLabels = within(within(dialog).getByLabelText(/^role$/i))
+      .getAllByRole("option")
+      .map((o) => o.textContent ?? "");
+    expect(roleLabels.some((l) => l.includes("super_admin"))).toBe(false);
+  });
+
+  it("hides edit and delete when a non-superuser opens a super-admin account", async () => {
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json({
+          items: [makeUserItem({ id: 7, username: "root", is_superuser: true })],
+          total: 1,
+          page: 1,
+          page_size: 25,
+          pages: 1,
+        }),
+      ),
+      http.get("/api/v1/users/7", () =>
+        HttpResponse.json({
+          id: 7,
+          email: "root@shiftwise.local",
+          username: "root",
+          first_name: null,
+          last_name: null,
+          full_name: "root",
+          tenant_id: "t1",
+          is_active: true,
+          is_verified: true,
+          is_superuser: true,
+          last_login_at: null,
+          last_login_ip: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          roles: [],
+          permissions: {},
+        }),
+      ),
+      http.get("/api/v1/roles", () => HttpResponse.json([])),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "root" }));
+    const dialog = await screen.findByRole("dialog", { name: /root/i });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(/can only be modified by another/i),
+      ).toBeInTheDocument(),
+    );
+    expect(within(dialog).queryByRole("button", { name: /^edit$/i })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^delete$/i })).toBeNull();
   });
 });

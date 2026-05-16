@@ -1,11 +1,21 @@
 import { useEffect, useState, useCallback } from "react";
-import { getCurrentTheme, toggleTheme as applyToggle, type Theme } from "@/lib/theme";
+import {
+  applyTheme,
+  getCurrentTheme,
+  toggleTheme as applyToggle,
+  type Theme,
+} from "@/lib/theme";
 
-export function useTheme(): { theme: Theme; toggle: () => void } {
-  const [theme, setTheme] = useState<Theme>(() => getCurrentTheme());
+export function useTheme(): {
+  theme: Theme;
+  setTheme: (next: Theme) => void;
+  toggle: () => void;
+  toggleTheme: () => void;
+} {
+  const [theme, setThemeState] = useState<Theme>(() => getCurrentTheme());
 
   useEffect(() => {
-    const observer = new MutationObserver(() => setTheme(getCurrentTheme()));
+    const observer = new MutationObserver(() => setThemeState(getCurrentTheme()));
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
@@ -13,9 +23,13 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
     return () => observer.disconnect();
   }, []);
 
+  const setTheme = useCallback((next: Theme) => {
+    applyTheme(next);
+  }, []);
+
   const toggle = useCallback(() => {
     applyToggle();
   }, []);
 
-  return { theme, toggle };
+  return { theme, setTheme, toggle, toggleTheme: toggle };
 }

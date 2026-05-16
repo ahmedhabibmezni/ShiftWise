@@ -37,7 +37,7 @@ describe("Login page", () => {
 
     await user.type(screen.getByLabelText(/email/i), "test@shiftwise.local");
     await user.type(screen.getByLabelText(/password/i), "Password123!");
-    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => {
       expect(screen.getByText("HOME")).toBeInTheDocument();
@@ -56,7 +56,7 @@ describe("Login page", () => {
 
     await user.type(screen.getByLabelText(/email/i), "test@shiftwise.local");
     await user.type(screen.getByLabelText(/password/i), "wrong");
-    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     const alert = await screen.findByText(/login failed/i);
     expect(alert).toBeInTheDocument();
@@ -71,7 +71,7 @@ describe("Login page", () => {
 
     await user.type(screen.getByLabelText(/email/i), "test@shiftwise.local");
     await user.type(screen.getByLabelText(/password/i), "Password123!");
-    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText(/account inactive/i)).toBeInTheDocument();
     expect(useAuthStore.getState().user).toBeNull();
@@ -81,9 +81,9 @@ describe("Login page", () => {
     const user = userEvent.setup();
     renderLogin();
 
-    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
 
-    expect(await screen.findByText(/email required/i)).toBeInTheDocument();
-    expect(screen.getByText(/password required/i)).toBeInTheDocument();
+    expect(await screen.findByText(/email is required/i)).toBeInTheDocument();
+    expect(screen.getByText(/password is required/i)).toBeInTheDocument();
   });
 });

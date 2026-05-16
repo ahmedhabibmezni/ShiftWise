@@ -4,9 +4,9 @@ export function Sparkline({
   values,
   width = 160,
   height = 40,
-  stroke = "var(--ink)",
-  fill = "currentColor",
-  strokeWidth = 1.5,
+  stroke = "var(--accent-light)",
+  fill = "var(--accent-primary)",
+  strokeWidth = 2,
   showArea = true,
   className,
 }: {

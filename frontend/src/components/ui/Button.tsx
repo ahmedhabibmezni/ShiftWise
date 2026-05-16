@@ -1,64 +1,87 @@
 import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 type Variant = "primary" | "secondary" | "danger" | "ghost";
+type Size = "sm" | "md";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant;
+  size?: Size;
   loading?: boolean;
-  uppercase?: boolean;
   leadingIcon?: ReactNode;
   trailingIcon?: ReactNode;
 };
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    "bg-signal text-signal-ink border-transparent hover:brightness-95 active:brightness-90",
+    "text-white border-transparent shadow-[var(--shadow-accent)] hover:brightness-110 active:brightness-95",
   secondary:
-    "bg-transparent text-ink border-line-strong hover:bg-bg-elev active:bg-bg-elev-2",
+    "glass-card text-[var(--text-primary)] hover:bg-[var(--surface-soft-strong)]",
   danger:
-    "bg-err text-white border-transparent hover:brightness-95 active:brightness-90",
+    "bg-[var(--alert-critical)] text-white border-transparent hover:brightness-110 active:brightness-95",
   ghost:
-    "bg-transparent text-ink-muted border-transparent hover:bg-bg-elev hover:text-ink",
+    "bg-transparent text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--surface-soft-strong)]",
+};
+
+const SIZES: Record<Size, string> = {
+  sm: "h-8 px-3 text-[12px] rounded-[10px]",
+  md: "h-10 px-4 text-[13px] rounded-[12px]",
 };
 
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
   {
     variant = "secondary",
+    size = "md",
     loading,
-    uppercase,
     leadingIcon,
     trailingIcon,
     className,
     children,
     disabled,
+    style,
     ...rest
   },
   ref,
 ) {
+  // Primary is the brand gradient — applied inline so the gradient survives
+  // any utility-class overrides callers might pass.
+  const primaryStyle: React.CSSProperties | undefined =
+    variant === "primary"
+      ? {
+          background:
+            "linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-light) 100%)",
+        }
+      : undefined;
+
   return (
     <button
       ref={ref}
       disabled={disabled || loading}
+      style={{ ...primaryStyle, ...style }}
       className={cn(
-        "sw-press inline-flex h-10 items-center justify-center gap-2 px-4 rounded-sm border",
-        "font-sans text-[13px] font-semibold",
-        "transition-[background-color,color,border-color,opacity,transform] duration-150",
+        "sw-press inline-flex items-center justify-center gap-2 font-semibold",
+        "transition-all duration-200",
         "disabled:opacity-50 disabled:cursor-not-allowed",
-        "focus-visible:outline-1 focus-visible:outline-signal focus-visible:outline-offset-1",
-        uppercase && "uppercase tracking-[0.06em]",
+        "border",
+        SIZES[size],
         VARIANTS[variant],
         className,
       )}
       {...rest}
     >
       {loading ? (
-        <span className="font-mono tabular text-[12px]">…</span>
+        <Loader2
+          className="sw-spin"
+          size={size === "sm" ? 14 : 16}
+          strokeWidth={2.25}
+          aria-label="Loading"
+        />
       ) : (
         leadingIcon
       )}
-      {children}
+      {children && <span className="leading-none">{children}</span>}
       {!loading && trailingIcon}
     </button>
   );

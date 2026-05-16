@@ -3,21 +3,14 @@ import { cn } from "@/lib/cn";
 
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("border border-line", className)}>
+    <div className={cn("w-full overflow-x-auto", className)}>
       <table className="w-full border-collapse">{children}</table>
     </div>
   );
 }
 
 export function THead({ children }: { children: ReactNode }) {
-  return (
-    <thead
-      className="bg-bg-elev"
-      style={{ boxShadow: "inset 0 -1px 0 var(--line-strong)" }}
-    >
-      {children}
-    </thead>
-  );
+  return <thead>{children}</thead>;
 }
 
 export function TR({
@@ -32,8 +25,9 @@ export function TR({
   return (
     <tr
       className={cn(
-        "border-b border-line last:border-b-0 h-10",
-        interactive && "transition-[background-color] duration-150 hover:bg-bg-elev-2 cursor-pointer",
+        "border-b border-[var(--hairline-faint)] last:border-b-0",
+        interactive &&
+          "transition-colors duration-200 hover:bg-[var(--surface-soft)] cursor-pointer",
         className,
       )}
     >
@@ -47,7 +41,8 @@ export function TH({ numeric, className, children, ...rest }: ThProps) {
   return (
     <th
       className={cn(
-        "px-3 h-8 font-mono uppercase text-[11px] font-medium tracking-[0.04em] text-ink-muted",
+        "px-3 py-3 uppercase text-[10px] font-bold tracking-[0.04em] text-[var(--text-muted)]",
+        "border-b border-[var(--hairline)]",
         numeric ? "text-right tabular" : "text-left",
         className,
       )}
@@ -67,10 +62,11 @@ export function TD({ numeric, mono, muted, className, children, ...rest }: TdPro
   return (
     <td
       className={cn(
-        "px-3 align-middle text-[13px]",
-        (numeric || mono) && "font-mono tabular",
+        "px-3 py-3.5 align-middle text-[13px] text-[var(--text-primary)]",
+        (numeric || mono) && "tabular",
         numeric && "text-right",
-        muted && "text-ink-muted",
+        mono && "font-mono text-[12px]",
+        muted && "text-[var(--text-secondary)]",
         className,
       )}
       {...rest}

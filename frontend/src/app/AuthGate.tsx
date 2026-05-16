@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { Layers } from "lucide-react";
 import { bootstrapAuth } from "@/lib/axios";
 import { fetchCurrentUser } from "@/api/auth";
 import { useAuthStore } from "@/store/auth";
@@ -35,9 +36,16 @@ export function AuthGate({ children }: Props) {
 
 function BootSplash() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg text-ink-muted">
-      <div className="font-mono text-[11px] uppercase tracking-[0.06em]">
-        SW · INITIALISATION
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center gap-4">
+      <span
+        aria-hidden
+        className="icon-container icon-container--accent w-14 h-14 rounded-2xl"
+        style={{ animation: "shiftwise-pulse 1.6s var(--ease-out) infinite" }}
+      >
+        <Layers size={28} strokeWidth={2} />
+      </span>
+      <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)]">
+        ShiftWise · Initializing
       </div>
     </div>
   );

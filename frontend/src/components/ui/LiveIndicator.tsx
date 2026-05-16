@@ -3,16 +3,16 @@ import { cn } from "@/lib/cn";
 type Tone = "signal" | "ok" | "warn" | "err";
 
 const COLOR: Record<Tone, string> = {
-  signal: "var(--signal)",
-  ok: "var(--ok)",
-  warn: "var(--warn)",
-  err: "var(--err)",
+  signal: "var(--accent-light)",
+  ok: "var(--alert-success-light)",
+  warn: "var(--alert-high)",
+  err: "var(--alert-critical)",
 };
 
 export function LiveIndicator({
-  label = "live",
+  label = "Live",
   srLabel,
-  tone = "signal",
+  tone = "ok",
   className,
 }: {
   label?: string | null;
@@ -28,10 +28,7 @@ export function LiveIndicator({
       className={cn("inline-flex items-center gap-2", className)}
       role={accessibleLabel ? "status" : undefined}
     >
-      <span
-        aria-hidden
-        className="relative inline-flex h-2.5 w-2.5"
-      >
+      <span aria-hidden className="relative inline-flex h-2.5 w-2.5">
         <span
           className="absolute inset-0 rounded-full opacity-60"
           style={{
@@ -41,11 +38,11 @@ export function LiveIndicator({
         />
         <span
           className="relative inline-flex h-2.5 w-2.5 rounded-full"
-          style={{ backgroundColor: color }}
+          style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
         />
       </span>
       {hasVisibleLabel && (
-        <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-ink-muted">
+        <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--text-secondary)]">
           {label}
         </span>
       )}
