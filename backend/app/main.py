@@ -11,7 +11,9 @@ Ce fichier configure :
 - L'initialisation de la base de données
 """
 
+import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -24,6 +26,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db, init_db
 from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
+
+logger = logging.getLogger("shiftwise")
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -273,24 +278,26 @@ async def global_exception_handler(request, exc):
     Capture toutes les exceptions non gérées et retourne
     une réponse JSON standardisée.
     """
-    if settings.DEBUG:
-        # En mode debug, afficher le détail de l'erreur
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "detail": str(exc),
-                "type": type(exc).__name__,
-                "path": str(request.url)
-            }
-        )
-    else:
-        # En production, message générique
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "detail": "Une erreur interne est survenue. Contactez l'administrateur."
-            }
-        )
+    # Audit C-02 — journaliser le détail complet côté serveur (avec un
+    # identifiant de corrélation + la stack trace), ne JAMAIS le renvoyer au
+    # client. Le message d'exception, son type et l'URL fuiteraient sinon des
+    # informations internes (SQL, hôtes, structure applicative) — y compris
+    # quand DEBUG=True.
+    correlation_id = uuid.uuid4().hex[:12]
+    logger.error(
+        "Unhandled exception [%s] on %s %s",
+        correlation_id,
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Une erreur interne est survenue. Contactez l'administrateur.",
+            "correlation_id": correlation_id,
+        },
+    )
 
 
 # Point d'entrée pour uvicorn
