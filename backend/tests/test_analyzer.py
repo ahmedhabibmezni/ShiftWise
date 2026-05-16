@@ -342,7 +342,10 @@ class TestAnalyzerIntegration:
             VirtualMachine.id == test_vm_compatible.id
         ).first()
         assert vm.compatibility_status == CompatibilityStatus.COMPATIBLE
-        assert vm.status == VMStatus.DISCOVERED
+        # Audit C-06: the analyzer must promote the lifecycle status so the VM
+        # becomes migration-eligible (can_migrate) — not leave it DISCOVERED.
+        assert vm.status == VMStatus.COMPATIBLE
+        assert vm.can_migrate is True
         assert vm.compatibility_details is not None
         assert vm.compatibility_details["grade"] == "COMPATIBLE"
 
@@ -356,6 +359,9 @@ class TestAnalyzerIntegration:
             VirtualMachine.id == test_vm_partial.id
         ).first()
         assert vm.compatibility_status == CompatibilityStatus.PARTIAL
+        # Audit C-06: PARTIAL VMs must also become migration-eligible.
+        assert vm.status == VMStatus.PARTIAL
+        assert vm.can_migrate is True
 
     def test_analyze_incompatible_vm(self, db_session, test_vm_incompatible):
         """Analyze a VM that should be INCOMPATIBLE."""
@@ -367,6 +373,10 @@ class TestAnalyzerIntegration:
             VirtualMachine.id == test_vm_incompatible.id
         ).first()
         assert vm.compatibility_status == CompatibilityStatus.INCOMPATIBLE
+        # Audit C-06: INCOMPATIBLE VMs get the INCOMPATIBLE status and stay
+        # non-migratable.
+        assert vm.status == VMStatus.INCOMPATIBLE
+        assert vm.can_migrate is False
 
     def test_idempotency(self, db_session, test_vm_compatible):
         """Re-running analyze on the same VM should not mutate protected fields."""

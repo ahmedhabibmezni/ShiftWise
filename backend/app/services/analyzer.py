@@ -165,6 +165,14 @@ class AnalyzerService:
                 "PARTIAL": CompatibilityStatus.PARTIAL,
                 "INCOMPATIBLE": CompatibilityStatus.INCOMPATIBLE,
             }
+            # Audit C-06 : promouvoir le statut de cycle de vie de la VM à
+            # partir du grade. Sans ça `can_migrate` reste toujours False
+            # (statut figé à DISCOVERED) et POST /migrations rejette toute VM.
+            status_map = {
+                "COMPATIBLE": VMStatus.COMPATIBLE,
+                "PARTIAL": VMStatus.PARTIAL,
+                "INCOMPATIBLE": VMStatus.INCOMPATIBLE,
+            }
 
             details: Dict[str, Any] = {
                 "score": rules_agg["score"],
@@ -181,7 +189,7 @@ class AnalyzerService:
 
             vm.compatibility_status = grade_map[grade]
             vm.compatibility_details = details
-            vm.status = VMStatus.DISCOVERED
+            vm.status = status_map[grade]
 
             db.commit()
 
