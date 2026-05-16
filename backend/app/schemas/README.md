@@ -1,6 +1,6 @@
 # 📋 Pydantic Schemas (`schemas/`)
 
-Pydantic models defining request/response data contracts for all ShiftWise API endpoints. Schemas handle input validation, serialization, and type coercion.
+Pydantic **v2** models defining request/response data contracts for the ShiftWise API. Schemas handle input validation, serialization, and type coercion.
 
 ---
 
@@ -8,20 +8,24 @@ Pydantic models defining request/response data contracts for all ShiftWise API e
 
 | File | Description |
 |------|-------------|
-| `auth.py` | Login request, token response, token data |
-| `user.py` | User create/update/response schemas |
-| `role.py` | Role create/update/response schemas |
-| `hypervisor.py` | Hypervisor create/update/response schemas |
-| `vm.py` | VirtualMachine create/update/response schemas |
-| `migration.py` | Migration create/update/response schemas |
+| `auth.py` | Login, token, password-reset, and change-password schemas |
+| `user.py` | User create / update / read schemas |
+| `role.py` | Role create / update / read schemas |
+| `hypervisor.py` | Hypervisor create / update / response schemas |
+| `vm.py` | VirtualMachine create / update / response schemas |
+| `migration.py` | Migration create / update / response + progress schemas |
+| `conversion.py` | Disk conversion request / response schemas |
+| `kubevirt.py` | Direct KubeVirt VM-creation schema |
 
 ---
 
 ## 🏗 Schema Pattern
 
-Each resource follows a consistent pattern:
+Each resource follows a consistent pattern. Read schemas backed by ORM models enable `from_attributes`:
 
 ```python
+from pydantic import BaseModel, ConfigDict
+
 # Base fields shared across operations
 class ResourceBase(BaseModel):
     name: str
@@ -29,22 +33,23 @@ class ResourceBase(BaseModel):
 
 # Create request — fields required for creation
 class ResourceCreate(ResourceBase):
-    required_field: str
+    ...
 
 # Update request — all fields optional
 class ResourceUpdate(BaseModel):
     name: str | None = None
     ...
 
-# Database response — includes id, timestamps
+# Read/response — includes id and timestamps, mapped from the ORM object
 class ResourceResponse(ResourceBase):
-    id: UUID
+    id: int
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True  # Enable ORM mode
+    model_config = ConfigDict(from_attributes=True)
 ```
+
+> Schemas use **Pydantic v2** — `model_config = ConfigDict(from_attributes=True)` and `@field_validator`, never the v1 `class Config`. Primary keys are `int`. Pagination wrappers (`*ListResponse` / `UserList`) are composed manually and do not set `from_attributes`.
 
 ---
 
@@ -54,57 +59,97 @@ class ResourceResponse(ResourceBase):
 
 | Schema | Purpose |
 |--------|---------|
-| `LoginRequest` | Email + password for authentication |
-| `TokenResponse` | Access token + refresh token + token type |
-| `TokenData` | Decoded token payload (subject, type) |
+| `LoginRequest` | Email + password for `POST /auth/login` |
+| `TokenResponse` | Access token + token type — the refresh token is set as an `HttpOnly` cookie, **not** returned in the body |
+| `ChangePasswordRequest` | Old + new password |
+| `ResetPasswordRequest` / `ResetPasswordConfirm` | Password-reset flow |
+| `VerifyEmailRequest` | Email-verification request |
+| `MessageResponse` | Generic `{message, success}` confirmation |
+| `TokenPayload` | Internal JWT payload (`sub`, `exp`, `type`, optional `fam`, `jti`) |
 
 ### `user.py`
 
-| Schema | Fields |
-|--------|--------|
-| `UserCreate` | `email`, `password`, `full_name`, `tenant_id`, `role_ids` |
+| Schema | Fields / Role |
+|--------|---------------|
+| `UserBase` | Shared: `email`, `username`, `first_name`, `last_name`, `tenant_id`, `is_active` |
+| `UserCreate` | `UserBase` + `password`, `role_ids: list[int]` |
 | `UserUpdate` | All fields optional |
-| `UserResponse` | `id`, `email`, `full_name`, `tenant_id`, `is_active`, `roles`, timestamps |
+| `UserInDB` | `UserBase` + `id`, `hashed_password`, status flags, timestamps |
+| `UserRead` | API response without password; includes `last_login_at`, `last_login_ip` |
+| `UserReadWithRoles` | `UserRead` + `roles: list[RoleRead]` |
+| `UserReadWithPermissions` | `UserReadWithRoles` + computed `permissions` (used by `/auth/me`) |
+| `UserList` | Paginated `items` + `total` / `page` / `page_size` / `pages` |
 
 ### `role.py`
 
-| Schema | Fields |
-|--------|--------|
-| `RoleCreate` | `name`, `description`, `permissions` (JSON) |
+| Schema | Fields / Role |
+|--------|---------------|
+| `RoleBase` | Shared: `name`, `description`, `permissions`, `is_active` |
+| `RoleCreate` | `RoleBase` (no additional fields) |
 | `RoleUpdate` | All fields optional |
-| `RoleResponse` | `id`, `name`, `description`, `permissions`, `is_system_role`, timestamps |
+| `RoleInDB` | `RoleBase` + `id`, `is_system_role`, timestamps |
+| `RoleRead` | Primary API response schema |
+| `RoleWithUsers` | `RoleRead` + `user_count` |
 
 ### `hypervisor.py`
 
-| Schema | Fields |
-|--------|--------|
-| `HypervisorCreate` | `name`, `type`, `host`, `port`, `username`, `password`, `tenant_id` |
+| Schema | Fields / Role |
+|--------|---------------|
+| `HypervisorBase` | `name`, `description`, `type`, `host`, `port` |
+| `HypervisorCreate` | `HypervisorBase` + `username`, `password`, `verify_ssl`, `ssl_cert_path`, `connection_config`, `tags` |
 | `HypervisorUpdate` | All fields optional |
-| `HypervisorResponse` | `id`, `name`, `type`, `host`, `status`, timestamps |
+| `HypervisorResponse` | Full read response (+ computed `is_reachable`, `connection_url`, `needs_sync`) |
+| `HypervisorListResponse` | Paginated list wrapper |
+| `HypervisorTestConnection` / `HypervisorTestConnectionResponse` | Ad-hoc connection test |
 
 ### `vm.py`
 
-| Schema | Fields |
-|--------|--------|
-| `VMCreate` | `name`, `hypervisor_id`, `vcpus`, `memory_mb`, `disk_size_gb`, `os_type` |
-| `VMUpdate` | All fields optional |
-| `VMResponse` | `id`, `name`, VM specs, `status`, `compatibility_status`, timestamps |
+| Schema | Fields / Role |
+|--------|---------------|
+| `VMBase` | `name`, `description`, `cpu_cores`, `memory_mb`, `disk_gb`, `os_type`, `os_version`, `os_name` |
+| `VMCreate` | `VMBase` + source fields, network fields, `tags` |
+| `VMUpdate` | All fields optional (`status` / `compatibility_status` excluded from input) |
+| `VMResponse` | Full read response (+ computed `is_compatible`, `is_migrated`, `can_migrate`) |
+| `VMListResponse` | Paginated list wrapper |
 
 ### `migration.py`
 
-| Schema | Fields |
-|--------|--------|
-| `MigrationCreate` | `vm_id`, `strategy` |
-| `MigrationUpdate` | `status`, `error_message` |
-| `MigrationResponse` | `id`, `vm_id`, `strategy`, `status`, timing fields, timestamps |
+| Schema | Fields / Role |
+|--------|---------------|
+| `MigrationBase` | `strategy`, `target_storage_class` |
+| `MigrationCreate` | `MigrationBase` + `vm_id`, `scheduled_at`, `migration_config`, `notes`, `tags` |
+| `MigrationUpdate` | All fields optional (`target_namespace` is immutable) |
+| `MigrationProgressUpdate` | Worker progress report |
+| `MigrationCancel` / `MigrationRollback` | Action schemas with an optional `reason` |
+| `MigrationResponse` | Full read response (+ computed `is_active`, `is_completed`, durations) |
+| `MigrationListResponse` | Paginated list wrapper |
+| `MigrationStats` | Aggregate migration statistics |
+
+### `conversion.py`
+
+| Schema | Fields / Role |
+|--------|---------------|
+| `ConversionCreate` | `vm_id`, `target_format`, `cold`, `max_attempts`, `pull_options`, `migration_id` |
+| `ConversionAttemptResponse` | Single conversion-attempt audit row |
+| `ConversionJobResponse` | Conversion job (+ computed `is_terminal`, `can_retry`) |
+| `ConversionGroupResponse` | Conversion group with embedded `jobs` |
+| `ConversionGroupListResponse` | Paginated list wrapper |
+| `ConversionCancel` / `ConversionRetry` | Action schemas |
+| `ConversionStats` | Aggregate conversion statistics |
+
+### `kubevirt.py`
+
+| Schema | Fields / Role |
+|--------|---------------|
+| `KubeVirtVMCreate` | Direct KubeVirt VM creation: `name`, `cpu`, `memory`, `image`, `disk_size`, `storage_class`, `run_strategy` |
 
 ---
 
 ## 🔒 Validation
 
 Schemas enforce:
-- **Email format** validation via `pydantic[email]`
-- **Password strength** requirements (min 8 chars, mixed case, digit)
+- **Email format** via `pydantic[email]` (`EmailStr`)
+- **Password strength** — min 8 chars, upper + lower case, digit, special character
+- **Username / tenant-id format** — slug-style rules via `@field_validator`
 - **Enum constraints** for status, type, and strategy fields
-- **UUID format** for all ID references
 - **Required vs optional** field distinction between create and update operations

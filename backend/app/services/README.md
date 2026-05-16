@@ -1,110 +1,107 @@
 # 🧠 Services Layer (`services/`)
 
-Business logic services that implement the core ShiftWise intelligence — VM discovery, compatibility analysis, disk conversion, and migration orchestration.
+Business-logic services implementing the ShiftWise migration pipeline — VM discovery, compatibility analysis, disk conversion, guest-OS adaptation, and migration execution.
 
 ---
 
-## 📁 Files
-
-| File | Status | Description |
-|------|--------|-------------|
-| `discovery.py` | 🚧 In Development | Auto-discover VMs from connected hypervisors |
-
----
-
-## ✅ `discovery.py` — VM Discovery Service
-
-The discovery service connects to registered hypervisors and automatically inventories virtual machines.
-
-### Supported Hypervisors
-
-| Hypervisor | SDK | Discovery Method |
-|------------|-----|-----------------|
-| VMware vSphere | `pyvmomi` | vCenter/ESXi API queries |
-| libvirt / KVM | `libvirt-python` | libvirt domain enumeration |
-| Hyper-V | `paramiko` + WMI | PowerShell remoting over SSH |
-
-### Discovery Workflow
+## 🔄 Migration Pipeline
 
 ```
-┌────────────────┐     ┌───────────────────┐     ┌──────────────────┐
-│  Get Hypervisor│────▶│  Connect to API   │────▶│  Enumerate VMs   │
-│  Credentials   │     │  (vSphere/libvirt/│     │  (name, CPU, RAM │
-│  from DB       │     │   Hyper-V)        │     │   disk, OS)      │
-└────────────────┘     └───────────────────┘     └────────┬─────────┘
-                                                          │
-                                                 ┌────────▼─────────┐
-                                                 │  Upsert VMs      │
-                                                 │  into ShiftWise  │
-                                                 │  Database        │
-                                                 └──────────────────┘
+Discovery → Analyzer → Converter → Adapter → Migrator → Reporting
 ```
 
----
-
-## 🚧 Planned Services
-
-### `analyzer.py` — Compatibility Analyzer
-
-**Status:** Not yet implemented
-
-**Planned scope:**
-- Evaluate each discovered VM against OpenShift Virtualization requirements
-- Classification output: `compatible`, `partially_compatible`, `incompatible`
-- Analysis criteria:
-  - OS type and version support
-  - Disk format compatibility (VMDK, VHD, QCOW2)
-  - Device drivers and virtio compatibility
-  - Network adapter configuration
-  - Boot firmware (BIOS vs UEFI)
-- ML model (scikit-learn) trained on historical migration outcomes
-- Guest filesystem inspection via `libguestfs` for deep OS analysis
+The Converter, Adapter, and Migrator stages are orchestrated asynchronously by Celery tasks (`app/tasks/`), backed by Redis, and submit Kubernetes Jobs to the OpenShift cluster.
 
 ---
 
-### `converter.py` — Disk & Config Converter
+## 📁 Layout
 
-**Status:** Not yet implemented
-
-**Planned scope:**
-- Automated disk format conversion using `qemu-img`:
-  - VMDK → QCOW2
-  - VHD/VHDX → QCOW2
-- Configuration remediation for partially compatible VMs:
-  - Inject virtio drivers
-  - Adjust disk bus types
-  - Fix network device models
-- Conversion progress tracking with percentage updates
-- Celery task integration for background processing
+| Path | Description |
+|------|-------------|
+| `discovery.py` | VM discovery connectors for all supported hypervisors |
+| `analyzer.py` | Compatibility analysis service (hybrid rules + ML) |
+| `compatibility_rules.py` | Rule-based feature extraction |
+| `feature_extractor.py` | Feature-vector construction for the ML model |
+| `converter/` | Disk format conversion (package) |
+| `adapter/` | Guest-OS fixup (package) |
+| `migrator/` | PVC populate + KubeVirt VM creation (package) |
 
 ---
 
-### `migrator.py` — Migration Engine
+## 🔍 `discovery.py` — VM Discovery
 
-**Status:** Not yet implemented
+Connects to registered hypervisors and inventories their virtual machines.
 
-**Planned scope:**
-- Three migration strategies:
-  - **Direct Migration** — for fully compatible VMs (minimal transformation)
-  - **Conversion Migration** — for partially compatible VMs (convert then migrate)
-  - **Alternative Migration** — for incompatible VMs (re-platform approach)
-- AI-based strategy recommendation using VM characteristics
-- Celery-orchestrated, multi-phase execution:
-  1. Pre-migration validation
-  2. Disk upload to NFS StorageClass
-  3. KubeVirt VirtualMachine resource creation
-  4. Post-migration health checks
-- Rollback support on failure
-- Real-time status updates via WebSocket
+| Hypervisor | Mechanism |
+|------------|-----------|
+| VMware Workstation | `vmrun` + VMX file scan |
+| Microsoft Hyper-V | PowerShell over SSH (`paramiko`) |
+| libvirt / KVM | `paramiko` SSH + `virsh` |
+| Proxmox VE | REST API (`proxmoxer`) |
+| oVirt / RHV | `ovirt-engine-sdk-python` |
+| VMware vSphere | Stub — no test environment available (free ESXi discontinued) |
+
+Rediscovery is scoped to the source hypervisor to avoid cross-hypervisor name collisions. On re-sync, the `MIGRATING` and `MIGRATED` statuses are preserved while other VMs are reset to `DISCOVERED`.
 
 ---
 
-### `reporter.py` — Reporting Service
+## 🧪 `analyzer.py` — Compatibility Analyzer
 
-**Status:** Not yet implemented
+Hybrid rule-based + machine-learning compatibility assessment:
 
-**Planned scope:**
-- Migration status aggregation (success rate, duration stats)
-- Per-VM migration journal with timestamped events
-- Dashboard data endpoint (counts, trends, active migrations)
-- Export reports (JSON, CSV)
+1. `compatibility_rules.py` extracts rule-based features from a VM's configuration.
+2. `feature_extractor.py` builds the numeric feature vector.
+3. A scikit-learn classifier (trained artifacts in `app/ml/`) produces a **0–100% score** via `predict_proba()`.
+4. The VM is classified `COMPATIBLE`, `PARTIAL`, or `INCOMPATIBLE`.
+
+The trained model is loaded from a `joblib` artifact at service startup. If the artifact is missing, the analyzer degrades gracefully to a rules-only assessment.
+
+---
+
+## 💿 `converter/` — Disk Converter
+
+Converts source disks (VMDK / VHD → QCOW2) by submitting `qemu-img` Kubernetes Jobs that operate on the NFS transit zone.
+
+| Module | Responsibility |
+|--------|----------------|
+| `connectors/` | Per-hypervisor source-disk export (`vmware_workstation`, `hyperv`, `kvm`, `proxmox`, `ovirt`, `vsphere`; `base` protocol) |
+| `plan.py` | Builds the per-VM conversion plan |
+| `k8s_jobs.py` | Kubernetes Job manifests for `qemu-img` |
+| `paths.py` | NFS transit-zone path resolution |
+| `protocol.py` | Connector interface protocol |
+| `service.py` | Conversion orchestration |
+| `errors.py` | Conversion error catalog |
+
+---
+
+## 🛠 `adapter/` — Guest-OS Adapter
+
+Sits between the Converter and the Migrator. Submits a Kubernetes Job per disk that runs `virt-customize` (libguestfs) on the converted QCOW2 in place:
+
+- 4 parallel DHCP configurations (systemd-networkd, ifupdown, NetworkManager keyfile, netplan)
+- serial-console enablement (`serial-getty@ttyS0` + GRUB serial redirect)
+- SELinux relabel
+
+Required because KubeVirt exposes a virtio NIC (`enp1s0`/`ens2`) while the source guest is configured for the VMware NIC (`ens33`/`eth0`).
+
+| Module | Responsibility |
+|--------|----------------|
+| `guestfish_job.py` | Job manifest + the in-place `virt-customize` fixup script |
+| `service.py` | Adapter orchestration |
+| `errors.py` | Adapter error catalog |
+
+---
+
+## 🚚 `migrator/` — Migration Engine
+
+The final stage — populates the target PVC and creates the KubeVirt VirtualMachine.
+
+| Module | Responsibility |
+|--------|----------------|
+| `transit_discovery.py` | Auto-discovers the NFS transit server/path from the bound transit PV |
+| `namespace.py` | Idempotent tenant-namespace creation (+ opt-in `ResourceQuota`) |
+| `pvc.py` | Target PVC sizing and creation |
+| `populator_job.py` | NFS-direct `qemu-img` populate Job |
+| `vm_manifest.py` | KubeVirt `VirtualMachine` manifest builder |
+| `service.py` | Migration orchestration (PVC populate → VM create → verify) |
+| `errors.py` | Migrator error catalog |

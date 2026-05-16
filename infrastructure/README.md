@@ -1,6 +1,6 @@
 # 🏗 Infrastructure
 
-Configuration files and validation scripts for the ShiftWise OpenShift deployment environment. This directory contains the complete infrastructure-as-config for the bastion node services and OpenShift cluster setup.
+Configuration files and validation scripts for the ShiftWise OpenShift deployment environment. This directory contains the infrastructure-as-config for the bastion node services and the OpenShift cluster setup.
 
 ---
 
@@ -14,7 +14,7 @@ infrastructure/
 ├── dns/                        # DNS (BIND/named)
 │   ├── named.conf              # BIND configuration
 │   ├── migration.nextstep-it.com.zone  # Forward DNS zone
-│   ├── 21.9.10.in-addr.arpa.zone      # Reverse DNS zone
+│   ├── 21.9.10.in-addr.arpa.zone       # Reverse DNS zone
 │   └── validate-dns.sh         # Validation script
 ├── haproxy/                    # Load Balancer
 │   ├── haproxy.cfg             # HAProxy configuration
@@ -24,6 +24,7 @@ infrastructure/
 │   └── validate-httpd.sh       # Validation script
 └── openshift/                  # OpenShift Cluster
     ├── install-config.yaml     # OpenShift install configuration
+    ├── cluster-health.sh       # Cluster health-check script
     └── README.md               # OpenShift-specific docs
 ```
 
@@ -40,13 +41,13 @@ infrastructure/
 │  │  10.9.21.150         │                                          │
 │  │  RHEL 9.6            │                                          │
 │  │                      │    ┌─────────────────────────────────┐  │
-│  │  ┌──────────────┐   │    │   OPENSHIFT 4.18.1 CLUSTER      │  │
-│  │  │ DNS (BIND)   │   │    │   Compact: 3 master+worker      │  │
+│  │  ┌──────────────┐   │    │   OPENSHIFT 4.18.1 CLUSTER       │  │
+│  │  │ DNS (BIND)   │   │    │   Compact: 3 control-plane+worker│  │
 │  │  │ HAProxy      │   │    │   Bare Metal UPI                 │  │
 │  │  │ HTTP (Apache)│   │    │                                   │  │
-│  │  │ NTP (Chrony) │   │    │   master-0  10.9.21.151 RHCOS   │  │
-│  │  └──────────────┘   │    │   master-1  10.9.21.152 RHCOS   │  │
-│  └─────────────────────┘    │   master-2  10.9.21.153 RHCOS   │  │
+│  │  │ NTP (Chrony) │   │    │   node01   10.9.21.151  RHCOS    │  │
+│  │  └──────────────┘   │    │   node02   10.9.21.152  RHCOS    │  │
+│  └─────────────────────┘    │   node03   10.9.21.153  RHCOS    │  │
 │                              │                                   │  │
 │  ┌─────────────────────┐    │   KubeVirt v1.4.1                │  │
 │  │  NFS SERVER          │    │   virtctl: /usr/local/bin/virtctl│  │
@@ -85,47 +86,50 @@ DNS is the foundational service for OpenShift. It resolves all cluster hostnames
 
 | Record | Resolves To |
 |--------|-------------|
-| `api.migration.nextstep-it.com` | `10.9.21.150` (bastion/HAProxy) |
+| `bastion.migration.nextstep-it.com` | `10.9.21.150` |
+| `api.migration.nextstep-it.com` | `10.9.21.150` (bastion / HAProxy) |
 | `api-int.migration.nextstep-it.com` | `10.9.21.150` |
 | `*.apps.migration.nextstep-it.com` | `10.9.21.150` |
-| `master-0.migration.nextstep-it.com` | `10.9.21.151` |
-| `master-1.migration.nextstep-it.com` | `10.9.21.152` |
-| `master-2.migration.nextstep-it.com` | `10.9.21.153` |
-| `bastion.migration.nextstep-it.com` | `10.9.21.150` |
-| `nfs.migration.nextstep-it.com` | `10.9.21.154` |
+| `node01.migration.nextstep-it.com` | `10.9.21.151` |
+| `node02.migration.nextstep-it.com` | `10.9.21.152` |
+| `node03.migration.nextstep-it.com` | `10.9.21.153` |
+| `etcd-0 / etcd-1 / etcd-2` | `10.9.21.151` / `.152` / `.153` |
+
+A temporary `bootstrap` record (`10.9.21.156`) exists during cluster installation. The NFS server (`10.9.21.154`) is reached by IP and is not part of this zone.
 
 ### ⚖️ HAProxy (Load Balancer)
 
 **File:** `haproxy/haproxy.cfg`
 
-Routes traffic to the OpenShift cluster nodes:
+Routes traffic to the OpenShift cluster nodes (all three nodes are control-plane **and** worker):
 
 | Frontend | Port | Backend |
 |----------|------|---------|
-| Kubernetes API | 6443 | `master-0:6443`, `master-1:6443`, `master-2:6443` |
-| Machine Config Server | 22623 | `master-0:22623`, `master-1:22623`, `master-2:22623` |
-| HTTPS Ingress | 443 | `master-0:443`, `master-1:443`, `master-2:443` |
-| HTTP Ingress | 80 | `master-0:80`, `master-1:80`, `master-2:80` |
+| Kubernetes API | 6443 | `node01/02/03:6443` (+ `bootstrap` during install) |
+| Machine Config Server | 22623 | `node01/02/03:22623` (+ `bootstrap` during install) |
+| HTTPS Ingress | 443 | `node01/02/03:443` |
+| HTTP Ingress | 80 | `node01/02/03:80` |
+
+A statistics interface is exposed on port `9000`.
 
 ### 🌍 Apache HTTP (httpd)
 
 **File:** `httpd/openshift4.conf`
 
-Serves ignition files and RHCOS images required during the OpenShift bare metal installation process.
+Serves ignition files and RHCOS images required during the OpenShift bare-metal installation process.
 
 | Purpose | Path |
 |---------|------|
 | Ignition configs | Bootstrap, master, worker ignition files |
-| RHCOS images | Bare metal ISO/raw images for PXE boot |
+| RHCOS images | Bare-metal ISO/raw images |
 
 ---
 
 ## ✅ Validation Scripts
 
-Each component includes a validation script to verify correct configuration:
+Each bastion service includes a validation script to verify correct configuration:
 
 ```bash
-# Validate all services
 bash infrastructure/chrony/validate-chrony.sh
 bash infrastructure/dns/validate-dns.sh
 bash infrastructure/haproxy/validate-haproxy.sh
@@ -134,7 +138,9 @@ bash infrastructure/httpd/validate-httpd.sh
 
 | Script | Checks |
 |--------|--------|
-| `validate-chrony.sh` | Time sync status, upstream reachability |
+| `validate-chrony.sh` | Time-sync status, upstream reachability |
 | `validate-dns.sh` | Forward/reverse resolution for all cluster records |
 | `validate-haproxy.sh` | Backend health, port bindings |
 | `validate-httpd.sh` | HTTP serving, ignition file availability |
+
+For overall cluster health, `openshift/cluster-health.sh` checks node, operator, and KubeVirt status.

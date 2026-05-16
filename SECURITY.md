@@ -12,15 +12,19 @@
 
 ### Authentication
 
-ShiftWise uses **JWT (JSON Web Tokens)** for stateless authentication:
+ShiftWise uses **JWT (JSON Web Tokens)** with a stateless access token and a server-tracked refresh token:
 
-| Token Type | Default Expiry | Algorithm | Purpose |
-|------------|---------------|-----------|---------|
-| Access Token | 30 minutes | HS256 | API request authorization |
-| Refresh Token | 7 days | HS256 | Obtain new access tokens without re-login |
+| Token Type | Default Expiry | Algorithm | Delivery | Purpose |
+|------------|---------------|-----------|----------|---------|
+| Access Token | 15 minutes | HS256 | `Authorization: Bearer` header | API request authorization |
+| Refresh Token | 7 days | HS256 | `HttpOnly` cookie | Obtain new access tokens without re-login |
 
 - Tokens are signed with a server-side `SECRET_KEY` (configurable via `.env`)
 - Token type (`access` / `refresh`) is embedded in the payload to prevent misuse
+- The refresh cookie is `HttpOnly; Secure; SameSite=Strict` and scoped to `/api/v1/auth`
+- Refresh tokens are tracked in Redis with **family-based rotation**: each use issues a new token and invalidates the previous one; a replayed (reused) token revokes the entire family
+- **Brute-force protection** — `/auth/login` enforces a sliding-window lockout (default: 5 failed attempts per 15 minutes), counted per email and per source IP
+- Every successful login records an audit trail (`last_login_at`, `last_login_ip`)
 
 ### Password Security
 
@@ -50,7 +54,7 @@ Access is enforced at the API dependency injection layer (`deps.py`). Every prot
 | Mode | Use Case | Credential Storage |
 |------|----------|-------------------|
 | `kubeconfig` | Local development | File at `config/kubeconfig` (gitignored) |
-| `in-cluster` | Production pods | Kubernetes ServiceAccount (auto-mounted) |
+| `incluster` | Production pods | Kubernetes ServiceAccount (auto-mounted) |
 | `custom` | External access | API URL + bearer token via environment variables |
 
 - SSL verification is configurable (`KUBERNETES_VERIFY_SSL`)
@@ -125,7 +129,8 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `bcrypt` | Hashing backend | Slow hash function by design |
 | `pydantic-settings` | Config validation | Prevents misconfiguration |
 | `kubernetes` | Cluster API client | ServiceAccount token handling |
-| `paramiko` | SSH connections | Remote server access (future) |
+| `paramiko` | SSH connections | Remote hypervisor access (KVM/libvirt, Hyper-V) |
+| `redis` | Refresh-token store | Token family rotation, reuse detection, login throttle |
 
 ---
 

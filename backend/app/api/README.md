@@ -1,6 +1,6 @@
 # 🌐 API Layer (`api/`)
 
-The API layer is the HTTP interface of ShiftWise. It consists of route handlers organized into versioned modules and a shared dependency injection system.
+The API layer is the HTTP interface of ShiftWise: versioned route handlers plus a shared dependency-injection module that enforces authentication, RBAC, and multi-tenancy.
 
 ---
 
@@ -9,130 +9,86 @@ The API layer is the HTTP interface of ShiftWise. It consists of route handlers 
 ```
 api/
 ├── __init__.py
-├── deps.py                 # Shared dependencies (auth, DB, RBAC)
+├── deps.py                 # Shared dependencies (auth, RBAC, tenant scoping)
 └── v1/                     # API version 1
     ├── __init__.py
     ├── auth.py             # Authentication endpoints
     ├── users.py            # User management endpoints
     ├── roles.py            # Role management endpoints
-    ├── vms.py              # Virtual machine endpoints
-    ├── hypervisors.py      # Hypervisor connection endpoints
+    ├── vms.py              # VM inventory, analysis, conversion trigger
+    ├── hypervisors.py      # Hypervisor connection + sync endpoints
     ├── migrations.py       # Migration lifecycle endpoints
-    └── kubevirt.py         # KubeVirt/OpenShift operations
+    ├── kubevirt.py         # KubeVirt / OpenShift operations
+    └── conversions.py      # Disk conversion tracking
 ```
 
 ---
 
 ## 🔌 Dependency Injection (`deps.py`)
 
-The `deps.py` module provides FastAPI dependency functions used across all routers:
+`deps.py` provides the FastAPI dependencies used across all routers:
 
 | Dependency | Purpose |
 |------------|---------|
-| `get_db()` | Yields a SQLAlchemy database session, auto-closes after request |
-| `get_current_user()` | Extracts and validates the JWT token, returns the authenticated `User` |
-| `get_current_active_user()` | Extends `get_current_user` — also verifies the user is active |
-| `require_role(roles)` | RBAC enforcement — checks user has one of the required roles |
-| `require_permission(resource, action)` | Granular permission check against the user's role permission matrix |
+| `get_db()` | Yields a SQLAlchemy session, closed after the request (re-exported from `core.database`) |
+| `get_current_user()` | Decodes and validates the JWT access token, returns the authenticated `User` |
+| `get_current_active_user()` | `get_current_user` plus an active-account check (compatibility alias) |
+| `get_current_superuser()` | Requires `is_superuser`, raises `403` otherwise |
+| `check_permission(resource, action)` | **Factory** — returns a dependency that enforces a single RBAC permission |
+| `get_current_user_tenant()` | Returns the caller's `tenant_id` |
+| `validate_kubevirt_namespace()` | Resolves and validates a namespace to `shiftwise-{tenant_id}` for non-superusers |
+| `PermissionChecker` | Class — checks an *any-of* list of `(resource, action)` permission pairs |
+
+`check_permission` is the primary RBAC gate. **Superusers bypass all permission checks.**
 
 ### Usage in Routers
 
 ```python
-from app.api.deps import get_db, get_current_active_user, require_role
+from typing import Annotated
 
-@router.get("/users")
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, check_permission
+from app.models import User
+
+
+@router.get("/")
 def list_users(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["super_admin", "admin"]))
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(check_permission("users", "read"))],
 ):
     ...
 ```
+
+Dependencies use the `Annotated[Type, Depends(...)]` syntax (SonarQube rule S8410).
 
 ---
 
 ## 📡 API v1 Routers
 
-### `auth.py` — Authentication
+Eight routers, all mounted under `/api/v1`:
 
-Handles login, token refresh, and current user retrieval.
+| Router | Prefix | Responsibility |
+|--------|--------|----------------|
+| `auth` | `/api/v1/auth` | Login, refresh, logout, change-password, current user |
+| `users` | `/api/v1/users` | User CRUD and role assignment (tenant-scoped) |
+| `roles` | `/api/v1/roles` | System and custom RBAC role management |
+| `vms` | `/api/v1/vms` | VM inventory, compatibility analysis, conversion trigger |
+| `hypervisors` | `/api/v1/hypervisors` | Hypervisor connections, test-connection, sync |
+| `migrations` | `/api/v1/migrations` | Migration lifecycle (create, start, cancel) |
+| `kubevirt` | `/api/v1/kubevirt` | Direct KubeVirt / OpenShift cluster operations |
+| `conversions` | `/api/v1/conversions` | Disk conversion job tracking |
 
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/auth/login` | POST | ❌ | Authenticate with email/password, returns JWT pair |
-| `/auth/refresh` | POST | 🔑 | Exchange refresh token for new access token |
-| `/auth/me` | GET | 🔑 | Get current authenticated user profile |
+The full endpoint inventory is in [`../../README.md`](../../README.md); request/response detail is in [`../../../docs/api-reference.md`](../../../docs/api-reference.md).
 
-### `users.py` — User Management
+---
 
-Full CRUD for user accounts with multi-tenancy isolation.
+## 🧭 Route Ordering Rule
 
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/users` | GET | `admin` | List all users (tenant-scoped) |
-| `/users` | POST | `admin` | Create a new user |
-| `/users/{id}` | GET | `admin` | Get user by UUID |
-| `/users/{id}` | PUT | `admin` | Update user data |
-| `/users/{id}` | DELETE | `super_admin` | Delete user |
+**Static routes must be declared before dynamic `/{id}` routes** in every router file — otherwise the static segment is parsed as an `int` ID parameter and the request returns `422`.
 
-### `roles.py` — Role Management
-
-Manage system and custom RBAC roles.
-
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/roles` | GET | `admin` | List all roles |
-| `/roles` | POST | `super_admin` | Create custom role |
-| `/roles/{id}` | GET | `admin` | Get role details + permissions |
-| `/roles/{id}` | PUT | `super_admin` | Update role permissions |
-| `/roles/{id}` | DELETE | `super_admin` | Delete custom role (not system roles) |
-
-### `vms.py` — Virtual Machines
-
-VM inventory management with compatibility tracking.
-
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/vms` | GET | `viewer` | List VMs (filtered by tenant) |
-| `/vms` | POST | `user` | Register a VM |
-| `/vms/{id}` | GET | `viewer` | Get VM details |
-| `/vms/{id}` | PUT | `user` | Update VM record |
-| `/vms/{id}` | DELETE | `admin` | Remove VM |
-
-### `hypervisors.py` — Hypervisor Connections
-
-Manage connections to VMware vSphere, libvirt/KVM, and Hyper-V sources.
-
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/hypervisors` | GET | `admin` | List connected hypervisors |
-| `/hypervisors` | POST | `admin` | Register a new hypervisor |
-| `/hypervisors/{id}` | GET | `admin` | Get hypervisor details |
-| `/hypervisors/{id}` | PUT | `admin` | Update connection settings |
-| `/hypervisors/{id}` | DELETE | `admin` | Remove hypervisor |
-
-### `migrations.py` — Migration Lifecycle
-
-Manage migration requests, strategy selection, and status tracking.
-
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/migrations` | GET | `viewer` | List migrations |
-| `/migrations` | POST | `user` | Create a new migration request |
-| `/migrations/{id}` | GET | `viewer` | Get migration details + status |
-| `/migrations/{id}` | PUT | `user` | Update migration |
-| `/migrations/{id}` | DELETE | `admin` | Cancel/remove migration |
-
-### `kubevirt.py` — KubeVirt / OpenShift
-
-Direct operations against the OpenShift cluster via KubeVirt APIs.
-
-| Endpoint | Method | Min Role | Description |
-|----------|--------|----------|-------------|
-| `/kubevirt/namespaces` | GET | `admin` | List Kubernetes namespaces |
-| `/kubevirt/vms` | GET | `admin` | List KubeVirt VMs in cluster |
-| `/kubevirt/vms/{name}` | GET | `admin` | Get a specific KubeVirt VM |
-| `/kubevirt/vms` | POST | `admin` | Create a VM on the cluster |
-| `/kubevirt/vms/{name}` | DELETE | `admin` | Delete a KubeVirt VM |
+For example, in `roles.py`: `/count`, `/name/{role_name}`, `/init-system-roles`, and `/permissions/resources` are all declared **before** `/{role_id}`.
 
 ---
 
@@ -144,14 +100,14 @@ HTTP Request
     ▼
 FastAPI Router
     │
-    ├─ Depends(get_db)                    ← DB Session
-    ├─ Depends(get_current_active_user)   ← JWT Validation + Active Check
-    └─ Depends(require_role([...]))       ← Role Verification
+    ├─ Depends(get_db)                              ← DB session
+    └─ Depends(check_permission(resource, action))
          │
-         ├── Extract role from user
-         ├── Check role.permissions[resource]
-         └── Verify action in allowed actions
+         ├─ get_current_user()  → decode JWT, load the User
+         ├─ is_superuser?  ─────────────────────────▶ ✅ Allowed
+         └─ User.has_permission(resource, action)
+              evaluated over the user's active roles
               │
-              ├── ✅ Allowed → Route handler executes
-              └── ❌ Denied  → 403 Forbidden
-
+              ├─ ✅ Allowed → route handler executes
+              └─ ❌ Denied  → 403 Forbidden
+```

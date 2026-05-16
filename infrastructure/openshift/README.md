@@ -10,7 +10,7 @@ Configuration files for the ShiftWise OpenShift 4.18.1 compact cluster deployed 
 |-----------|-------|
 | **OpenShift Version** | 4.18.1 |
 | **Deployment Method** | Bare Metal UPI |
-| **Cluster Topology** | Compact (3 master+worker nodes) |
+| **Cluster Topology** | Compact (3 control-plane + worker nodes) |
 | **Node OS** | Red Hat CoreOS (RHCOS) 4.18 |
 | **Domain** | `migration.nextstep-it.com` |
 | **API VIP** | `api.migration.nextstep-it.com` → `10.9.21.150` |
@@ -24,9 +24,9 @@ Configuration files for the ShiftWise OpenShift 4.18.1 compact cluster deployed 
 
 | Node | Hostname | IP Address | Roles |
 |------|----------|------------|-------|
-| master-0 | `master-0.migration.nextstep-it.com` | `10.9.21.151` | master, worker |
-| master-1 | `master-1.migration.nextstep-it.com` | `10.9.21.152` | master, worker |
-| master-2 | `master-2.migration.nextstep-it.com` | `10.9.21.153` | master, worker |
+| node01 | `node01.migration.nextstep-it.com` | `10.9.21.151` | control-plane, worker |
+| node02 | `node02.migration.nextstep-it.com` | `10.9.21.152` | control-plane, worker |
+| node03 | `node03.migration.nextstep-it.com` | `10.9.21.153` | control-plane, worker |
 
 ---
 
@@ -101,21 +101,22 @@ oc login https://api.migration.nextstep-it.com:6443 -u kubeadmin -p <password>
 # Verify connection
 oc get nodes
 oc get kubevirt -n kubevirt
+
+# Bundled cluster health check (nodes, operators, KubeVirt)
+bash cluster-health.sh
 ```
 
 ### Using `virtctl`
 
 ```bash
-# List VMs
-virtctl get vms -n default
-
-# Start a VM
+# Start / stop a VM
 virtctl start <vm-name> -n <namespace>
+virtctl stop <vm-name> -n <namespace>
 
 # Console access
 virtctl console <vm-name> -n <namespace>
 
-# SSH into VM
+# SSH into a VM
 virtctl ssh <user>@<vm-name> -n <namespace>
 ```
 

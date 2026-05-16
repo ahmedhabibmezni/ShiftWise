@@ -1,19 +1,36 @@
 # 🧪 Test Suite (`tests/`)
 
-Comprehensive test coverage for the ShiftWise backend API, services, and integrations.
+Test coverage for the ShiftWise backend API, services, and migration pipeline. Coverage target: **> 80%** (currently ~85%).
 
 ---
 
 ## 📁 Test Files
 
-| File | Lines | Description |
-|------|-------|-------------|
-| `test_complete_api.py` | ~750 | Full API endpoint test suite across all routers |
-| `test_user_management.py` | ~900 | Deep user management tests (CRUD, multi-tenancy, RBAC) |
-| `test_kubevirt_client.py` | ~120 | KubeVirt client integration tests |
-| `test_discovery.py` | ~70 | Discovery service unit tests |
-| `test_discovery_comprehensive.py` | ~280 | Extended discovery test scenarios |
-| `demo.py` | ~30 | Quick demo/smoke test script |
+| File | Area |
+|------|------|
+| `conftest.py` | Shared pytest fixtures |
+| `test_complete_api.py` | Full API endpoint suite across all routers |
+| `test_user_management.py` | User CRUD, RBAC, multi-tenancy isolation |
+| `test_login_audit.py` | Login audit trail (`last_login_at` / `last_login_ip`) |
+| `test_login_throttle.py` | Brute-force login throttling |
+| `test_health.py` | `/health` probe (`healthy` / `degraded` / `unhealthy`) |
+| `test_kubevirt_client.py` | KubeVirt client connection modes |
+| `test_analyzer.py` | Compatibility rules engine, feature extractor, model degraded mode |
+| `test_analyzer_live.py` | Analyzer integration against a live model artifact |
+| `test_converter.py` | Conversion plan, Kubernetes Job manifests, error catalog |
+| `test_adapter.py` | Adapter error catalog, Job manifests, orchestration (K8s mocked) |
+| `test_migrator.py` | PVC sizing, VM manifest, `MigratorService` (K8s mocked) |
+| `test_migrator_p1.py` | Transit-NFS discovery, namespace lifecycle, error classification |
+| `test_namespace_quota.py` | Opt-in per-tenant `ResourceQuota` |
+| `test_celery_tasks.py` | Celery task wiring (eager mode) |
+| `test_hyperv_discovery.py` | Hyper-V discovery connector |
+| `test_hyperv_sync.py` | Hyper-V end-to-end sync (INSERT / UPDATE / ARCHIVE) |
+| `test_kvm_sync.py` | KVM end-to-end sync |
+| `test_proxmox_sync.py` | Proxmox VE end-to-end sync |
+| `test_vmware_workstation_sync.py` | VMware Workstation end-to-end sync |
+| `demo.py` | Quick demo / smoke-test script |
+
+The `test_*_sync.py` files and `test_analyzer_live.py` are integration tests that require a running server or live artifacts.
 
 ---
 
@@ -22,20 +39,20 @@ Comprehensive test coverage for the ShiftWise backend API, services, and integra
 ```bash
 cd backend
 
-# Run full suite
+# Run the full suite
 pytest tests/ -v
 
 # Run with coverage report
 pytest tests/ -v --cov=app --cov-report=html --cov-report=term
 
-# Run specific test file
+# Run a specific test file
 pytest tests/test_complete_api.py -v
 
-# Run specific test by name pattern
+# Run by name pattern
 pytest tests/ -v -k "test_login"
 
-# Run with parallel execution (requires pytest-xdist)
-pytest tests/ -v -n auto
+# Stop on first failure
+pytest tests/ -v -x
 ```
 
 ---
@@ -57,79 +74,53 @@ assert response.status_code == 200
 
 ### Authentication in Tests
 
-Protected endpoints are tested with JWT tokens obtained through the login endpoint:
+Protected endpoints are tested with a JWT obtained through the login endpoint:
 
 ```python
-# 1. Login to get token
+# 1. Login to get the access token
 login_response = client.post("/api/v1/auth/login", json={
     "email": "admin@shiftwise.io",
-    "password": "SecurePass123"
+    "password": "SecurePass123",
 })
 token = login_response.json()["access_token"]
 
-# 2. Use token in subsequent requests
+# 2. Use the token in subsequent requests
 response = client.get(
     "/api/v1/users",
-    headers={"Authorization": f"Bearer {token}"}
+    headers={"Authorization": f"Bearer {token}"},
 )
 ```
 
+The login throttle and refresh-token store run against an in-memory `fakeredis` instance in tests, so the suite does not need a live Redis broker.
+
 ---
 
-## 📋 Test Coverage Areas
+## 📋 Coverage Areas
 
-### `test_complete_api.py`
-
-| Area | Tests |
-|------|-------|
-| Health endpoints | `GET /`, `GET /health` |
-| Auth flow | Login, token refresh, invalid credentials |
-| User CRUD | Create, read, update, delete with RBAC |
-| Role CRUD | System roles, custom roles, permission checks |
-| VM operations | Register, list, update, delete VMs |
-| Hypervisor operations | Register, connect, update, remove |
-| Migration lifecycle | Create, track status, cancel |
-| KubeVirt operations | Namespace listing, VM CRUD on cluster |
-
-### `test_user_management.py`
-
-| Area | Tests |
-|------|-------|
-| User creation | Valid data, duplicate email, missing fields |
-| Multi-tenancy | Cross-tenant isolation, tenant-scoped queries |
-| RBAC enforcement | Role-based access, permission denied scenarios |
-| Password handling | Strength validation, bcrypt hashing |
-| Edge cases | Inactive users, deleted accounts, role changes |
-
-### `test_kubevirt_client.py`
-
-| Area | Tests |
-|------|-------|
-| Connection modes | `kubeconfig`, `in-cluster`, `custom` |
-| Namespace operations | List, validate |
-| VM operations | Create, get, list, delete via KubeVirt API |
-| Error handling | Connection failures, invalid specs |
-
-### `test_discovery.py` / `test_discovery_comprehensive.py`
-
-| Area | Tests |
-|------|-------|
-| VMware discovery | vSphere connection, VM enumeration |
-| libvirt discovery | Domain listing via libvirt API |
-| Hyper-V discovery | WMI-based VM detection |
-| Error scenarios | Connection timeouts, auth failures |
+| Layer | Tests |
+|-------|-------|
+| API & routers | `test_complete_api.py` |
+| Users / RBAC / multi-tenancy | `test_user_management.py` |
+| Auth hardening | `test_login_audit.py`, `test_login_throttle.py`, `test_health.py` |
+| KubeVirt client | `test_kubevirt_client.py` |
+| Analyzer | `test_analyzer.py`, `test_analyzer_live.py` |
+| Converter | `test_converter.py` |
+| Adapter | `test_adapter.py` |
+| Migrator | `test_migrator.py`, `test_migrator_p1.py`, `test_namespace_quota.py` |
+| Celery orchestration | `test_celery_tasks.py` |
+| Discovery / sync | `test_hyperv_discovery.py`, `test_hyperv_sync.py`, `test_kvm_sync.py`, `test_proxmox_sync.py`, `test_vmware_workstation_sync.py` |
 
 ---
 
 ## 🔧 Configuration
 
-Tests use the same `.env` configuration as the application. For isolated testing, create a dedicated test database:
+Tests use the same `.env` configuration as the application. For isolated runs, point at a dedicated test database:
 
 ```bash
-DATABASE_NAME=shiftwise_test_db
+DATABASE_NAME=shiftwise_test
 ```
 
-> **Tip:** Use `pytest.ini` or `pyproject.toml` to configure default test options:
+> **Tip:** configure default test options in `pytest.ini` or `pyproject.toml`:
 > ```ini
 > [pytest]
 > testpaths = tests

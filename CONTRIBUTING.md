@@ -30,6 +30,7 @@ This project follows a professional and respectful collaboration standard. All c
 |------|---------|-------------|
 | Python | 3.11+ | Backend development |
 | PostgreSQL | 16+ | Database |
+| Redis | 7+ | Auth token store + Celery broker |
 | Node.js | 20+ | Frontend development |
 | Git | 2.40+ | Version control |
 
@@ -164,7 +165,7 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) specific
 
 ### Scopes
 
-`auth`, `users`, `roles`, `vms`, `hypervisors`, `migrations`, `kubevirt`, `discovery`, `analyzer`, `converter`, `migrator`, `frontend`, `infra`, `ci`
+`auth`, `users`, `roles`, `vms`, `hypervisors`, `migrations`, `kubevirt`, `conversions`, `discovery`, `analyzer`, `converter`, `adapter`, `migrator`, `frontend`, `infra`, `ci`
 
 ### Examples
 
@@ -217,19 +218,17 @@ Steps to verify the change locally.
 When contributing, understand the layered architecture:
 
 ```
-API Router (v1/*.py)           ← HTTP layer, request validation
-    ↓
-Dependencies (deps.py)         ← Authentication, DB sessions
-    ↓
-CRUD Layer (crud/*.py)         ← Database operations
-    ↓
-Models (models/*.py)           ← SQLAlchemy ORM definitions
-    ↓
-Schemas (schemas/*.py)         ← Pydantic request/response schemas
-    ↓
-Services (services/*.py)       ← Business logic (discovery, analysis)
-    ↓
-Core (core/*.py)               ← Config, security, KubeVirt client
+API Router (api/v1/*.py)   ← HTTP layer, routing, response models
+        ↓
+Dependencies (api/deps.py) ← JWT auth, RBAC (check_permission), tenant scoping
+        ↓
+CRUD (crud/*.py)  ·  Services (services/*.py)   ← DB operations · business logic
+        ↓
+Models (models/*.py)       ← SQLAlchemy ORM definitions
+        ↓
+Core (core/*.py)           ← Config, DB engine, security, KubeVirt, Celery
+
+Schemas (schemas/*.py) validate requests and responses at the API boundary.
 ```
 
 ### Key Design Decisions

@@ -1,6 +1,6 @@
 # 🗃 Database Models (`models/`)
 
-SQLAlchemy ORM models representing the ShiftWise data layer. All models inherit from a common `BaseModel` that provides UUID primary keys, audit timestamps, and tenant awareness.
+SQLAlchemy ORM models representing the ShiftWise data layer. All models inherit from a common `BaseModel` that provides an integer auto-increment primary key and timezone-aware audit timestamps.
 
 ---
 
@@ -8,12 +8,13 @@ SQLAlchemy ORM models representing the ShiftWise data layer. All models inherit 
 
 | File | Model(s) | Description |
 |------|----------|-------------|
-| `base.py` | `BaseModel`, `Base` | Abstract base model with shared fields |
+| `base.py` | `BaseModel`, `Base` | Abstract base model + SQLAlchemy declarative `Base` |
 | `user.py` | `User`, `user_roles` | User accounts with multi-tenancy |
-| `role.py` | `Role`, `ROLE_PERMISSIONS` | RBAC roles and permission definitions |
+| `role.py` | `Role`, `ROLE_PERMISSIONS` | RBAC roles and the system-role permission matrix |
 | `hypervisor.py` | `Hypervisor`, `HypervisorType`, `HypervisorStatus` | Source hypervisor connections |
 | `virtual_machine.py` | `VirtualMachine`, `VMStatus`, `CompatibilityStatus`, `OSType` | VM inventory records |
 | `migration.py` | `Migration`, `MigrationStatus`, `MigrationStrategy` | Migration lifecycle tracking |
+| `conversion.py` | `ConversionGroup`, `ConversionJob`, `ConversionAttempt` + status/format enums | Disk conversion tracking |
 
 ---
 
@@ -23,9 +24,11 @@ All models inherit from `BaseModel`, which provides:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | `UUID` | Primary key (auto-generated) |
-| `created_at` | `DateTime` | Record creation timestamp (UTC) |
-| `updated_at` | `DateTime` | Last update timestamp (UTC, auto-updated) |
+| `id` | `Integer` | Auto-increment primary key |
+| `created_at` | `DateTime(timezone=True)` | Record creation timestamp (UTC) |
+| `updated_at` | `DateTime(timezone=True)` | Last update timestamp (UTC, auto-updated) |
+
+> **Primary keys are integer auto-increment — not UUID.**
 
 ---
 
@@ -33,17 +36,24 @@ All models inherit from `BaseModel`, which provides:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `email` | `String(255)` | Unique email address |
-| `hashed_password` | `String` | bcrypt password hash |
-| `full_name` | `String(255)` | Display name |
+| `email` | `String(255)` | Unique email address (login identifier) |
+| `username` | `String(100)` | Unique username |
+| `first_name` | `String(100)` | Given name (nullable) |
+| `last_name` | `String(100)` | Family name (nullable) |
+| `hashed_password` | `String(255)` | bcrypt password hash |
 | `tenant_id` | `String(100)` | Organization/tenant identifier |
 | `is_active` | `Boolean` | Account active status |
-| `is_superuser` | `Boolean` | Super admin flag |
-| `roles` | M2M → `Role` | Assigned roles (via `user_roles` join table) |
+| `is_verified` | `Boolean` | Email verified flag |
+| `is_superuser` | `Boolean` | Super-admin flag (bypasses RBAC) |
+| `last_login_at` | `DateTime(timezone=True)` | Last successful login (audit) |
+| `last_login_ip` | `String(45)` | Source IP of the last login (audit) |
+| `roles` | M2M → `Role` | Assigned roles via the `user_roles` join table |
+
+`full_name` is a **computed property** (`first_name` + `last_name`, falling back to `username`) — not a column. Helper methods: `has_role()`, `has_permission()`, `get_all_permissions()`, `can_access_tenant()`.
 
 ### Multi-Tenancy
 
-The `tenant_id` field isolates data between organizations. All CRUD queries filter by the current user's `tenant_id` to prevent cross-tenant data access.
+The `tenant_id` field isolates data between organizations. Every non-superuser query is scoped to the caller's `tenant_id`.
 
 ---
 
@@ -62,20 +72,23 @@ The `tenant_id` field isolates data between organizations. All CRUD queries filt
 ```python
 ROLE_PERMISSIONS = {
     "super_admin": {
-        "users": ["*"], "roles": ["*"], "hypervisors": ["*"],
-        "vms": ["*"], "migrations": ["*"], "reports": ["*"], "settings": ["*"]
+        "users": ["*"], "roles": ["*"], "hypervisors": ["*"], "vms": ["*"],
+        "migrations": ["*"], "conversions": ["*"], "reports": ["*"], "settings": ["*"],
     },
     "admin": {
         "users": ["read", "create", "update"], "roles": ["read"],
-        "hypervisors": ["*"], "vms": ["*"], "migrations": ["*"], "reports": ["*"]
+        "hypervisors": ["*"], "vms": ["*"], "migrations": ["*"],
+        "conversions": ["*"], "reports": ["*"],
     },
     "user": {
         "vms": ["read", "create", "update"],
-        "migrations": ["read", "create"], "reports": ["read"]
+        "migrations": ["read", "create"],
+        "conversions": ["read", "create"], "reports": ["read"],
     },
     "viewer": {
-        "vms": ["read"], "migrations": ["read"], "reports": ["read"]
-    }
+        "vms": ["read"], "migrations": ["read"],
+        "conversions": ["read"], "reports": ["read"],
+    },
 }
 ```
 
@@ -85,14 +98,20 @@ ROLE_PERMISSIONS = {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `String` | Display name |
-| `type` | `HypervisorType` | `vmware`, `libvirt`, `hyperv` |
-| `host` | `String` | Connection hostname/IP |
-| `port` | `Integer` | Connection port |
-| `username` | `String` | Auth username |
-| `password` | `String` | Auth password (encrypted) |
-| `status` | `HypervisorStatus` | `connected`, `disconnected`, `error` |
-| `tenant_id` | `String` | Owning tenant |
+| `name` | `String(255)` | Display name (unique) |
+| `description` | `Text` | Description |
+| `type` | `HypervisorType` | Hypervisor type (enum) |
+| `host` | `String(255)` | Connection hostname/IP |
+| `port` | `Integer` | Connection port (nullable) |
+| `username` | `String(255)` | Auth username |
+| `password` | `Text` | Auth password |
+| `verify_ssl` | `Boolean` | Verify SSL certificates |
+| `status` | `HypervisorStatus` | Connection status (enum) |
+| `is_active` | `Boolean` | Whether the hypervisor is enabled |
+| `last_sync_at` | `DateTime(timezone=True)` | Last VM synchronization |
+| `tenant_id` | `String(100)` | Owning tenant |
+
+> ⚠️ Hypervisor credentials (`password`) are currently stored **in plaintext** — a known limitation. Encryption via Fernet or Vault is planned.
 
 ---
 
@@ -100,15 +119,21 @@ ROLE_PERMISSIONS = {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `String` | VM display name |
-| `hypervisor_id` | `UUID` → Hypervisor | Source hypervisor FK |
-| `vcpus` | `Integer` | Virtual CPU count |
+| `name` | `String(255)` | VM display name |
+| `source_hypervisor_id` | `Integer` → Hypervisor | Source hypervisor FK (nullable, `SET NULL`) |
+| `source_uuid` | `String(255)` | VM UUID on the source hypervisor |
+| `cpu_cores` | `Integer` | Virtual CPU count |
 | `memory_mb` | `Integer` | Memory in MB |
-| `disk_size_gb` | `Float` | Total disk size in GB |
-| `os_type` | `OSType` | `linux`, `windows`, `other` |
-| `status` | `VMStatus` | `running`, `stopped`, `migrating`, etc. |
-| `compatibility_status` | `CompatibilityStatus` | `compatible`, `partially_compatible`, `incompatible` |
-| `tenant_id` | `String` | Owning tenant |
+| `disk_gb` | `Integer` | Total disk size in GB |
+| `os_type` | `OSType` | OS family (enum) |
+| `os_name` / `os_version` | `String(255)` | OS name and version |
+| `ip_address` | `String(45)` | IPv4/IPv6 address |
+| `status` | `VMStatus` | Migration-lifecycle status (enum) |
+| `compatibility_status` | `CompatibilityStatus` | Compatibility status (enum) |
+| `compatibility_details` | `JSON` | Analyzer output details |
+| `tenant_id` | `String(100)` | Owning tenant |
+
+Properties: `is_compatible`, `is_migrated`, `can_migrate`.
 
 ---
 
@@ -116,38 +141,65 @@ ROLE_PERMISSIONS = {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `vm_id` | `UUID` → VirtualMachine | Source VM FK |
-| `strategy` | `MigrationStrategy` | `direct`, `conversion`, `alternative` |
-| `status` | `MigrationStatus` | `pending`, `in_progress`, `completed`, `failed`, `cancelled` |
-| `started_at` | `DateTime` | Migration start time |
-| `completed_at` | `DateTime` | Migration completion time |
+| `vm_id` | `Integer` → VirtualMachine | Source VM FK (`CASCADE`) |
+| `status` | `MigrationStatus` | Lifecycle status (enum) |
+| `strategy` | `MigrationStrategy` | Migration strategy (enum) |
+| `progress_percentage` | `Float` | Progress 0–100 |
+| `current_step` | `String(255)` | Current pipeline step |
+| `started_at` | `DateTime(timezone=True)` | Migration start time |
+| `completed_at` | `DateTime(timezone=True)` | Migration completion time |
+| `success` | `Boolean` | Outcome (`None` while running) |
 | `error_message` | `Text` | Failure details (if any) |
-| `tenant_id` | `String` | Owning tenant |
+| `target_namespace` | `String(255)` | OpenShift target namespace |
+| `can_rollback` | `Boolean` | Whether rollback is possible |
+| `tenant_id` | `String(100)` | Owning tenant |
+
+Properties: `is_active`, `is_completed`, `duration_seconds`, `estimated_time_remaining_seconds`.
+
+---
+
+## 🔢 Enumerations
+
+All enums are string enums (`str, enum.Enum`). Exact members:
+
+| Enum | Values |
+|------|--------|
+| `HypervisorType` | `VSPHERE`, `VMWARE_WORKSTATION`, `VMWARE_ESXi`, `HYPER_V`, `KVM`, `PROXMOX`, `OVIRT`, `VIRTUALBOX`, `XEN`, `OTHER` |
+| `HypervisorStatus` | `ACTIVE`, `INACTIVE`, `ERROR`, `UNREACHABLE`, `AUTHENTICATING`, `DISCOVERING`, `UNKNOWN` |
+| `VMStatus` | `DISCOVERED`, `ANALYZING`, `COMPATIBLE`, `INCOMPATIBLE`, `PARTIAL`, `MIGRATING`, `MIGRATED`, `FAILED`, `ARCHIVED` |
+| `CompatibilityStatus` | `COMPATIBLE`, `PARTIAL`, `INCOMPATIBLE`, `UNKNOWN` |
+| `OSType` | `WINDOWS`, `LINUX`, `OTHER`, `UNKNOWN` |
+| `MigrationStatus` | `PENDING`, `VALIDATING`, `PREPARING`, `TRANSFERRING`, `CONFIGURING`, `STARTING`, `VERIFYING`, `COMPLETED`, `FAILED`, `CANCELLED`, `ROLLBACK`, `ROLLED_BACK` |
+| `MigrationStrategy` | `DIRECT`, `CONVERSION`, `HYBRID`, `COLD`, `WARM`, `AUTO` |
 
 ---
 
 ## 🔗 Relationships (Entity Diagram)
 
 ```
-┌──────────┐     M:N      ┌──────────┐
-│   User   │◄────────────►│   Role   │
-└────┬─────┘  user_roles   └──────────┘
-     │
-     │ tenant_id
-     │
-┌────▼───────────┐  1:N   ┌──────────────────┐  1:N   ┌───────────┐
-│   Hypervisor   │◄───────│  VirtualMachine   │◄───────│ Migration │
-└────────────────┘        └──────────────────┘        └───────────┘
+┌──────────┐   M:N (user_roles)   ┌──────────┐
+│   User   │◄────────────────────▶│   Role   │
+└──────────┘                       └──────────┘
+
+┌──────────────┐  1:N   ┌──────────────────┐  1:N   ┌─────────────┐
+│  Hypervisor  │───────▶│  VirtualMachine   │───────▶│  Migration  │
+└──────────────┘        └──────────────────┘        └─────────────┘
+                                 │ 1:N
+                                 ▼
+                        ┌────────────────────┐
+                        │   ConversionGroup   │
+                        └────────────────────┘
 ```
 
 ---
 
 ## ⚠️ Import Order
 
-Models must be imported in dependency order (enforced in `__init__.py`):
+Models are imported in dependency order (enforced in `__init__.py`):
 
 1. `Base`, `BaseModel` — no dependencies
-2. `Role`, `User` — user depends on role via M2M
+2. `Role`, `User` (+ `user_roles`) — user depends on role via M2M
 3. `Hypervisor` — independent
-4. `VirtualMachine` — depends on Hypervisor (FK)
-5. `Migration` — depends on VirtualMachine (FK)
+4. `VirtualMachine` — depends on `Hypervisor` (FK)
+5. `Migration` — depends on `VirtualMachine` (FK)
+6. `Conversion*` — depends on `VirtualMachine` and `Migration`
