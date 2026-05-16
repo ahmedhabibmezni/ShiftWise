@@ -42,6 +42,7 @@ router = APIRouter()
 # S1192 — Constantes pour éviter la duplication de littéraux
 USER_NOT_FOUND = "Utilisateur non trouvé"
 USER_ACCESS_DENIED = "Accès non autorisé à cet utilisateur"
+SUPER_ADMIN_ROLE = "super_admin"
 
 
 def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Session) -> None:
@@ -54,7 +55,7 @@ def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Ses
     admin_permissions = current_user.get_all_permissions()
 
     for role in assigned_roles:
-        if role.name == "super_admin":
+        if role.name == SUPER_ADMIN_ROLE:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Seul un super_admin peut assigner le rôle super_admin"
@@ -65,6 +66,18 @@ def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Ses
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
                 )
+
+
+def _is_super_admin(user: User) -> bool:
+    """
+    True si l'utilisateur possède des privilèges super-admin — soit le flag
+    is_superuser, soit le rôle super_admin. Un tel compte ne peut être géré
+    que par un autre super-admin.
+    """
+    if user.is_superuser:
+        return True
+    return any(role.name == SUPER_ADMIN_ROLE for role in user.roles)
+
 
 @router.post("", response_model=UserReadWithRoles, status_code=status.HTTP_201_CREATED)
 def create_user(
@@ -315,6 +328,22 @@ def update_user(
                 detail=USER_ACCESS_DENIED
             )
 
+    # Un non-superuser ne peut pas modifier un compte super-admin
+    # (sauf son propre compte).
+    if (
+        user_id != current_user.id
+        and not current_user.is_superuser
+        and _is_super_admin(user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul un super_admin peut modifier un compte super_admin"
+        )
+
+    # Guard : empêche l'escalade de privilèges via l'assignation de rôles.
+    if not current_user.is_superuser and user_update.role_ids:
+        _check_privilege_escalation(current_user, user_update.role_ids, db)
+
     # Mettre à jour
     try:
         updated_user = crud_user.update_user(db, user_id, user_update)
@@ -373,6 +402,13 @@ def delete_user(
                 detail=USER_ACCESS_DENIED
             )
 
+    # Un non-superuser ne peut pas supprimer un compte super-admin.
+    if not current_user.is_superuser and _is_super_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul un super_admin peut supprimer un compte super_admin"
+        )
+
     # Supprimer
     crud_user.delete_user(db, user_id)
 
@@ -428,7 +464,7 @@ def add_role_to_user(
         )
 
     # Guard: prevent privilege escalation
-    if role.name == "super_admin" and not current_user.is_superuser:
+    if role.name == SUPER_ADMIN_ROLE and not current_user.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Seul un super_admin peut assigner le rôle super_admin"

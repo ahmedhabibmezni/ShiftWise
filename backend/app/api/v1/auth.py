@@ -60,6 +60,10 @@ CREDENTIALS_INVALID_MSG = "Email ou mot de passe incorrect"
 ACCOUNT_INACTIVE_MSG = "Compte inactif. Contactez l'administrateur."
 REFRESH_INVALID_MSG = "Refresh token invalide ou expiré"
 
+# En-tête signalant une désactivation de compte. Le frontend l'utilise pour
+# notifier l'utilisateur puis le déconnecter proprement.
+INACTIVE_ACCOUNT_HEADERS = {"X-Account-Status": "deactivated"}
+
 
 def _set_refresh_cookie(response: Response, refresh_jwt: str) -> None:
     """Attach the refresh cookie with hardened attributes."""
@@ -193,6 +197,7 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ACCOUNT_INACTIVE_MSG,
+            headers=INACTIVE_ACCOUNT_HEADERS,
         )
 
     # Genuine success — clear both throttle buckets so the operator
@@ -266,6 +271,7 @@ def refresh_token_endpoint(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ACCOUNT_INACTIVE_MSG,
+            headers=INACTIVE_ACCOUNT_HEADERS,
         )
 
     new_refresh_jwt = _rotate_refresh(family_id, jti, user_id)

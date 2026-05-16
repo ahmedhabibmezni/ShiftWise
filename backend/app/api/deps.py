@@ -102,9 +102,13 @@ def get_current_user(
 
     # Vérifier que l'utilisateur est actif
     if not user.is_active:
+        # L'en-tête X-Account-Status permet au frontend de distinguer une
+        # désactivation de compte d'un simple refus de permission RBAC —
+        # les deux retournent un 403.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte utilisateur inactif"
+            detail="Compte utilisateur inactif",
+            headers={"X-Account-Status": "deactivated"}
         )
 
     return user
