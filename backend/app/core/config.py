@@ -108,7 +108,12 @@ class Settings(BaseSettings):
         )
 
     # Security & JWT
-    SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-only-secret-not-for-production")
+    # Audit C-01 : SECRET_KEY est un champ OBLIGATOIRE sans valeur par défaut.
+    # pydantic-settings la charge depuis l'environnement / .env ; l'application
+    # refuse de démarrer si elle est absente, trop courte, ou laissée à un
+    # placeholder (voir validate_secret_key). Une clé publique ou faible
+    # permet la forge de tokens JWT (HS256 — la clé signe ET vérifie).
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -136,6 +141,32 @@ class Settings(BaseSettings):
                 f"REFRESH_COOKIE_SAMESITE must be one of: {', '.join(sorted(allowed))}"
             )
         return v_low
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """
+        Audit C-01 — refuse une SECRET_KEY faible ou par défaut.
+
+        La clé signe tous les JWT (HS256). Une clé publique, trop courte, ou
+        laissée à un placeholder permettrait la forge de tokens et le
+        contournement complet de l'authentification.
+        """
+        weak_defaults = {
+            "GENEREZ_UNE_CLE_SECRETE_ICI",
+            "dev-only-secret-not-for-production",
+            "changeme",
+            "secret",
+        }
+        if v in weak_defaults:
+            raise ValueError(
+                "SECRET_KEY ne doit pas être une valeur par défaut/placeholder — "
+                "générez une clé aléatoire : "
+                "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        if len(v) < 32:
+            raise ValueError("SECRET_KEY doit contenir au moins 32 caractères")
+        return v
 
     # CORS - Origins autorisées pour les requêtes cross-origin
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
