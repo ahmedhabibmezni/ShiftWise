@@ -14,6 +14,17 @@ from sqlalchemy.orm import Session
 from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
 
 
+# Audit D6 — champs jamais modifiables via update_hypervisor, même si un
+# appelant ou une évolution du schéma les injecte dans le dict de mise à
+# jour. `status` est piloté exclusivement par le Discovery Service ;
+# `tenant_id` est fixé à la création et garantit l'isolation multi-tenant.
+_HYPERVISOR_PROTECTED_FIELDS = frozenset({
+    "id", "tenant_id", "status", "created_at", "updated_at",
+    "total_vms_discovered", "total_vms_migrated",
+    "last_sync_at", "last_successful_connection", "last_error",
+})
+
+
 def get_hypervisor(
         db: Session,
         hypervisor_id: int,
@@ -36,18 +47,29 @@ def get_hypervisor(
     return query.first()
 
 
-def get_hypervisor_by_name(db: Session, name: str) -> Optional[Hypervisor]:
+def get_hypervisor_by_name(
+        db: Session,
+        name: str,
+        tenant_id: Optional[str] = None,
+) -> Optional[Hypervisor]:
     """
     Recupere un hypervisor par son nom.
 
     Args:
         db: Session de base de donnees
         name: Nom de l'hypervisor
+        tenant_id: Si fourni, filtre par tenant (multi-tenancy) — Audit B14.
+            Le nom n'etant unique que par tenant (Audit B15), ce filtre est
+            necessaire pour cibler le bon enregistrement et eviter une fuite
+            d'existence entre tenants.
 
     Returns:
         Hypervisor si trouve, None sinon
     """
-    return db.query(Hypervisor).filter(Hypervisor.name == name).first()
+    query = db.query(Hypervisor).filter(Hypervisor.name == name)
+    if tenant_id is not None:
+        query = query.filter(Hypervisor.tenant_id == tenant_id)
+    return query.first()
 
 
 def get_hypervisors(
@@ -161,7 +183,9 @@ def create_hypervisor(db: Session, data: dict, tenant_id: str) -> Hypervisor:
     Raises:
         ValueError: Si un hypervisor avec ce nom existe deja
     """
-    existing = get_hypervisor_by_name(db, data.get("name", ""))
+    # Audit B15 — l'unicite du nom est desormais par tenant : la verification
+    # prealable doit etre scopee au meme tenant.
+    existing = get_hypervisor_by_name(db, data.get("name", ""), tenant_id=tenant_id)
     if existing:
         raise ValueError(f"Un hypervisor avec le nom '{data['name']}' existe déjà")
 
@@ -201,6 +225,8 @@ def update_hypervisor(
         return None
 
     for field, value in update_data.items():
+        if field in _HYPERVISOR_PROTECTED_FIELDS:
+            continue  # Audit D6 — champ protégé, ignoré silencieusement
         setattr(hypervisor, field, value)
 
     db.commit()

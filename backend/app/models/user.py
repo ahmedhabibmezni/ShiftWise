@@ -10,7 +10,7 @@ Chaque utilisateur :
 - Peut partager des VMs avec d'autres utilisateurs
 """
 
-from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table, DateTime
+from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table, DateTime, text
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -91,9 +91,12 @@ class User(BaseModel):
     )
 
     # Statuts
+    # Audit D16 — `server_default` cross-dialect ('1'/'0') en complément du
+    # `default` Python : un INSERT brut ne peut pas laisser un flag NULL.
     is_active = Column(
         Boolean,
         default=True,
+        server_default=text("1"),
         nullable=False,
         comment="True si le compte est actif"
     )
@@ -101,6 +104,7 @@ class User(BaseModel):
     is_verified = Column(
         Boolean,
         default=False,
+        server_default=text("0"),
         nullable=False,
         comment="True si l'email a été vérifié"
     )
@@ -108,6 +112,7 @@ class User(BaseModel):
     is_superuser = Column(
         Boolean,
         default=False,
+        server_default=text("0"),
         nullable=False,
         comment="True si super administrateur (accès complet)"
     )

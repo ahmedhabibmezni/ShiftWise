@@ -37,18 +37,27 @@ def get_vm(
     return query.first()
 
 
-def get_vm_by_name(db: Session, name: str) -> Optional[VirtualMachine]:
+def get_vm_by_name(
+        db: Session,
+        name: str,
+        tenant_id: Optional[str] = None,
+) -> Optional[VirtualMachine]:
     """
     Recupere une VM par son nom.
 
     Args:
         db: Session de base de donnees
         name: Nom de la VM
+        tenant_id: Si fourni, filtre par tenant (multi-tenancy) — Audit B14.
+            Empeche un lookup global de traverser la frontiere de tenant.
 
     Returns:
         VirtualMachine si trouvee, None sinon
     """
-    return db.query(VirtualMachine).filter(VirtualMachine.name == name).first()
+    query = db.query(VirtualMachine).filter(VirtualMachine.name == name)
+    if tenant_id is not None:
+        query = query.filter(VirtualMachine.tenant_id == tenant_id)
+    return query.first()
 
 
 def get_vms(

@@ -8,7 +8,7 @@ Modèle de base contenant les champs communs à toutes les tables :
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, DateTime
+from sqlalchemy import Column, Integer, DateTime, func
 from app.core.database import Base
 
 
@@ -36,9 +36,13 @@ class BaseModel(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
 
+    # Audit D16 — `server_default` en plus du `default` Python : un INSERT
+    # brut (hors ORM, ex. job SQL d'initialisation) reçoit ainsi un
+    # timestamp valide au lieu d'un NULL qui violerait `nullable=False`.
     created_at = Column(
         DateTime(timezone=True),
         default=utc_now,
+        server_default=func.now(),
         nullable=False,
         comment="Date de création de l'enregistrement"
     )
@@ -47,6 +51,7 @@ class BaseModel(Base):
         DateTime(timezone=True),
         default=utc_now,
         onupdate=utc_now,
+        server_default=func.now(),
         nullable=False,
         comment="Date de dernière modification"
     )

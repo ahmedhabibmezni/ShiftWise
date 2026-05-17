@@ -113,6 +113,8 @@ class ConversionGroupListResponse(BaseModel):
     page: int = Field(..., ge=1)
     page_size: int = Field(..., ge=1, le=100)
 
+    model_config = ConfigDict(from_attributes=True)  # Audit D10
+
 
 # --- Actions ---
 

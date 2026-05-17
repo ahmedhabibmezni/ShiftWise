@@ -5,7 +5,10 @@ Représente un hyperviseur source (vSphere, VMware Workstation, Hyper-V, KVM, et
 depuis lequel les VMs seront découvertes et migrées.
 """
 
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, Enum as SQLEnum, JSON
+from sqlalchemy import (
+    Column, String, Integer, Boolean, DateTime, Text,
+    Enum as SQLEnum, JSON, UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import enum
@@ -48,11 +51,19 @@ class Hypervisor(BaseModel):
 
     __tablename__ = "hypervisors"
 
+    # Audit B15 — l'unicité du nom est portée par un UniqueConstraint
+    # composite (tenant_id, name) : deux tenants peuvent nommer un
+    # hyperviseur à l'identique sans collision ni fuite d'existence.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_hypervisors_tenant_name"),
+    )
+
     # Multi-tenancy isolation
     tenant_id = Column(String(100), nullable=False, index=True)
 
-    # Identité de l'hyperviseur
-    name = Column(String(255), nullable=False, unique=True, index=True)
+    # Identité de l'hyperviseur — pas de `unique=True` global ici
+    # (l'unicité est composite, voir __table_args__ ci-dessus).
+    name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
     type = Column(SQLEnum(HypervisorType), nullable=False, index=True)
 
@@ -105,6 +116,20 @@ class Hypervisor(BaseModel):
         return self.status in [HypervisorStatus.ACTIVE, HypervisorStatus.AUTHENTICATING]
 
     @property
+    def username_masked(self) -> str:
+        """
+        Audit D5 — version masquée du `username` pour l'API.
+
+        Le `username` est une moitié d'identité d'identifiant : on l'expose
+        partiellement (premier caractère + ***) plutôt qu'en clair, pour ne
+        pas divulguer l'identité de connexion à l'hyperviseur.
+        """
+        value = self.username or ""
+        if len(value) <= 2:
+            return "***" if value else ""
+        return f"{value[0]}***{value[-1]}"
+
+    @property
     def connection_url(self) -> str:
         """Construit l'URL de connexion (sans credentials)"""
         port_str = f":{self.port}" if self.port else ""
@@ -143,10 +168,14 @@ class Hypervisor(BaseModel):
 
         Args:
             success: Si True, la sync a réussi
-            total_vms: Nombre de VMs découvertes
+            total_vms: Nombre de VMs découvertes — persisté dans
+                total_vms_discovered quand success=True (Audit D17 :
+                l'argument était auparavant ignoré).
         """
         if success:
-            self.last_sync_at = datetime.now(timezone.utc)
-            # self.total_vms_discovered = total_vms
-            self.last_successful_connection = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            self.last_sync_at = now
+            self.last_successful_connection = now
+            # Audit D17 — persiste la statistique de découverte.
+            self.total_vms_discovered = total_vms
         # last_sync_at non mis à jour si success=False → needs_sync reste True

@@ -53,6 +53,11 @@ class VMUpdate(BaseModel):
     os_type: Optional[OSTypeEnum] = None
     os_version: Optional[str] = Field(None, max_length=255)
     os_name: Optional[str] = Field(None, max_length=255)
+    # Audit D13 — le réseau est corrigeable via l'API : la découverte peut
+    # renvoyer une IP/MAC/hostname erronés ou périmés.
+    ip_address: Optional[str] = Field(None, max_length=45, description="Adresse IP")
+    mac_address: Optional[str] = Field(None, max_length=17, description="Adresse MAC")
+    hostname: Optional[str] = Field(None, max_length=255, description="Hostname")
     compatibility_details: Optional[dict] = None
     openshift_vm_name: Optional[str] = Field(None, max_length=255)
     openshift_namespace: Optional[str] = Field(None, max_length=255)
@@ -67,6 +72,7 @@ class VMResponse(VMBase):
     disk_gb: int = Field(..., ge=0, description="Taille du disque en GB (0 = non mesurée)")
 
     id: int
+    tenant_id: str  # Audit D8 — lecture seule (traçabilité multi-tenant)
     source_hypervisor_id: Optional[int] = None
     source_uuid: Optional[str] = None
     source_name: Optional[str] = None
@@ -101,3 +107,5 @@ class VMListResponse(BaseModel):
     items: list[VMResponse] = Field(..., description="Liste des VMs")
     page: int = Field(..., ge=1, description="Page actuelle")
     page_size: int = Field(..., ge=1, le=100, description="Taille de la page")
+
+    model_config = ConfigDict(from_attributes=True)  # Audit D10

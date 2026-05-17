@@ -10,7 +10,7 @@ Rôles prédéfinis :
 - VIEWER : Accès lecture seule
 """
 
-from sqlalchemy import Column, String, Boolean, JSON, Text
+from sqlalchemy import Column, String, Boolean, JSON, Text, text
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -60,9 +60,12 @@ class Role(BaseModel):
     )
 
     # Rôle système (non modifiable/supprimable)
+    # Audit D16 — `server_default` cross-dialect en complément du `default`
+    # Python : un INSERT brut ne peut pas laisser ces flags NULL.
     is_system_role = Column(
         Boolean,
         default=False,
+        server_default=text("0"),
         nullable=False,
         comment="True si rôle système prédéfini (non modifiable)"
     )
@@ -71,6 +74,7 @@ class Role(BaseModel):
     is_active = Column(
         Boolean,
         default=True,
+        server_default=text("1"),
         nullable=False,
         comment="True si le rôle est actif et peut être assigné"
     )
@@ -128,13 +132,21 @@ ROLE_PERMISSIONS = {
     },
     "user": {
         # Accès aux ressources assignées
+        # Audit B19 — un `user` peut créer une VM/migration ; il doit donc
+        # pouvoir lire les hyperviseurs (source obligatoire d'une migration).
+        "hypervisors": ["read"],
         "vms": ["read", "create", "update"],
         "migrations": ["read", "create"],
         "conversions": ["read", "create"],
         "reports": ["read"],
     },
     "viewer": {
-        # Lecture seule
+        # Lecture seule — Audit B20 : le rôle "read-only" doit voir
+        # l'ensemble des ressources, pas seulement vms/migrations.
+        # Aucune action d'écriture ici, par définition du rôle.
+        "users": ["read"],
+        "roles": ["read"],
+        "hypervisors": ["read"],
         "vms": ["read"],
         "migrations": ["read"],
         "conversions": ["read"],

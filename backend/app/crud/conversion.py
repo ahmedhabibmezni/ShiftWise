@@ -178,23 +178,29 @@ def recompute_group_status(
         ConversionStatus.VERIFYING,
         ConversionStatus.RETRYING,
     }
+    # Audit E10 — EXPIRED (le Job K8s a dépassé son TTL avant d'aboutir) est
+    # un état TERMINAL, agrégé comme un échec. Sans cela un groupe EXPIRED-only
+    # tombait dans le `else` et restait IN_PROGRESS indéfiniment.
+    terminal_fail = {ConversionStatus.FAILED, ConversionStatus.EXPIRED}
     has_in_flight = any(s in in_flight for s in statuses)
     has_ready = any(s == ConversionStatus.READY for s in statuses)
-    has_failed = any(s == ConversionStatus.FAILED for s in statuses)
+    has_failed = any(s in terminal_fail for s in statuses)
     has_cancelled = any(s == ConversionStatus.CANCELLED for s in statuses)
 
     if has_in_flight:
         new_status = ConversionGroupStatus.IN_PROGRESS
     elif all(s == ConversionStatus.READY for s in statuses):
         new_status = ConversionGroupStatus.READY
-    elif has_ready and has_failed:
+    elif has_ready and (has_failed or has_cancelled):
         new_status = ConversionGroupStatus.PARTIAL
-    elif all(s == ConversionStatus.FAILED for s in statuses):
+    elif all(s in terminal_fail for s in statuses):
         new_status = ConversionGroupStatus.FAILED
-    elif has_cancelled and not has_ready:
+    elif all(s == ConversionStatus.CANCELLED for s in statuses):
         new_status = ConversionGroupStatus.CANCELLED
     else:
-        new_status = ConversionGroupStatus.IN_PROGRESS
+        # Plus aucun job en vol : combinaison terminale non classée
+        # (ex. CANCELLED + EXPIRED) — terminal, jamais IN_PROGRESS.
+        new_status = ConversionGroupStatus.FAILED
 
     return set_group_status(db, group_id, new_status)
 

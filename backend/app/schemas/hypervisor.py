@@ -103,10 +103,18 @@ class HypervisorUpdate(BaseModel):
 
 # Schéma pour la réponse (SANS password par défaut)
 class HypervisorResponse(HypervisorBase):
-    """Schéma de réponse (sans credentials sensibles)"""
+    """Schéma de réponse (sans credentials sensibles).
+
+    Audit D5 — le `username` en clair n'est PAS exposé : seule la forme
+    masquée `username_masked` (propriété du modèle) est servie.
+    Audit D8 — `tenant_id` exposé en lecture seule (traçabilité multi-tenant).
+    Audit D9 — `ssl_cert_path` exposé (champ jusque-là write-only).
+    """
     id: int
-    username: str  # On garde le username mais PAS le password
+    tenant_id: str  # Audit D8 — lecture seule
+    username_masked: str  # Audit D5 — username masqué, jamais en clair
     verify_ssl: bool
+    ssl_cert_path: Optional[str] = None  # Audit D9
     status: HypervisorStatusEnum
     is_active: bool
     last_sync_at: Optional[datetime] = None
@@ -135,6 +143,9 @@ class HypervisorListResponse(BaseModel):
     page: int = Field(..., ge=1, description="Page actuelle")
     page_size: int = Field(..., ge=1, le=100, description="Taille de la page")
 
+    # Audit D10 — `from_attributes` pour une construction homogène depuis l'ORM.
+    model_config = ConfigDict(from_attributes=True)
+
 
 # Schéma pour tester la connexion
 class HypervisorTestConnection(BaseModel):
@@ -145,6 +156,9 @@ class HypervisorTestConnection(BaseModel):
     username: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=1)
     verify_ssl: bool = False
+
+    # Audit D18 — `model_config` pour la cohérence de convention.
+    model_config = ConfigDict(from_attributes=True)
 
     @field_validator("host")
     @classmethod
@@ -160,3 +174,6 @@ class HypervisorTestConnectionResponse(BaseModel):
     message: str = Field(..., description="Message de résultat")
     vms_count: Optional[int] = Field(None, description="Nombre de VMs découvertes")
     error: Optional[str] = Field(None, description="Message d'erreur si échec")
+
+    # Audit D18 — `model_config` pour la cohérence de convention.
+    model_config = ConfigDict(from_attributes=True)

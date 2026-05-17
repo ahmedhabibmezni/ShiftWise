@@ -178,15 +178,29 @@ class Migration(BaseModel):
         delta = end_time - started
         return int(delta.total_seconds())
 
+    # Audit D21 — seuil minimal de progression pour estimer un ETA.
+    # En dessous, l'extrapolation linéaire (elapsed / progress * 100)
+    # produit des durées absurdes (division par une fraction minuscule).
+    _ETA_MIN_PROGRESS_PCT = 1.0
+
     @property
     def estimated_time_remaining_seconds(self) -> int:
-        """Estime le temps restant en secondes"""
-        if not self.is_active or self.progress_percentage == 0:
+        """Estime le temps restant en secondes.
+
+        Audit D21 — ne calcule un ETA que lorsque la progression atteint
+        un seuil significatif (>= 1%) ; sinon retourne 0 plutôt qu'une
+        extrapolation aberrante.
+        """
+        if not self.is_active:
+            return 0
+        progress = self.progress_percentage or 0.0
+        if progress < self._ETA_MIN_PROGRESS_PCT:
             return 0
 
         elapsed = self.duration_seconds
-        estimated_total = (elapsed / self.progress_percentage) * 100
-        return int(estimated_total - elapsed)
+        estimated_total = (elapsed / progress) * 100
+        remaining = int(estimated_total - elapsed)
+        return max(0, remaining)
 
     def update_progress(self, percentage: float, step: str, step_number: int = None):
         """Met à jour la progression de la migration"""

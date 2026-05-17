@@ -221,12 +221,19 @@ class UserInDB(UserBase):
     """
     Schéma représentant un utilisateur en base de données.
 
-    Inclut tous les champs de la BDD (y compris hashed_password).
+    Audit D4 — `hashed_password` n'est PAS un champ de ce schéma : un hash
+    bcrypt ne doit jamais être sérialisable, même par accident en tant que
+    `response_model`. Le hash reste accessible exclusivement via l'attribut
+    ORM `User.hashed_password`.
+
+    Audit D15 — inclut `last_login_at` / `last_login_ip` pour rester
+    structurellement aligné avec le modèle ORM et `UserRead`.
     """
     id: int
-    hashed_password: str
     is_verified: bool
     is_superuser: bool
+    last_login_at: Optional[datetime] = None
+    last_login_ip: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -239,6 +246,13 @@ class UserRead(BaseModel):
 
     Retourné par l'API - SANS le mot de passe hashé.
     Utilisé lors de GET /api/v1/users
+
+    Audit B22 — `last_login_ip` (donnée à caractère personnel) n'est PAS
+    exposé ici : ce schéma est servi à tout porteur de `users:read`, y
+    compris des admins de tenant pour qui l'IP d'un autre utilisateur est
+    une fuite de vie privée. L'IP n'est exposée que via `UserReadAdmin`
+    (endpoints admin) et `/me` (l'utilisateur voit sa propre IP).
+    `last_login_at` (horodatage, non identifiant) reste exposé.
     """
     id: int
     email: EmailStr
@@ -251,7 +265,6 @@ class UserRead(BaseModel):
     is_verified: bool
     is_superuser: bool
     last_login_at: Optional[datetime] = None
-    last_login_ip: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -277,12 +290,31 @@ class UserReadWithPermissions(UserReadWithRoles):
     Schéma incluant les rôles ET les permissions calculées.
 
     Utilisé pour l'endpoint /me (informations de l'utilisateur connecté).
+
+    Audit B22 — réexpose `last_login_ip` : un utilisateur peut voir sa
+    propre IP de dernière connexion (utile pour repérer un accès suspect),
+    ce n'est pas une fuite — c'est sa donnée.
     """
+    last_login_ip: Optional[str] = None
+
     permissions: Dict[str, List[str]] = Field(
         default_factory=dict,
         description="Permissions calculées depuis tous les rôles",
         json_schema_extra={"example": {"vms": ["read", "create", "update"], "hypervisors": ["read"]}}
     )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserReadAdmin(UserReadWithRoles):
+    """
+    Schéma de lecture admin — réexpose `last_login_ip` (Audit B22).
+
+    Destiné aux endpoints réservés aux administrateurs / superusers, où la
+    visibilité de l'IP de dernière connexion d'un autre utilisateur relève
+    de l'audit légitime et non d'une fuite de vie privée.
+    """
+    last_login_ip: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

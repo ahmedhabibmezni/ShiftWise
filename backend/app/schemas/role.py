@@ -13,7 +13,35 @@ from typing import Optional, Dict, List
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.constants import VALID_ACTIONS
+from app.core.constants import VALID_ACTIONS, VALID_RESOURCES
+
+
+def _validate_permissions_map(
+    permissions: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    """
+    Valide une map de permissions {ressource: [actions]}.
+
+    Audit B9 — logique partagée entre RoleBase (create) et RoleUpdate :
+    vérifie que chaque clé est une ressource connue et que chaque action
+    appartient à VALID_ACTIONS. Sans ce partage, RoleUpdate persistait
+    des maps de permissions arbitraires.
+    """
+    for resource, actions in permissions.items():
+        if resource not in VALID_RESOURCES:
+            raise ValueError(
+                f"Ressource invalide '{resource}'. "
+                f"Ressources valides: {sorted(VALID_RESOURCES)}"
+            )
+        if not isinstance(actions, list):
+            raise ValueError(f"Les actions pour '{resource}' doivent être une liste")
+        for action in actions:
+            if action not in VALID_ACTIONS:
+                raise ValueError(
+                    f"Action invalide '{action}' pour '{resource}'. "
+                    f"Actions valides: {sorted(VALID_ACTIONS)}"
+                )
+    return permissions
 
 
 class RoleBase(BaseModel):
@@ -65,20 +93,10 @@ class RoleBase(BaseModel):
         """
         Valide la structure des permissions.
 
-        Vérifie que chaque ressource a une liste d'actions valides.
+        Vérifie que chaque ressource est connue et a une liste d'actions
+        valides — logique partagée avec RoleUpdate (Audit B9).
         """
-        for resource, actions in v.items():
-            if not isinstance(actions, list):
-                raise ValueError(f"Les actions pour '{resource}' doivent être une liste")
-
-            for action in actions:
-                if action not in VALID_ACTIONS:
-                    raise ValueError(
-                        f"Action invalide '{action}' pour '{resource}'. "
-                        f"Actions valides: {VALID_ACTIONS}"
-                    )
-
-        return v
+        return _validate_permissions_map(v)
 
 
 class RoleCreate(RoleBase):
@@ -128,6 +146,21 @@ class RoleUpdate(BaseModel):
                 raise ValueError("Le nom du rôle ne peut contenir que des lettres, chiffres et underscores")
             return v.lower()
         return v
+
+    @field_validator('permissions')
+    def validate_permissions(
+        cls, v: Optional[Dict[str, List[str]]],
+    ) -> Optional[Dict[str, List[str]]]:
+        """
+        Valide les permissions si fournies — Audit B9.
+
+        RoleUpdate ne validait rien : une map de permissions arbitraire
+        pouvait être persistée. On réutilise désormais la validation
+        de RoleBase (ressources connues + actions valides).
+        """
+        if v is None:
+            return v
+        return _validate_permissions_map(v)
 
 
 class RoleInDB(RoleBase):

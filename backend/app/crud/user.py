@@ -23,14 +23,27 @@ _USER_PROTECTED_FIELDS = frozenset({
     "id", "is_superuser", "is_verified", "tenant_id", "created_at", "updated_at",
 })
 
+# Audit A9 — hash bcrypt factice pour neutraliser l'oracle temporel de
+# l'authentification. Quand l'email est inconnu, on lance malgré tout une
+# vérification bcrypt contre ce hash : le temps de réponse devient
+# indiscernable de celui d'un compte existant avec un mauvais mot de passe.
+# Calculé une seule fois au chargement du module.
+_DUMMY_PASSWORD_HASH = get_password_hash("shiftwise-timing-oracle-defence")
 
-def get_user(db: Session, user_id: int) -> Optional[User]:
+
+def get_user(
+        db: Session,
+        user_id: int,
+        tenant_id: Optional[str] = None,
+) -> Optional[User]:
     """
     Récupère un utilisateur par son ID.
 
     Args:
         db: Session de base de données
         user_id: ID de l'utilisateur
+        tenant_id: Si fourni, filtre par tenant (multi-tenancy) — Audit B7.
+            L'isolation ne dépend ainsi plus uniquement du routeur appelant.
 
     Returns:
         User si trouvé, None sinon
@@ -39,7 +52,10 @@ def get_user(db: Session, user_id: int) -> Optional[User]:
         >>> user = get_user(db, 1)
         >>> print(user.email)
     """
-    return db.query(User).filter(User.id == user_id).first()
+    query = db.query(User).filter(User.id == user_id)
+    if tenant_id is not None:
+        query = query.filter(User.tenant_id == tenant_id)
+    return query.first()
 
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
@@ -375,6 +391,10 @@ def authenticate_user(
     user = get_user_by_email(db, email)
 
     if not user:
+        # Audit A9 — vérification bcrypt factice : un compte inexistant doit
+        # consommer le même temps CPU qu'un compte réel avec mauvais mot de
+        # passe, sinon l'attaquant énumère les emails via la latence.
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         return None
 
     if not verify_password(password, user.hashed_password):

@@ -4,12 +4,34 @@ Schémas Pydantic pour Migration
 Définit les schémas de validation et sérialisation pour l'API REST.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
+import re
+
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional
 from datetime import datetime
 
 from app.models.migration import MigrationStatus as MigrationStatusEnum
 from app.models.migration import MigrationStrategy as MigrationStrategyEnum
+
+
+# Audit B18 — `current_step` est un texte libre alimenté par le worker
+# (ex. "Converting 3 disk(s) (40%)"). Une allowlist de noms d'étapes fixes
+# casserait ces libellés dynamiques ; on impose donc une allowlist de
+# CARACTÈRES : lettres, chiffres, espace et ponctuation descriptive sûre.
+# Cela bloque l'injection de contenu stocké (retours-ligne pour falsifier
+# des logs, balises HTML) sans contraindre les descriptions légitimes.
+_CURRENT_STEP_ALLOWED = re.compile(r"^[A-Za-z0-9 .,:;()/_%+\-]+$")
+
+
+def _validate_current_step(value: str) -> str:
+    """Refuse les caractères de contrôle / d'injection dans `current_step`."""
+    if not _CURRENT_STEP_ALLOWED.fullmatch(value):
+        raise ValueError(
+            "current_step ne peut contenir que lettres, chiffres, espace et "
+            "la ponctuation . , : ; ( ) / _ % + - "
+            "(caractères de contrôle et balises interdits)"
+        )
+    return value
 
 
 # Schéma de base
@@ -68,12 +90,19 @@ class MigrationProgressUpdate(BaseModel):
     transferred_gb: Optional[float] = Field(None, ge=0.0, description="Données transférées en GB")
     transfer_rate_mbps: Optional[float] = Field(None, ge=0.0, description="Vitesse de transfert en Mbps")
 
+    @field_validator("current_step")
+    @classmethod
+    def _check_current_step(cls, v: str) -> str:
+        """Audit B18 — allowlist de caractères pour `current_step`."""
+        return _validate_current_step(v)
+
 
 # Schéma pour la réponse
 class MigrationResponse(MigrationBase):
     """Schéma de réponse complète"""
     id: int
     vm_id: int
+    tenant_id: str  # Audit D8 — lecture seule (traçabilité multi-tenant)
     status: MigrationStatusEnum
     target_namespace: str  # lecture seule — auto-calculé à la création
     scheduled_at: Optional[datetime] = None
@@ -81,14 +110,16 @@ class MigrationResponse(MigrationBase):
     completed_at: Optional[datetime] = None
     progress_percentage: float
     current_step: Optional[str] = None
-    current_step_number: int
+    # Audit D11 — la colonne du modèle porte un défaut Python ; une ligne
+    # fraîche peut exposer None tant que le worker n'a pas encore écrit.
+    current_step_number: Optional[int] = None
     total_steps: int
     success: Optional[bool] = None
     error_message: Optional[str] = None
     error_code: Optional[str] = None
     migration_config: Optional[dict] = None
     source_size_gb: Optional[float] = None
-    transferred_gb: float
+    transferred_gb: Optional[float] = None  # Audit D11 — cf. current_step_number
     transfer_rate_mbps: Optional[float] = None
     target_vm_name: Optional[str] = None
     target_node: Optional[str] = None
@@ -99,6 +130,9 @@ class MigrationResponse(MigrationBase):
     pre_migration_checks: Optional[dict] = None
     post_migration_checks: Optional[dict] = None
     can_rollback: bool
+    # Audit D7 — chemins d'exploitation exposés à l'opérateur via l'API.
+    log_file_path: Optional[str] = None
+    rollback_snapshot_id: Optional[str] = None
     tags: Optional[dict] = None
     notes: Optional[str] = None
     created_at: datetime
@@ -121,6 +155,8 @@ class MigrationListResponse(BaseModel):
     page: int = Field(..., ge=1, description="Page actuelle")
     page_size: int = Field(..., ge=1, le=100, description="Taille de la page")
 
+    model_config = ConfigDict(from_attributes=True)  # Audit D10
+
 
 # Schéma pour rollback
 class MigrationRollback(BaseModel):
@@ -139,3 +175,5 @@ class MigrationStats(BaseModel):
     success_rate: float = Field(..., ge=0.0, le=100.0, description="Taux de succès en %")
     average_duration_seconds: Optional[int] = None
     total_data_transferred_gb: float
+
+    model_config = ConfigDict(from_attributes=True)  # Audit D18

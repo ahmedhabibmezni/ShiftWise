@@ -80,50 +80,10 @@ class ChangePasswordRequest(BaseModel):
     )
 
 
-class ResetPasswordRequest(BaseModel):
-    """
-    Schéma pour la demande de réinitialisation de mot de passe.
-
-    Utilisé lors de POST /api/v1/auth/reset-password/request
-    """
-    email: EmailStr = Field(
-        ...,
-        description="Email de l'utilisateur",
-        json_schema_extra={"example": "ahmed.mezni@nextstep.tn"}
-    )
-
-
-class ResetPasswordConfirm(BaseModel):
-    """
-    Schéma pour la confirmation de réinitialisation de mot de passe.
-
-    Utilisé lors de POST /api/v1/auth/reset-password/confirm
-    """
-    token: str = Field(
-        ...,
-        description="Token de réinitialisation reçu par email",
-        json_schema_extra={"example": "abc123xyz789"}
-    )
-
-    new_password: str = Field(
-        ...,
-        min_length=8,
-        description="Nouveau mot de passe",
-        json_schema_extra={"example": "NewSecurePassword123!"}
-    )
-
-
-class VerifyEmailRequest(BaseModel):
-    """
-    Schéma pour la vérification d'email.
-
-    Utilisé lors de POST /api/v1/auth/verify-email
-    """
-    token: str = Field(
-        ...,
-        description="Token de vérification reçu par email",
-        json_schema_extra={"example": "verify123abc"}
-    )
+# Audit A20 — les schémas ResetPasswordRequest / ResetPasswordConfirm /
+# VerifyEmailRequest ont été retirés : aucun endpoint ne les implémentait
+# (code mort). À ré-introduire en même temps que les endpoints si le flux
+# reset-password / verify-email est livré un jour.
 
 
 class MessageResponse(BaseModel):
