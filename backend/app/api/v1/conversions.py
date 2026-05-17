@@ -73,16 +73,24 @@ def conversion_stats(
     """Statistiques agrégées sur les groupes de conversion. Permissions : conversions:read."""
     tenant_id = _tenant_or_none(current_user)
 
-    counts: dict[ConversionGroupStatus, int] = {}
+    # Audit C13 — un seul GROUP BY plutôt qu'un COUNT par valeur d'enum.
+    from sqlalchemy import func
+    from app.models.conversion import ConversionGroup, ConversionJob
+
+    group_q = db.query(
+        ConversionGroup.status, func.count(ConversionGroup.id),
+    ).group_by(ConversionGroup.status)
+    if tenant_id is not None:
+        group_q = group_q.filter(ConversionGroup.tenant_id == tenant_id)
+    counts: dict[ConversionGroupStatus, int] = {
+        s: 0 for s in ConversionGroupStatus
+    }
     total_groups = 0
-    for s in ConversionGroupStatus:
-        c = crud_conversion.count_groups(db, tenant_id=tenant_id, status=s)
-        counts[s] = c
+    for st, c in group_q.all():
+        counts[st] = c
         total_groups += c
 
-    # Job-level totals — cheap aggregate over READY jobs.
-    from sqlalchemy import func
-    from app.models.conversion import ConversionJob
+    # Job-level totals — cheap aggregate.
     q = db.query(
         func.count(ConversionJob.id),
         func.coalesce(func.sum(ConversionJob.output_size_bytes), 0),

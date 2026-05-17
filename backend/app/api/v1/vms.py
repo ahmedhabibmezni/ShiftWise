@@ -27,8 +27,29 @@ from app.services.analyzer import create_analyzer_service
 from app.services.converter.errors import ConversionError
 from app.services.converter.service import create_converter_service
 from app.crud import conversion as crud_conversion
+from app.tasks.conversion import run_conversion_job  # Audit C18 — import module-level
+from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+
+class VMAnalyzeBatchRequest(BaseModel):
+    """Corps de POST /vms/analyze/batch (Audit C9 / C17).
+
+    Les vm_ids arrivent dans le corps JSON, plus en query param : un client
+    qui envoyait un body JSON était jusque-là silencieusement ignoré.
+    """
+    vm_ids: list[int] = Field(default_factory=list, description="VM IDs à analyser")
+
+
+class VMMigrationsResponse(BaseModel):
+    """Réponse paginée de GET /vms/{id}/migrations (Audit C8 / C19)."""
+    vm_id: int
+    vm_name: str
+    total_migrations: int
+    page: int = Field(..., ge=1)
+    page_size: int = Field(..., ge=1, le=100)
+    migrations: list[MigrationResponse]
 
 
 @router.get("", response_model=VMListResponse)
@@ -163,7 +184,7 @@ def get_compatibility_stats(
 
 @router.post("/analyze/batch")
 def analyze_vms_batch(
-    vm_ids: Annotated[list[int], Query(description="VM IDs to analyze")] = [],
+    payload: VMAnalyzeBatchRequest,
     force: Annotated[bool, Query(description="Re-analyze already-classified VMs")] = False,
     db: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
@@ -171,10 +192,11 @@ def analyze_vms_batch(
     """
     Analyze multiple VMs (batch, synchronous, capped at 20).
 
-    Exceeding 20 IDs returns 422. For true batch async, see Phase 4 (Celery).
+    Les vm_ids arrivent dans le corps JSON (Audit C9). Au-delà de 20 : 422.
 
     **Permissions requises :** vms:update
     """
+    vm_ids = payload.vm_ids
     if len(vm_ids) > 20:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -345,6 +367,21 @@ def convert_vm(
     if vm is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"VM {vm_id} not found")
 
+    # Audit B6 — si la conversion est rattachée à une migration, cette
+    # migration DOIT appartenir au tenant de l'appelant, sinon IDOR
+    # (un tenant référencerait la migration d'un autre).
+    if payload.migration_id is not None:
+        from app.crud import migration as crud_migration
+        linked = crud_migration.get_migration(
+            db, payload.migration_id,
+            tenant_id=None if current_user.is_superuser else tenant_id,
+        )
+        if linked is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"Migration {payload.migration_id} not found",
+            )
+
     converter = create_converter_service()
     try:
         group_id = converter.create_group_for_vm(
@@ -367,7 +404,7 @@ def convert_vm(
 
     # Enqueue one Celery task per disk job. Workers pull from the
     # ``conversions`` queue and drive each job to a terminal state.
-    from app.tasks.conversion import run_conversion_job
+    # (run_conversion_job est importé au niveau module — Audit C18.)
     group = crud_conversion.get_group(db, group_id)
     try:
         for job in group.jobs:
@@ -394,16 +431,19 @@ def convert_vm(
     return ConversionGroupResponse.model_validate(group)
 
 
-@router.get("/{vm_id}/migrations")
+@router.get("/{vm_id}/migrations", response_model=VMMigrationsResponse)
 def get_vm_migrations(
     vm_id: int,
+    skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à ignorer")] = 0,
+    limit: Annotated[int, Query(ge=1, le=100, description="Nombre d'éléments à retourner")] = 50,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None,
+    _migrations_read: Annotated[User, Depends(check_permission("migrations", "read"))] = None,
 ):
     """
-    Récupère l'historique des migrations d'une VM.
+    Historique paginé des migrations d'une VM.
 
-    **Permissions requises :** vms:read, migrations:read
+    **Permissions requises :** vms:read ET migrations:read (Audit B11).
     """
     tenant_id = None if current_user.is_superuser else current_user.tenant_id
     vm = crud_vm.get_vm(db, vm_id, tenant_id=tenant_id)
@@ -414,12 +454,19 @@ def get_vm_migrations(
             detail=f"VM avec l'ID {vm_id} introuvable"
         )
 
-    # Retourner les migrations associées
-    migrations = [MigrationResponse.model_validate(m) for m in vm.migrations]
+    # Audit C8 — pagination au niveau de la requête (plus de chargement
+    # complet de la relation `migrations` en mémoire).
+    from app.models.migration import Migration
+    base = db.query(Migration).filter(Migration.vm_id == vm_id)
+    total = base.count()
+    rows = base.order_by(Migration.id.desc()).offset(skip).limit(limit).all()
+    migrations = [MigrationResponse.model_validate(m) for m in rows]
 
-    return {
-        "vm_id": vm_id,
-        "vm_name": vm.name,
-        "total_migrations": len(migrations),
-        "migrations": migrations
-    }
+    return VMMigrationsResponse(
+        vm_id=vm_id,
+        vm_name=vm.name,
+        total_migrations=total,
+        page=(skip // limit) + 1,
+        page_size=limit,
+        migrations=migrations,
+    )

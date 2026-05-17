@@ -59,7 +59,7 @@ def test_start_reverts_to_pending_when_broker_unreachable(db_session, monkeypatc
     mig = _seed_pending_migration(db_session)
     broker_down = MagicMock()
     broker_down.delay.side_effect = RuntimeError("broker unreachable")
-    monkeypatch.setattr("app.tasks.migration.run_migration", broker_down)
+    monkeypatch.setattr("app.api.v1.migrations.run_migration", broker_down)
 
     with pytest.raises(HTTPException) as exc:
         start_migration(mig.id, db_session, _superuser())
@@ -74,7 +74,7 @@ def test_start_enqueues_and_marks_started_when_broker_up(db_session, monkeypatch
     mig = _seed_pending_migration(db_session)
     fake_task = MagicMock()
     fake_task.delay.return_value.id = "celery-task-xyz"
-    monkeypatch.setattr("app.tasks.migration.run_migration", fake_task)
+    monkeypatch.setattr("app.api.v1.migrations.run_migration", fake_task)
 
     start_migration(mig.id, db_session, _superuser())
 

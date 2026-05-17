@@ -4,16 +4,19 @@ Routes API pour la gestion des Migrations
 Endpoints CRUD pour les migrations de VMs.
 """
 
+import hmac
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Annotated, Optional
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.api.deps import check_permission
+from app.core.celery_app import celery_app
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.virtual_machine import VirtualMachine
@@ -28,10 +31,34 @@ from app.schemas.migration import (
 )
 from app.crud import migration as crud_migration
 from app.crud import vm as crud_vm
+from app.tasks.migration import run_migration
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def require_internal_token(
+        x_internal_token: Annotated[Optional[str], Header()] = None,
+) -> bool:
+    """Authenticate an internal/worker call to a non-public endpoint.
+
+    ``PUT /migrations/{id}/progress`` is driven exclusively by the Celery
+    worker — it must not be reachable by a regular RBAC-authenticated API
+    user (Audit B4 / H-10). The worker and the API process share
+    ``settings.SECRET_KEY``; the worker presents it in the
+    ``X-Internal-Token`` header. Comparison is constant-time.
+
+    Returns ``True`` on success; raises ``401`` otherwise.
+    """
+    if not x_internal_token or not hmac.compare_digest(
+            x_internal_token, settings.SECRET_KEY,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Internal endpoint — valid worker token required",
+        )
+    return True
 
 
 @router.get("", response_model=MigrationListResponse)
@@ -343,7 +370,6 @@ def start_migration(
     # Audit H-18 : si le broker est injoignable, .delay() lève. On remet alors
     # la migration en PENDING pour qu'elle reste re-démarrable, plutôt que de
     # la laisser bloquée en VALIDATING sans tâche associée.
-    from app.tasks.migration import run_migration
     try:
         async_result = run_migration.delay(migration.id)
     except Exception as exc:
@@ -365,7 +391,7 @@ def start_migration(
 @router.post("/{migration_id}/cancel", response_model=MigrationResponse)
 def cancel_migration(
         migration_id: int,
-        cancel_data: MigrationCancel = None,
+        cancel_data: Optional[MigrationCancel] = None,
         db: Annotated[Session, Depends(get_db)] = None,
         current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
 ):
@@ -393,7 +419,6 @@ def cancel_migration(
     # pipeline et écrase le statut CANCELLED, et les ressources K8s fuient.
     # Un échec de révocation (broker injoignable) ne bloque pas l'annulation.
     if migration.celery_task_id:
-        from app.core.celery_app import celery_app
         try:
             celery_app.control.revoke(
                 migration.celery_task_id, terminate=True, signal="SIGTERM",
@@ -421,16 +446,27 @@ def cancel_migration(
 def update_migration_progress(
         migration_id: int,
         progress: MigrationProgressUpdate,
+        internal_ok: Annotated[bool, Depends(require_internal_token)] = False,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
 ):
     """
     Met à jour la progression d'une migration.
 
-    **Permissions requises :** migrations:update
+    **Endpoint interne** — réservé au worker Celery. L'authentification se
+    fait via l'en-tête ``X-Internal-Token`` (Audit B4 / H-10), pas via le
+    RBAC public : un utilisateur de l'API ne doit jamais piloter la
+    progression d'une migration à la main.
     """
-    tenant_id = None if current_user.is_superuser else current_user.tenant_id
-    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
+    # Audit B4 — garde au niveau du corps. require_internal_token (la
+    # dépendance) lève déjà 401 sous FastAPI, mais un appel direct (tests,
+    # réutilisation interne) doit lui aussi être refusé sans jeton valide.
+    if not internal_ok:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Internal endpoint — worker authentication required",
+        )
+    # L'accès interne couvre tous les tenants — le worker n'a pas de tenant.
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=None)
 
     if not migration:
         raise HTTPException(
