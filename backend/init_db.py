@@ -20,12 +20,13 @@ from app.models.role import Role, ROLE_PERMISSIONS
 from app.crud import role as crud_role
 from app.crud import user as crud_user
 
-# S2068 — Les valeurs par défaut sensibles sont isolées en constantes nommées
-# clairement pour signaler qu'elles doivent être changées après la première
-# connexion. Ne jamais les laisser en production.
-DEFAULT_ADMIN_EMAIL = "admin@shiftwise.local"
+# Valeurs par défaut pour l'amorçage interactif. L'email utilise un TLD
+# valide (.io) afin que le compte seedé puisse réellement s'authentifier
+# (audit H-04 — un TLD réservé comme .local est rejeté par EmailStr au
+# login). Il n'existe PAS de mot de passe par défaut : _prompt_password
+# exige une saisie forte (audit H-05).
+DEFAULT_ADMIN_EMAIL = "admin@shiftwise.io"
 DEFAULT_ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_CREDENTIALS = "Admin123!"  # NOSONAR — valeur par défaut documentée, à changer en production
 DEFAULT_TENANT_ID = "system"
 
 
@@ -53,7 +54,11 @@ def _prompt_with_default(prompt: str, default: str) -> str:
 
 def _prompt_password() -> str:
     """
-    Demande un mot de passe valide à l'utilisateur.
+    Demande un mot de passe fort à l'utilisateur.
+
+    Audit H-05 — aucun mot de passe par défaut : la saisie est obligatoire
+    et redemandée jusqu'à obtenir une valeur conforme (bootstrap.py refuse
+    de même côté non-interactif).
 
     S3776 — Logique de validation extraite dans une fonction dédiée
     pour réduire la complexité cognitive de create_superuser.
@@ -62,9 +67,8 @@ def _prompt_password() -> str:
         pwd_input = input("   Mot de passe : ").strip()
 
         if not pwd_input:
-            print("   → Mot de passe par défaut utilisé.")
-            print("   ⚠️  CHANGEZ CE MOT DE PASSE APRÈS LA PREMIÈRE CONNEXION!")
-            return DEFAULT_ADMIN_CREDENTIALS
+            print("   ❌ Le mot de passe est obligatoire (aucune valeur par défaut).")
+            continue
 
         is_valid, error_message = validate_password_strength(pwd_input)
         if is_valid:
