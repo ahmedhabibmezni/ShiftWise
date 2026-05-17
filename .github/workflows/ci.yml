@@ -11,11 +11,34 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Least-privilege default token (G3). Every job inherits read-only access to
+# repo contents; a job that needs more (e.g. packages:write to push an image)
+# must request it explicitly at the job level. This caps the blast radius of
+# a compromised action or dependency.
+permissions:
+  contents: read
+
 # Cancel in-flight runs when a new commit lands on the same ref — saves
 # minutes on rapid pushes during active development.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# ----------------------------------------------------------------------------
+# Action pinning (G4) — supply-chain hardening.
+#
+# Third-party actions below are pinned to immutable PATCH-version tags
+# (e.g. @v4.2.2), NOT moving major tags (@v4). A major tag is repointed by
+# the maintainer on every release and is a supply-chain risk.
+#
+# HARDENING TODO (production): pin each action to its full 40-char commit
+# SHA — a tag, even a patch tag, can in principle be force-moved; a SHA
+# cannot. Resolve the SHA for a given tag with:
+#     gh api repos/actions/checkout/git/refs/tags/v4.2.2 --jq .object.sha
+# then replace `@v4.2.2` with `@<sha>` and keep `# v4.2.2` as a comment.
+# Not done inline here because the exact SHAs could not be verified at
+# authoring time and a wrong SHA would silently pin an unexpected commit.
+# ----------------------------------------------------------------------------
 
 jobs:
   frontend:
@@ -25,10 +48,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.1.0        # v4.1.0 — TODO: pin to commit SHA
         with:
           node-version: "20"
           cache: npm
@@ -43,6 +66,11 @@ jobs:
       - name: Vitest
         run: npx vitest run
 
+      # Dependency vulnerability audit (G21). Fails the build on a HIGH or
+      # CRITICAL advisory in the npm dependency tree.
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+
   backend:
     name: backend · pytest
     runs-on: ubuntu-latest
@@ -55,10 +83,10 @@ jobs:
     env:
       SECRET_KEY: ci-test-secret-32-characters-long
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.3.0      # v5.3.0 — TODO: pin to commit SHA
         with:
           python-version: "3.11"
           cache: pip
@@ -92,3 +120,90 @@ jobs:
             tests/test_login_audit.py \
             tests/test_login_throttle.py \
             --tb=short -v
+
+  backend-audit:
+    name: backend · pip-audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5.3.0      # v5.3.0 — TODO: pin to commit SHA
+        with:
+          python-version: "3.11"
+
+      # Dependency vulnerability audit (G5). pip-audit checks the resolved
+      # requirements against the PyPI Advisory + OSV databases. Run as a
+      # separate job so a CVE surfaces independently of the unit-test result.
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit --requirement requirements.txt --strict --desc
+
+  image:
+    name: image · build + scan
+    # Only on a push to main — building/scanning the container image on every
+    # PR would be wasteful. Gated so feature branches stay fast (G22).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # packages: write     # uncomment when the registry push below is enabled
+    steps:
+      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+
+      # Build the runtime image locally (no push). `load: true` keeps it in
+      # the local docker daemon so the scanner can read it.
+      # PYTHON_BASE — pin the Python base image by digest (G10). Set the repo
+      # variable PYTHON_BASE_PINNED to `python:3.11-slim@sha256:<digest>` so
+      # production builds are reproducible; falls back to the mutable tag if
+      # the variable is unset.
+      - name: Build backend image
+        uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: shiftwise-backend:ci-${{ github.sha }}
+          build-args: |
+            PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
+
+      # Vulnerability scan of the built image (G22). Fails the job on a
+      # HIGH/CRITICAL OS- or library-level CVE so a vulnerable image never
+      # reaches the registry.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0   # 0.28.0 — TODO: pin to commit SHA
+        with:
+          image-ref: shiftwise-backend:ci-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      # Registry push — STUB. Enable once registry credentials exist as repo
+      # secrets and an immutable tag scheme (v<semver>) replaces `:latest`.
+      # Uncomment `packages: write` in this job's `permissions` block too.
+      # - name: Log in to registry
+      #   uses: docker/login-action@v3.3.0       # v3.3.0 — TODO: pin to commit SHA
+      #   with:
+      #     registry: docker.io
+      #     username: ${{ secrets.REGISTRY_USERNAME }}
+      #     password: ${{ secrets.REGISTRY_TOKEN }}
+      # - name: Build + push immutable tag
+      #   uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+      #   with:
+      #     context: backend
+      #     file: backend/Dockerfile
+      #     push: true
+      #     tags: docker.io/dida1609/shiftwise-backend:v${{ github.run_number }}
+      #     build-args: |
+      #       PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
+      - name: Registry push (stub)
+        run: |
+          echo "Image build + scan passed."
+          echo "Registry push is stubbed — enable the docker/login-action +"
+          echo "build-push-action steps above and add REGISTRY_* secrets."
