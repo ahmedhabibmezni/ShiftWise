@@ -1,0 +1,28 @@
+# ShiftWise - Development & test dependencies
+#
+# Audit G23 — these tools must NOT ship in the production image. Install
+# them only in dev / CI:
+#
+#     pip install -r requirements.txt -r requirements-dev.txt
+#
+# The production image installs requirements.txt alone.
+
+# Pull in the runtime dependencies so a single `pip install -r
+# requirements-dev.txt` gives a complete dev environment.
+-r requirements.txt
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+# Audit J3 — pytest-cov makes the >80% coverage target measurable
+# (`pytest --cov=app --cov-report=term-missing`).
+pytest-cov==6.0.0
+httpx==0.26.0
+# In-memory Redis used by the login-throttle + auth-store tests so the
+# CI suite doesn't need a live Redis broker.
+fakeredis==2.21.3
+
+# Linting & type checking
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
