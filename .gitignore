@@ -6,6 +6,10 @@
 .env.*.local
 *.env
 
+# Filled secret overlays — templates such as secrets.example.yaml stay tracked
+secrets.local.yaml
+secrets.local.yml
+
 # Python
 __pycache__/
 *.py[cod]
@@ -58,6 +62,7 @@ tmp/
 CLAUDE.md
 NEXT_STEPS.md
 Shiftwise_session_handoff.md
+WARP.md
 *_session_handoff.md
 commit_rules.md
 start.txt
@@ -71,6 +76,7 @@ screenshots/
 .agents/
 .impeccable/
 .kiro/
+.mcp.json
 .qoder/
 .qwen/
 .windsurf/
