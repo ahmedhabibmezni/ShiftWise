@@ -26,11 +26,13 @@ from app.core.login_throttle import (
     record_failure,
     reset as reset_throttle,
 )
+from app.core import refresh_token_store
 from app.core.refresh_token_store import (
     RotateOk,
     RotateReuseDetected,
     RotateUnknown,
     create_family,
+    family_user_id,
     revoke_family,
     rotate,
 )
@@ -132,6 +134,31 @@ def _rotate_refresh(family_id: str, jti: str, user_id: int) -> str:
     )
 
 
+def _revoke_all_refresh_families(user_id: int) -> int:
+    """Revoke every refresh-token family owned by `user_id`.
+
+    Audit A-15 — a password change must invalidate every outstanding
+    session. The family store has no user→family index, so we scan the
+    `<prefix><family>:meta` keys (one per family, short-lived) and revoke
+    the families whose meta `user_id` matches. Returns the family count.
+
+    The scan reuses the store's own Redis handle (and is patched together
+    with it in tests), so it stays consistent with the store keyspace.
+    """
+    redis = refresh_token_store.get_redis()
+    meta_pattern = f"{refresh_token_store._FAM_PREFIX}*:meta"
+    revoked = 0
+    for meta_key in redis.scan_iter(match=meta_pattern, count=100):
+        owner = redis.hget(meta_key, "user_id")
+        if owner is None or int(owner) != user_id:
+            continue
+        # Key shape: "<prefix><family_id>:meta" — strip the fixed bookends.
+        family_id = meta_key[len(refresh_token_store._FAM_PREFIX):-len(":meta")]
+        revoke_family(family_id)
+        revoked += 1
+    return revoked
+
+
 def _client_ip(request: Request) -> str | None:
     """Return the client IP for audit-trail purposes.
 
@@ -178,26 +205,19 @@ def login(
         email=login_data.email,
         password=login_data.password,
     )
-    if not user:
-        # Wrong email OR wrong password — both count toward the lockout.
-        # Same key (lowercased email) regardless of whether the email
-        # actually exists, so a probe attack can't enumerate accounts by
-        # comparing throttle behaviour.
+    # Audit A-09 — user-enumeration hardening: wrong email, wrong password
+    # AND inactive account all return the SAME 401 with the SAME body and
+    # NO distinguishing header. An attacker probing /login cannot tell a
+    # non-existent account from a disabled one from a bad password.
+    if not user or not user.is_active:
+        # Every rejected attempt feeds the lockout counter on the same key
+        # (lowercased email) regardless of the rejection reason, so the
+        # throttle behaviour can't be used as an oracle either.
         record_failure(login_data.email, ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=CREDENTIALS_INVALID_MSG,
             headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not user.is_active:
-        # Inactive accounts also feed the counter so an attacker can't
-        # use a deactivated account to probe whether their target user
-        # still exists.
-        record_failure(login_data.email, ip)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ACCOUNT_INACTIVE_MSG,
-            headers=INACTIVE_ACCOUNT_HEADERS,
         )
 
     # Genuine success — clear both throttle buckets so the operator
@@ -289,13 +309,22 @@ def logout(
 
     Volontairement non authentifié (pas de dépendance sur l'access token) :
     permet un logout cohérent même si l'access est déjà expiré.
+
+    Audit A-18 — la famille n'est révoquée que si le cookie en prouve la
+    propriété : le `sub` du JWT doit correspondre au propriétaire enregistré
+    de la famille. Sans cette vérification, un JWT forgé (`sub` quelconque,
+    `fam` = famille d'une victime) permettrait de déconnecter un tiers (DoS).
+    Le cookie est effacé dans tous les cas — un logout ne doit jamais échouer.
     """
     if refresh_cookie:
         payload = decode_token(refresh_cookie)
         if payload and verify_token_type(payload, "refresh"):
             family_id = payload.get("fam")
-            if family_id:
-                revoke_family(family_id)
+            subject = payload.get("sub")
+            if family_id and subject is not None:
+                owner_id = family_user_id(family_id)
+                if owner_id is not None and str(owner_id) == str(subject):
+                    revoke_family(family_id)
 
     _clear_refresh_cookie(response)
     return MessageResponse(message="Déconnexion réussie", success=True)
@@ -338,6 +367,13 @@ def change_password(
 
     current_user.hashed_password = get_password_hash(password_data.new_password)
     db.commit()
+
+    # Audit A-15 — a password change must terminate every other session:
+    # revoke all the user's refresh-token families so a stolen refresh
+    # token (the credential a password change is meant to neutralise)
+    # can no longer be rotated into fresh access tokens.
+    _revoke_all_refresh_families(current_user.id)
+
     return MessageResponse(
         message="Mot de passe modifié avec succès",
         success=True,

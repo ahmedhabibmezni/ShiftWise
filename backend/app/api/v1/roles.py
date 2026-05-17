@@ -27,17 +27,14 @@ from app.schemas.role import (
 )
 from app.schemas.auth import MessageResponse
 from app.crud import role as crud_role
-from app.api.deps import (
-    get_current_user,
-    get_current_superuser,
-    check_permission
-)
+from app.api.deps import check_permission
 from app.models.user import User
 
 router = APIRouter()
 
-# S1192 — Constante pour éviter la duplication du littéral
+# S1192 — Constantes pour éviter la duplication des littéraux
 ROLE_NOT_FOUND = "Rôle non trouvé"
+SYSTEM_ROLE_IMMUTABLE = "Les rôles système ne peuvent pas être modifiés ou supprimés"
 
 
 @router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
@@ -90,12 +87,12 @@ def create_role(
 
 @router.get("", response_model=list[RoleRead])
 def list_roles(
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))],
         skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à sauter")] = 0,
         limit: Annotated[int, Query(ge=1, le=1000, description="Nombre d'éléments à retourner")] = 100,
         is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
         search: Annotated[Optional[str], Query(description="Rechercher dans nom et description")] = None,
-        db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))] = None
 ):
     """
     Liste tous les rôles avec pagination et filtres.
@@ -139,15 +136,23 @@ def list_roles(
         search=search
     )
 
+    # Audit B-13 — fuite inter-tenant : le modèle Role ne porte pas de
+    # `tenant_id`, donc un rôle personnalisé ne peut pas être rattaché à un
+    # tenant. Tant que cette colonne n'existe pas, un non-superuser ne voit
+    # que les rôles système (globaux par conception) — jamais les rôles
+    # personnalisés d'autres tenants. Le superuser garde la vue complète.
+    if not current_user.is_superuser:
+        roles = [role for role in roles if role.is_system_role]
+
     return roles
 
 
 @router.get("/count")
 def count_roles(
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission("roles", "read"))],
         is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
         search: Annotated[Optional[str], Query(description="Rechercher")] = None,
-        db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))] = None
 ):
     """
     Compte le nombre total de rôles.
@@ -212,12 +217,12 @@ def get_role_by_name(
 @router.post("/init-system-roles", response_model=MessageResponse)
 def initialize_system_roles(
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(get_current_superuser)]
+        current_user: Annotated[User, Depends(check_permission("roles", "create"))]
 ):
     """
     Initialise les rôles système prédéfinis.
 
-    **Permissions requises :** Superuser uniquement
+    **Permissions requises :** `roles:create` (le superuser l'a toujours)
 
     Crée les rôles système s'ils n'existent pas :
     - super_admin : Accès complet au système
@@ -388,6 +393,23 @@ def update_role(
     }
     ```
     """
+    role = crud_role.get_role(db, role_id)
+
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ROLE_NOT_FOUND
+        )
+
+    # Audit B-16 : modifier un rôle système est interdit — 403 (interdiction
+    # d'autorisation), pas 400. La requête est bien formée ; c'est la cible
+    # qui est protégée.
+    if role.is_system_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=SYSTEM_ROLE_IMMUTABLE
+        )
+
     try:
         updated_role = crud_role.update_role(db, role_id, role_update)
     except ValueError as e:
@@ -441,6 +463,13 @@ def delete_role(
             detail=ROLE_NOT_FOUND
         )
 
+    # Audit B-16 : supprimer un rôle système est interdit — 403, pas 400.
+    if role.is_system_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=SYSTEM_ROLE_IMMUTABLE
+        )
+
     try:
         deleted = crud_role.delete_role(db, role_id)
 
@@ -456,6 +485,8 @@ def delete_role(
         )
 
     except ValueError as e:
+        # Filet de sécurité : autres ValueError (ex. rôle encore assigné à
+        # des utilisateurs) restent un 400 — la cause est dans la requête.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)

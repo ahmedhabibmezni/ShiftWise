@@ -412,10 +412,12 @@ def delete_user(
     DELETE /api/v1/users/5
     ```
     """
-    # Impossible de se supprimer soi-même
+    # Impossible de se supprimer soi-même.
+    # Audit B-23 : un refus de cette opération est une interdiction
+    # d'autorisation — 403, pas 400 (la requête est bien formée).
     if user_id == current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Impossible de supprimer votre propre compte"
         )
 
@@ -550,6 +552,17 @@ def remove_role_from_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=USER_ACCESS_DENIED
             )
+
+    # Audit B-10 : refuser de laisser un compte sans aucun rôle. Un
+    # utilisateur sans rôle perd toute permission et devient ingérable via
+    # l'API (plus aucune route protégée n'est accessible). La garde ne se
+    # déclenche que si le rôle visé est bien le dernier réellement attaché.
+    current_role_ids = {role.id for role in user.roles}
+    if role_id in current_role_ids and len(current_role_ids) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Impossible de retirer le dernier rôle d'un utilisateur"
+        )
 
     # Retirer le rôle
     updated_user = crud_user.remove_role_from_user(db, user_id, role_id)

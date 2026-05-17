@@ -134,9 +134,9 @@ def test_failed_login_leaves_audit_columns_untouched(db_session, alice):
 
 
 def test_inactive_account_does_not_stamp_audit_columns(db_session, alice):
-    """Inactive accounts return 403 — we shouldn't reward a half-success
-    by stamping the audit trail (it would otherwise mask a brute-force
-    attempt against a disabled account)."""
+    """Inactive accounts return 401 — identical to a bad-credentials reply,
+    so the login response is not an account-status oracle (audit A9). The
+    audit trail must still not be stamped on this non-login."""
     alice.is_active = False
     db_session.commit()
 
@@ -148,7 +148,7 @@ def test_inactive_account_does_not_stamp_audit_columns(db_session, alice):
         json={"email": alice.email, "password": "CorrectHorse9!"},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
     db_session.refresh(alice)
     assert alice.last_login_at is None
     assert alice.last_login_ip is None

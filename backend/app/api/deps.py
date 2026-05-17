@@ -10,7 +10,7 @@ Dépendances FastAPI pour :
 Ces dépendances sont utilisées dans les routes avec Depends().
 """
 
-from typing import Generator, Optional
+from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -23,10 +23,13 @@ from app.crud import user as crud_user
 # Security scheme pour JWT Bearer Token
 security = HTTPBearer()
 
+# S1192 — header WWW-Authenticate réutilisé sur chaque 401 d'authentification.
+_WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
+
 
 def get_current_user(
-        db: Session = Depends(get_db),
-        credentials: HTTPAuthorizationCredentials = Depends(security)
+        db: Annotated[Session, Depends(get_db)],
+        credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> User:
     """
     Récupère l'utilisateur actuellement authentifié.
@@ -41,13 +44,13 @@ def get_current_user(
         User: Utilisateur authentifié
 
     Raises:
-        HTTPException 401: Si token invalide ou expiré
-        HTTPException 404: Si utilisateur non trouvé
+        HTTPException 401: Si token invalide/expiré, utilisateur introuvable
+            ou compte inactif
         HTTPException 403: Si utilisateur inactif
 
     Usage dans une route:
         @router.get("/me")
-        def get_me(current_user: User = Depends(get_current_user)):
+        def get_me(current_user: Annotated[User, Depends(get_current_user)]):
             return current_user
     """
     # Récupérer le token depuis l'en-tête Authorization
@@ -60,7 +63,7 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalide ou expiré",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers=_WWW_AUTHENTICATE,
         )
 
     # Vérifier que c'est un access token
@@ -68,7 +71,7 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Type de token invalide",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers=_WWW_AUTHENTICATE,
         )
 
     # Récupérer l'user_id depuis le payload
@@ -78,7 +81,7 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalide",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers=_WWW_AUTHENTICATE,
         )
 
     # Convertir l'ID — un sub non numérique indique un JWT corrompu
@@ -88,16 +91,20 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalide — identifiant utilisateur malformé",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers=_WWW_AUTHENTICATE,
         )
 
     # Récupérer l'utilisateur depuis la BDD
     user = crud_user.get_user(db, user_id=user_id_int)
 
     if user is None:
+        # Audit C-16 : un compte supprimé entre l'émission du token et son
+        # usage retourne un 401 générique — surtout pas un 404, qui
+        # confirmerait l'inexistence d'un id et permettrait l'énumération.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Utilisateur non trouvé"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalide ou expiré",
+            headers=_WWW_AUTHENTICATE,
         )
 
     # Vérifier que l'utilisateur est actif
@@ -115,7 +122,7 @@ def get_current_user(
 
 
 def get_current_active_user(
-        current_user: User = Depends(get_current_user)
+        current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """
     Alias pour get_current_user (pour compatibilité).
@@ -132,7 +139,7 @@ def get_current_active_user(
 
 
 def get_current_superuser(
-        current_user: User = Depends(get_current_user)
+        current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """
     Vérifie que l'utilisateur actuel est un superuser.
@@ -150,7 +157,7 @@ def get_current_superuser(
         @router.delete("/users/{user_id}")
         def delete_user(
             user_id: int,
-            current_user: User = Depends(get_current_superuser)
+            current_user: Annotated[User, Depends(get_current_superuser)],
         ):
             # Seulement les superusers peuvent accéder
     """
@@ -183,13 +190,13 @@ def check_permission(resource: str, action: str):
         @router.post("/vms")
         def create_vm(
             vm_data: VMCreate,
-            current_user: User = Depends(check_permission("vms", "create"))
+            current_user: Annotated[User, Depends(check_permission("vms", "create"))],
         ):
             # Seulement si l'utilisateur a la permission vms:create
     """
 
     def permission_checker(
-            current_user: User = Depends(get_current_user)
+            current_user: Annotated[User, Depends(get_current_user)],
     ) -> User:
         """Vérifie la permission pour l'utilisateur actuel"""
 
@@ -211,7 +218,7 @@ def check_permission(resource: str, action: str):
 
 
 def get_current_user_tenant(
-        current_user: User = Depends(get_current_user)
+        current_user: Annotated[User, Depends(get_current_user)],
 ) -> str:
     """
     Récupère le tenant_id de l'utilisateur actuel.
@@ -237,8 +244,8 @@ def get_current_user_tenant(
 
 
 def validate_kubevirt_namespace(
+        current_user: Annotated[User, Depends(get_current_user)],
         namespace: str | None = None,
-        current_user: User = Depends(get_current_user)
 ) -> str:
     """
     Valide que le namespace demandé appartient au tenant de l'utilisateur.
@@ -284,7 +291,7 @@ class PermissionChecker:
 
         @router.get("/vms")
         def get_vms(
-            current_user: User = Depends(permission_checker)
+            current_user: Annotated[User, Depends(permission_checker)],
         ):
             ...
     """
@@ -298,7 +305,10 @@ class PermissionChecker:
         """
         self.permissions = permissions
 
-    def __call__(self, current_user: User = Depends(get_current_user)) -> User:
+    def __call__(
+            self,
+            current_user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
         """
         Vérifie que l'utilisateur a au moins une des permissions.
 
