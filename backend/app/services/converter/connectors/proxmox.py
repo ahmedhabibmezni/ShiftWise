@@ -18,6 +18,8 @@ snapshot for safe live copy and we punt on that until tested.
 from __future__ import annotations
 
 import logging
+import re
+import shlex
 from pathlib import Path
 from typing import List, Optional
 
@@ -42,6 +44,20 @@ logger = logging.getLogger(__name__)
 _DISK_KEYS = ("scsi", "virtio", "sata", "ide")
 # ``ide2: ...media=cdrom`` etc. — never pull
 _NON_DISK_HINT = "media=cdrom"
+
+# Audit H-01 : un volid PVE est de la forme `storage:identifiant`. On le
+# restreint à un jeu de caractères sûr afin qu'il ne puisse pas s'échapper
+# de la commande shell distante `pvesm path <volid>`.
+_VOLID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*")
+
+
+def _validate_volid(volid: str) -> None:
+    """Rejette un identifiant de volume qui n'est pas un volid PVE simple."""
+    if not volid or not _VOLID_RE.fullmatch(volid):
+        raise ConversionError(
+            "ERR_DISK_NOT_FOUND",
+            f"identifiant de volume Proxmox invalide : {volid!r}",
+        )
 
 
 def _parse_disk_entry(entry: str) -> Optional[tuple[str, dict[str, str]]]:
@@ -212,6 +228,7 @@ class ProxmoxPuller:
     @staticmethod
     def _resolve_volume_path(hv: Hypervisor, node: str, volid: str) -> str:
         """Run ``pvesm path <volid>`` on ``node`` over SSH to get the FS path."""
+        _validate_volid(volid)  # Audit H-01 — refuse toute injection shell
         try:
             import paramiko  # type: ignore
         except ImportError as e:
@@ -242,7 +259,7 @@ class ProxmoxPuller:
 
         try:
             _stdin, stdout, stderr = ssh.exec_command(
-                f"pvesm path {volid}",
+                f"pvesm path {shlex.quote(volid)}",
                 timeout=15,
             )
             path = stdout.read().decode("utf-8", errors="replace").strip()
