@@ -9,7 +9,7 @@ Ce module gère :
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from jose import jwt, JWTError
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -197,7 +197,7 @@ def decode_token(token: str) -> Optional[dict]:
             algorithms=[settings.ALGORITHM]
         )
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 
