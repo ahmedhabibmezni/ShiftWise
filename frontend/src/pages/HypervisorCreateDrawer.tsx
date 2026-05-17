@@ -91,7 +91,6 @@ export function HypervisorCreateDrawer({
   const {
     register,
     handleSubmit,
-    reset,
     watch,
     setValue,
     formState: { errors, isSubmitting },
@@ -111,12 +110,8 @@ export function HypervisorCreateDrawer({
 
   const selectedType = watch("type");
 
-  useEffect(() => {
-    if (!open) {
-      reset();
-      setTestResult(null);
-    }
-  }, [open, reset]);
+  // No reset-on-close effect: the parent remounts this drawer via a `key`
+  // on every open, so the form and test-connection result start blank.
 
   useEffect(() => {
     setValue("port", DEFAULT_PORT[selectedType]);

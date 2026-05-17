@@ -1,4 +1,4 @@
-import { ChevronRight, Cpu, Plug, RefreshCw, Rocket, ScanSearch } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment } from "react";
 import { cn } from "@/lib/cn";
@@ -15,18 +15,6 @@ export type PipelineStageData = {
   progress?: number;
   state: PipelineStageState;
 };
-
-/**
- * Default 5-stage migration pipeline used on the Migrations page.
- * Callers can provide their own array of stages for other contexts.
- */
-export const DEFAULT_PIPELINE_STAGES: PipelineStageData[] = [
-  { key: "discover", label: "Discovery", icon: ScanSearch, count: 0, state: "pending" },
-  { key: "analyze",  label: "Analyzer",  icon: Cpu,        count: 0, state: "pending" },
-  { key: "convert",  label: "Converter", icon: RefreshCw,  count: 0, state: "pending" },
-  { key: "adapt",    label: "Adapter",   icon: Plug,       count: 0, state: "pending" },
-  { key: "migrate",  label: "Migrator",  icon: Rocket,     count: 0, state: "pending" },
-];
 
 /**
  * Migration pipeline stage strip.

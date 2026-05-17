@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -86,7 +86,6 @@ export function UserCreateDrawer({
   const {
     register,
     handleSubmit,
-    reset,
     formState: { errors, isSubmitting },
   } = useForm<CreateFormValues>({
     resolver: zodResolver(createSchema),
@@ -102,9 +101,8 @@ export function UserCreateDrawer({
     },
   });
 
-  useEffect(() => {
-    if (!open) reset();
-  }, [open, reset]);
+  // No reset effect: the parent remounts this drawer via a `key` on every
+  // open, so the form starts blank each time.
 
   const mutation = useMutation({
     mutationFn: (values: CreateFormValues) =>

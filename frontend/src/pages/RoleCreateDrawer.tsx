@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -66,19 +66,14 @@ export function RoleCreateDrawer({
   const {
     register,
     handleSubmit,
-    reset,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { name: "", description: "", is_active: true },
   });
 
-  useEffect(() => {
-    if (!open) {
-      reset();
-      setPermissions({});
-    }
-  }, [open, reset]);
+  // No reset effect: the parent remounts this drawer via a `key` on every
+  // open, so the form and permissions matrix start blank each time.
 
   const createMutation = useMutation({
     mutationFn: (values: FormValues) =>

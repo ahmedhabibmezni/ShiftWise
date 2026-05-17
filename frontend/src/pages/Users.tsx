@@ -128,8 +128,18 @@ export default function Users() {
         onChange={setPage}
       />
 
-      <UserCreateDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
-      <UserDetailDrawer id={selectedId} onClose={() => setSelectedId(null)} />
+      {/* `key` per open/selected id remounts each drawer so its internal
+          form / edit state starts fresh — no reset effect needed. */}
+      <UserCreateDrawer
+        key={createOpen ? "open" : "closed"}
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
+      <UserDetailDrawer
+        key={selectedId ?? "none"}
+        id={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   );
 }

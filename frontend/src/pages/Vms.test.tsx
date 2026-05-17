@@ -69,6 +69,16 @@ function makeVm(over: Partial<Vm> = {}): Vm {
   };
 }
 
+function mockVmStats() {
+  return http.get("/api/v1/vms/stats/summary", () =>
+    HttpResponse.json({
+      total: 0,
+      by_status: {},
+      by_compatibility: {},
+    }),
+  );
+}
+
 function mockHypervisorsAll() {
   return http.get("/api/v1/hypervisors", () =>
     HttpResponse.json({
@@ -130,6 +140,7 @@ describe("Vms page", () => {
 
   it("renders rows with status + compatibility badges", async () => {
     server.use(
+      mockVmStats(),
       mockHypervisorsAll(),
       http.get("/api/v1/vms", () =>
         HttpResponse.json({
@@ -159,6 +170,7 @@ describe("Vms page", () => {
   it("forwards compatibility filter to the API", async () => {
     const captured: string[] = [];
     server.use(
+      mockVmStats(),
       mockHypervisorsAll(),
       http.get("/api/v1/vms", ({ request }) => {
         captured.push(new URL(request.url).search);
@@ -204,6 +216,7 @@ describe("Vms page", () => {
     };
 
     server.use(
+      mockVmStats(),
       mockHypervisorsAll(),
       http.get("/api/v1/vms", () =>
         HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [vm] }),
@@ -225,15 +238,21 @@ describe("Vms page", () => {
 
     await user.click(within(dialog).getByRole("button", { name: /^analyze$/i }));
 
+    // The analyzer grade surfaces as the "Incompatible" compatibility badge
+    // (hero + analyzer panel). Asserting on the blocker copy below confirms
+    // the analyzer result actually rendered, not just a stale badge.
     await waitFor(() => {
-      expect(within(dialog).getByText("INCOMPATIBLE")).toBeInTheDocument();
+      expect(
+        within(dialog).getByText(/os family not supported/i),
+      ).toBeInTheDocument();
     });
-    expect(within(dialog).getByText(/os family not supported/i)).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/^incompatible$/i).length).toBeGreaterThan(0);
     expect(within(dialog).getByText(/memory below recommended/i)).toBeInTheDocument();
   });
 
   it("surfaces an error banner when the list fails", async () => {
     server.use(
+      mockVmStats(),
       mockHypervisorsAll(),
       http.get("/api/v1/vms", () =>
         HttpResponse.json({ detail: "boom" }, { status: 500 }),
@@ -256,6 +275,7 @@ describe("Vms page", () => {
 
     const vm = makeVm({ id: 4, name: "viewer-vm" });
     server.use(
+      mockVmStats(),
       mockHypervisorsAll(),
       http.get("/api/v1/vms", () =>
         HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [vm] }),

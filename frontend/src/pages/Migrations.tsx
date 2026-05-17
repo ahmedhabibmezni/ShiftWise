@@ -47,7 +47,7 @@ import {
 } from "@/api/migrations";
 import { listVms, type Vm } from "@/api/vms";
 import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
-import { formatNumber, formatRelativeTime } from "@/lib/format";
+import { formatDuration, formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { MigrationCreateDrawer } from "./MigrationCreateDrawer";
 import { MigrationDetailDrawer } from "./MigrationDetailDrawer";
@@ -65,19 +65,6 @@ const STAGE_BLURB: Record<string, string> = {
   adapt: "Guest OS fixups",
   migrate: "Boots on KubeVirt",
 };
-
-function formatDuration(seconds: number): string {
-  if (!seconds || seconds < 0) return "—";
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return s > 0 ? `${m}m ${s}s` : `${m}m`;
-  }
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
 
 export default function Migrations() {
   const [page, setPage] = useState(1);
@@ -273,12 +260,19 @@ export default function Migrations() {
         onChange={setPage}
       />
 
+      {/* `key` per open/selected id remounts each drawer so its internal
+          state (confirm dialogs, form fields) starts fresh on every open. */}
       <MigrationDetailDrawer
+        key={selectedId ?? "none"}
         id={selectedId}
         onClose={() => setSelectedId(null)}
         vms={vmsQuery.data?.items ?? []}
       />
-      <MigrationCreateDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
+      <MigrationCreateDrawer
+        key={createOpen ? "open" : "closed"}
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </div>
   );
 }
@@ -588,5 +582,3 @@ function Pagination({
     </div>
   );
 }
-
-export { formatDuration };

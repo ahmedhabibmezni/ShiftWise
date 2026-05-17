@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, type LucideIcon } from "lucide-react";
@@ -49,9 +49,6 @@ export function ConfirmDialog({
   // The keydown handler is registered once per open; mirror `loading` into a
   // ref so it reads the live value without re-installing the listener.
   const loadingRef = useRef(loading);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -106,8 +103,6 @@ export function ConfirmDialog({
       if (prevFocus && document.contains(prevFocus)) prevFocus.focus();
     };
   }, [open, onClose]);
-
-  if (!mounted) return null;
 
   const overlay = (
     <div

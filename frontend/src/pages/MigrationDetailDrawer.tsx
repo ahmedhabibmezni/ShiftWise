@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Ban, ListTree, Play, ScrollText } from "lucide-react";
@@ -23,10 +23,9 @@ import {
   type Migration,
 } from "@/api/migrations";
 import type { Vm } from "@/api/vms";
-import { formatRelativeTime } from "@/lib/format";
+import { formatDuration, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import type { ApiError } from "@/api/types";
-import { formatDuration } from "./Migrations";
 
 const PIPELINE_STEPS = [
   { key: "validating",  label: "Validate" },
@@ -60,11 +59,9 @@ export function MigrationDetailDrawer({
   const queryClient = useQueryClient();
   const open = id !== null;
   const canControl = useHasPermission("migrations", "update");
+  // The parent remounts this drawer via a `key` per selected id, so
+  // `confirmCancel` starts false on every open — no reset effect needed.
   const [confirmCancel, setConfirmCancel] = useState(false);
-
-  useEffect(() => {
-    if (!open) setConfirmCancel(false);
-  }, [open]);
 
   const detailQuery = useQuery({
     queryKey: ["migration", id],

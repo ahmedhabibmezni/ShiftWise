@@ -14,9 +14,22 @@ export type CsvColumn<T> = {
   value: (row: T) => string | number | boolean | null | undefined;
 };
 
+// Leading characters that a spreadsheet (Excel, Google Sheets, LibreOffice)
+// treats as the start of a formula. A crafted cell such as
+// `=HYPERLINK("http://evil")` or `=cmd|'/c calc'!A1` would execute on open —
+// CSV injection. Tab and CR are included because Excel strips them and then
+// re-evaluates the remainder.
+const FORMULA_TRIGGERS = new Set(["=", "+", "-", "@", "\t", "\r"]);
+
 function escapeCell(raw: unknown): string {
   if (raw === null || raw === undefined) return "";
-  const s = String(raw);
+  let s = String(raw);
+  // Formula-injection neutralisation: prefix a single quote so the cell is
+  // forced to text. Done before RFC-4180 quoting so the quote ends up inside
+  // the double-quotes when the cell also needs quoting.
+  if (s.length > 0 && FORMULA_TRIGGERS.has(s[0])) {
+    s = `'${s}`;
+  }
   // RFC 4180: a field containing a comma, double-quote or line-break must
   // be wrapped in double quotes; any embedded double-quote is doubled.
   if (/[",\r\n]/.test(s)) {

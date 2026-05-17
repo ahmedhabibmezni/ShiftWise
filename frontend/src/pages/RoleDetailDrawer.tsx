@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Ban, CheckCircle2, Lock, Pencil, Save, Trash2, Users as UsersIcon } from "lucide-react";
@@ -65,23 +65,20 @@ export function RoleDetailDrawer({
     staleTime: 60 * 60_000,
   });
 
-  // Reset the draft whenever the drawer closes / opens / loads a new role.
-  // Editing a custom role is opt-in via the Edit button; system roles can
-  // never enter edit mode.
-  useEffect(() => {
-    if (!detailQuery.data) return;
-    setDraftName(detailQuery.data.name);
-    setDraftDescription(detailQuery.data.description ?? "");
-    setDraftPermissions(detailQuery.data.permissions ?? {});
-    setDraftActive(detailQuery.data.is_active);
-  }, [detailQuery.data]);
-
-  useEffect(() => {
-    if (!open) {
-      setEditing(false);
-      setConfirmDelete(false);
-    }
-  }, [open]);
+  // Seed the draft from the loaded role and enter edit mode. Done in the
+  // click handler (not an effect) so the draft is always a fresh snapshot
+  // of the server state at the moment editing begins. The parent remounts
+  // this drawer via a `key` per selected id, so no close-time reset is
+  // needed — `editing`/`confirmDelete` start false on every open.
+  const enterEditMode = () => {
+    const data = detailQuery.data;
+    if (!data) return;
+    setDraftName(data.name);
+    setDraftDescription(data.description ?? "");
+    setDraftPermissions(data.permissions ?? {});
+    setDraftActive(data.is_active);
+    setEditing(true);
+  };
 
   const updateMutation = useMutation({
     mutationFn: () =>
@@ -154,7 +151,7 @@ export function RoleDetailDrawer({
                 {editable && (
                   <Button
                     variant="primary"
-                    onClick={() => setEditing(true)}
+                    onClick={enterEditMode}
                     leadingIcon={<Icon icon={Pencil} size={14} />}
                   >
                     Edit

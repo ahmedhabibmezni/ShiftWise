@@ -22,7 +22,12 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { StackedBar } from "@/components/ui/StackedBar";
 import { Table, TD, TH, THead, TR } from "@/components/ui/Table";
-import { formatNumber, formatRelativeTime } from "@/lib/format";
+import {
+  formatDuration,
+  formatGB,
+  formatNumber,
+  formatRelativeTime,
+} from "@/lib/format";
 import { downloadCsv, rowsToCsv, type CsvColumn } from "@/lib/csv";
 import {
   MIGRATION_STATUSES,
@@ -35,25 +40,6 @@ import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
 
 const REPORT_PAGE_SIZE = 100;
 const REFETCH_MS = 60_000;
-
-function formatDuration(seconds: number): string {
-  if (!seconds || seconds < 0) return "—";
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return s > 0 ? `${m}m ${s}s` : `${m}m`;
-  }
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
-
-function formatGB(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (value >= 1) return `${value.toFixed(1)} GB`;
-  return `${(value * 1024).toFixed(0)} MB`;
-}
 
 export default function Reports() {
   const statsQuery = useQuery<MigrationStats>({

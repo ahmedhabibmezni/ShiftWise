@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Ban, CheckCircle2, Pencil, Save, Trash2 } from "lucide-react";
@@ -137,16 +137,15 @@ export function UserDetailDrawer({
     [rolesQuery.data, meIsSuperuser],
   );
 
-  useEffect(() => {
-    if (detailQuery.data) setDraft(draftFrom(detailQuery.data));
-  }, [detailQuery.data]);
-
-  useEffect(() => {
-    if (!open) {
-      setEditing(false);
-      setConfirmDelete(false);
-    }
-  }, [open]);
+  // Seed the draft from the loaded user and enter edit mode. Done in the
+  // click handler (not an effect) so the draft is a fresh snapshot at the
+  // moment editing begins. The parent remounts this drawer via a `key` per
+  // selected id, so `editing`/`confirmDelete` start false on every open.
+  const enterEditMode = () => {
+    if (!detailQuery.data) return;
+    setDraft(draftFrom(detailQuery.data));
+    setEditing(true);
+  };
 
   const setAuthUser = useAuthStore((s) => s.setUser);
 
@@ -244,7 +243,7 @@ export function UserDetailDrawer({
               {canEditUser && (
                 <Button
                   variant="primary"
-                  onClick={() => setEditing(true)}
+                  onClick={enterEditMode}
                   leadingIcon={<Icon icon={Pencil} size={14} />}
                 >
                   Edit

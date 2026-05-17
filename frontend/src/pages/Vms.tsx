@@ -49,7 +49,7 @@ import {
   type VmStatus,
 } from "@/api/vms";
 import { listHypervisors, type Hypervisor } from "@/api/hypervisors";
-import { formatNumber, formatRelativeTime } from "@/lib/format";
+import { formatGB, formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import type { ApiError } from "@/api/types";
 
@@ -62,11 +62,6 @@ function describeError(err: unknown, fallback: string): string {
     if (data?.detail) return data.detail;
   }
   return fallback;
-}
-
-function formatGB(gb: number | null | undefined): string {
-  if (gb == null || gb === 0) return "—";
-  return `${gb} GB`;
 }
 
 function formatMemoryMb(mb: number | null | undefined): string {

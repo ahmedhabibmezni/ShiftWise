@@ -121,8 +121,18 @@ export default function Roles() {
         />
       </Panel>
 
-      <RoleDetailDrawer id={selectedId} onClose={() => setSelectedId(null)} />
-      <RoleCreateDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
+      {/* `key` per selected id remounts the drawer on every open so its
+          internal edit/confirm state starts fresh — no reset effect needed. */}
+      <RoleDetailDrawer
+        key={selectedId ?? "none"}
+        id={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
+      <RoleCreateDrawer
+        key={createOpen ? "open" : "closed"}
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
@@ -45,11 +45,6 @@ export function SlideOver({
   size?: "md" | "lg";
 }) {
   const trapRef = useFocusTrap<HTMLElement>(open);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -65,8 +60,6 @@ export function SlideOver({
       document.body.style.overflow = prev;
     };
   }, [open, onClose]);
-
-  if (!mounted) return null;
 
   const widthClass = size === "lg" ? "w-[680px]" : "w-[560px]";
 

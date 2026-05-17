@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -172,8 +172,18 @@ export default function Hypervisors() {
         onChange={setPage}
       />
 
-      <DetailDrawer id={selectedId} onClose={() => setSelectedId(null)} />
-      <HypervisorCreateDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
+      {/* `key` per open/selected id remounts each drawer so its internal
+          state (edit mode, form fields, confirm dialogs) starts fresh. */}
+      <DetailDrawer
+        key={selectedId ?? "none"}
+        id={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
+      <HypervisorCreateDrawer
+        key={createOpen ? "open" : "closed"}
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </div>
   );
 }
@@ -527,18 +537,15 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
     enabled: open,
   });
 
-  useEffect(() => {
-    if (detailQuery.data) {
-      setDraft(draftFrom(detailQuery.data));
-    }
-  }, [detailQuery.data]);
-
-  useEffect(() => {
-    if (!open) {
-      setEditing(false);
-      setConfirmDelete(false);
-    }
-  }, [open]);
+  // Seed the draft from the loaded hypervisor and enter edit mode. Done in
+  // the click handler (not an effect) so the draft is a fresh snapshot at
+  // the moment editing begins. The parent remounts this drawer via a `key`
+  // per selected id, so `editing`/`confirmDelete` start false on every open.
+  const enterEditMode = () => {
+    if (!detailQuery.data) return;
+    setDraft(draftFrom(detailQuery.data));
+    setEditing(true);
+  };
 
   const syncMutation = useMutation({
     mutationFn: () => syncHypervisor(id!),
@@ -638,7 +645,7 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
               {canUpdate && (
                 <Button
                   variant="secondary"
-                  onClick={() => setEditing(true)}
+                  onClick={enterEditMode}
                   leadingIcon={<Icon icon={Pencil} size={14} />}
                 >
                   Edit

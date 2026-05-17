@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { SidebarBody } from "./Sidebar";
@@ -22,9 +22,6 @@ export function MobileNav({
   onClose: () => void;
 }) {
   const trapRef = useFocusTrap<HTMLElement>(open);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!open) return;
@@ -39,8 +36,6 @@ export function MobileNav({
       document.body.style.overflow = prev;
     };
   }, [open, onClose]);
-
-  if (!mounted) return null;
 
   return createPortal(
     <div
