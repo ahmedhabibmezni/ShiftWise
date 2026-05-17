@@ -16,6 +16,14 @@ from app.schemas.user import UserCreate, UserUpdate
 from app.core.security import get_password_hash, verify_password
 
 
+# Audit C-05 : champs jamais modifiables via update_user, même si un appelant
+# ou une évolution du schéma les injecte dans le dict de mise à jour.
+# hashed_password n'y figure PAS — il est dérivé en interne depuis `password`.
+_USER_PROTECTED_FIELDS = frozenset({
+    "id", "is_superuser", "is_verified", "tenant_id", "created_at", "updated_at",
+})
+
+
 def get_user(db: Session, user_id: int) -> Optional[User]:
     """
     Récupère un utilisateur par son ID.
@@ -309,6 +317,8 @@ def update_user(
         _handle_roles_update(db, db_user, update_data)
 
     for field, value in update_data.items():
+        if field in _USER_PROTECTED_FIELDS:
+            continue  # Audit C-05 — champ protégé, ignoré silencieusement
         setattr(db_user, field, value)
 
     db.commit()

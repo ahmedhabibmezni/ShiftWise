@@ -32,6 +32,7 @@ from app.core.database import get_db
 from app.core.security import create_access_token, get_password_hash
 from app.main import app
 from app.models.base import Base
+from app.crud import user as crud_user
 from app.models.role import Role
 from app.models.user import User
 
@@ -111,7 +112,12 @@ def _auth(user: User) -> dict:
 
 @pytest.fixture
 def admin_role(db_session: Session) -> Role:
-    return _make_role(db_session, "admin", {"users": ["read", "create", "update"]})
+    # Audit C-03 (strict model): the admin also holds vms:read so it may
+    # legitimately hand out a viewer-style role — a role is assignable only
+    # when the admin already owns every permission that role grants.
+    return _make_role(
+        db_session, "admin", {"users": ["read", "create", "update"], "vms": ["read"]}
+    )
 
 
 @pytest.fixture
@@ -255,3 +261,50 @@ def test_inactive_account_403_carries_the_deactivated_header(client, db_session,
 
     assert res.status_code == 403
     assert res.headers.get("X-Account-Status") == "deactivated"
+
+
+def test_admin_cannot_grant_a_role_with_an_action_it_lacks(client, db_session, admin, regular):
+    # Audit C-03 (strict): the admin holds users:* and vms:read but not
+    # vms:delete — it must not hand out a role that grants vms:delete.
+    deleter = _make_role(db_session, "vm-deleter", {"vms": ["read", "delete"]})
+    res = client.put(
+        f"/api/v1/users/{regular.id}",
+        json={"role_ids": [deleter.id]},
+        headers=_auth(admin),
+    )
+    assert res.status_code == 403
+
+
+def test_non_superuser_cannot_self_assign_roles_via_update(client, db_session, admin):
+    # Audit C-04: an admin must not change its own role_ids through PUT.
+    viewer = _make_role(db_session, "viewer", {"vms": ["read"]})
+    res = client.put(
+        f"/api/v1/users/{admin.id}",
+        json={"role_ids": [viewer.id]},
+        headers=_auth(admin),
+    )
+    assert res.status_code == 403
+
+
+def test_non_superuser_cannot_self_assign_role_via_add_endpoint(client, db_session, admin):
+    # Audit C-04: same guard on POST /users/{id}/roles/{role_id}.
+    viewer = _make_role(db_session, "viewer2", {"vms": ["read"]})
+    res = client.post(
+        f"/api/v1/users/{admin.id}/roles/{viewer.id}",
+        headers=_auth(admin),
+    )
+    assert res.status_code == 403
+
+
+def test_update_user_crud_skips_protected_fields(db_session, regular):
+    # Audit C-05: update_user must never apply is_superuser / tenant_id even
+    # if they appear in the update payload (defence in depth below the schema).
+    class _RawUpdate:
+        def model_dump(self, exclude_unset: bool = True) -> dict:
+            return {"first_name": "Legit", "is_superuser": True, "tenant_id": "evil"}
+
+    updated = crud_user.update_user(db_session, regular.id, _RawUpdate())
+
+    assert updated.first_name == "Legit"
+    assert updated.is_superuser is False
+    assert updated.tenant_id == "t1"

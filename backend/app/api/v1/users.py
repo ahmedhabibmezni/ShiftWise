@@ -47,12 +47,17 @@ SUPER_ADMIN_ROLE = "super_admin"
 
 def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Session) -> None:
     """
-    Vérifie qu'un non-superuser ne s'octroie pas des permissions supérieures
-    aux siennes via l'assignation de rôles.
+    Vérifie qu'un non-superuser ne s'octroie (ni n'octroie) pas, via
+    l'assignation de rôles, des permissions qu'il ne possède pas lui-même.
+
+    Audit C-03 — modèle strict : chaque action de chaque rôle assigné doit
+    déjà figurer dans les permissions effectives de l'appelant. La version
+    précédente ne bloquait que les actions joker ("*"), laissant passer un
+    rôle listant explicitement read/create/update/delete.
+
     Lève HTTPException 403 en cas de violation.
     """
     assigned_roles = db.query(Role).filter(Role.id.in_(role_ids)).all()
-    admin_permissions = current_user.get_all_permissions()
 
     for role in assigned_roles:
         if role.name == SUPER_ADMIN_ROLE:
@@ -61,11 +66,15 @@ def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Ses
                 detail="Seul un super_admin peut assigner le rôle super_admin"
             )
         for resource, actions in (role.permissions or {}).items():
-            if "*" in actions and resource not in admin_permissions:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
-                )
+            for action in actions or []:
+                if not current_user.has_permission(resource, action):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=(
+                            f"Vous ne pouvez pas assigner un rôle accordant "
+                            f"'{resource}:{action}' — permission absente de votre compte"
+                        ),
+                    )
 
 
 def _is_super_admin(user: User) -> bool:
@@ -340,6 +349,19 @@ def update_user(
             detail="Seul un super_admin peut modifier un compte super_admin"
         )
 
+    # Audit C-04 : un non-superuser modifiant son PROPRE compte ne peut pas
+    # toucher à ses rôles (vecteur d'auto-escalade) — les changements de rôle
+    # passent par un administrateur.
+    if (
+        user_id == current_user.id
+        and not current_user.is_superuser
+        and user_update.role_ids is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vous ne pouvez pas modifier vos propres rôles"
+        )
+
     # Guard : empêche l'escalade de privilèges via l'assignation de rôles.
     if not current_user.is_superuser and user_update.role_ids:
         _check_privilege_escalation(current_user, user_update.role_ids, db)
@@ -463,21 +485,17 @@ def add_role_to_user(
             detail="Rôle non trouvé"
         )
 
-    # Guard: prevent privilege escalation
-    if role.name == SUPER_ADMIN_ROLE and not current_user.is_superuser:
+    # Audit C-04 : un non-superuser ne peut pas s'attribuer un rôle à
+    # lui-même (la gestion des rôles est une fonction d'administration).
+    if user_id == current_user.id and not current_user.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seul un super_admin peut assigner le rôle super_admin"
+            detail="Vous ne pouvez pas modifier vos propres rôles"
         )
 
+    # Audit C-03 : empêche l'escalade de privilèges via l'assignation de rôle.
     if not current_user.is_superuser:
-        admin_permissions = current_user.get_all_permissions()
-        for resource, actions in (role.permissions or {}).items():
-            if "*" in actions and resource not in admin_permissions:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Vous ne pouvez pas assigner un rôle avec accès complet à '{resource}'"
-                )
+        _check_privilege_escalation(current_user, [role_id], db)
 
     # Ajouter le rôle
     updated_user = crud_user.add_role_to_user(db, user_id, role_id)
