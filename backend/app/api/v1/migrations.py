@@ -4,6 +4,7 @@ Routes API pour la gestion des Migrations
 Endpoints CRUD pour les migrations de VMs.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +28,8 @@ from app.schemas.migration import (
 )
 from app.crud import migration as crud_migration
 from app.crud import vm as crud_vm
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -342,7 +345,7 @@ def start_migration(
     # la laisser bloquée en VALIDATING sans tâche associée.
     from app.tasks.migration import run_migration
     try:
-        run_migration.delay(migration.id)
+        async_result = run_migration.delay(migration.id)
     except Exception as exc:
         migration.status = MigrationStatus.PENDING
         db.commit()
@@ -350,6 +353,11 @@ def start_migration(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Le broker de tâches est indisponible — migration non démarrée, réessayez.",
         ) from exc
+
+    # Audit H-16 : mémoriser l'id de la tâche pour pouvoir la révoquer si la
+    # migration est annulée.
+    migration.celery_task_id = async_result.id
+    db.commit()
 
     return MigrationResponse.model_validate(migration)
 
@@ -380,6 +388,21 @@ def cancel_migration(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La migration n'est pas en cours"
         )
+
+    # Audit H-16 : révoquer la tâche Celery — sinon le worker poursuit le
+    # pipeline et écrase le statut CANCELLED, et les ressources K8s fuient.
+    # Un échec de révocation (broker injoignable) ne bloque pas l'annulation.
+    if migration.celery_task_id:
+        from app.core.celery_app import celery_app
+        try:
+            celery_app.control.revoke(
+                migration.celery_task_id, terminate=True, signal="SIGTERM",
+            )
+        except Exception:
+            logger.warning(
+                "Échec de révocation de la tâche Celery %s (broker injoignable ?)",
+                migration.celery_task_id,
+            )
 
     # Annuler
     migration.status = MigrationStatus.CANCELLED

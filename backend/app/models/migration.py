@@ -64,6 +64,10 @@ class Migration(BaseModel):
     status = Column(SQLEnum(MigrationStatus), nullable=False, default=MigrationStatus.PENDING, index=True)
     strategy = Column(SQLEnum(MigrationStrategy), nullable=False, default=MigrationStrategy.AUTO)
 
+    # Celery — id de la tâche run_migration, pour pouvoir la révoquer si la
+    # migration est annulée (POST /migrations/{id}/cancel).
+    celery_task_id = Column(String(64), nullable=True)
+
     # Timing
     scheduled_at = Column(DateTime(timezone=True), nullable=True)  # Migration planifiée
     started_at = Column(DateTime(timezone=True), nullable=True)
