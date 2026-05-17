@@ -4,12 +4,52 @@ Schémas Pydantic pour Hypervisor
 Définit les schémas de validation et sérialisation pour l'API REST.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+import ipaddress
+import re
 from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.hypervisor import HypervisorType as HypervisorTypeEnum
 from app.models.hypervisor import HypervisorStatus as HypervisorStatusEnum
+
+
+# Audit H-03 — plages réseau interdites comme cible d'hyperviseur (SSRF).
+# Un hôte link-local pointe typiquement vers le endpoint de métadonnées
+# cloud (169.254.169.254) ; aucun hyperviseur légitime n'y réside.
+_SSRF_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local IPv4 (métadonnées cloud)
+    ipaddress.ip_network("fe80::/10"),       # link-local IPv6
+)
+
+
+def _check_host_not_ssrf(host: str) -> str:
+    """
+    Rejette un host dont le littéral IP cible une plage interdite.
+
+    Le champ `host` est polymorphe (IP, hostname, URI ``qemu+ssh://``, ou
+    chemin local pour VMware Workstation) : on n'inspecte un littéral IP que
+    s'il y en a un. La validation réseau complète (allowlist d'opérateur,
+    résolution DNS anti-rebinding) relève d'un durcissement ultérieur.
+    """
+    candidate = host.strip()
+    uri_match = re.search(r"@([^/:?]+)", candidate) or re.search(r"://([^/:?@]+)", candidate)
+    if uri_match:
+        candidate = uri_match.group(1)
+    try:
+        ip = ipaddress.ip_address(candidate)
+    except ValueError:
+        return host  # pas un littéral IP — laissé tel quel
+    if ip.is_unspecified:
+        raise ValueError(f"hôte interdit : {host!r} (adresse non spécifiée)")
+    for net in _SSRF_BLOCKED_NETWORKS:
+        if ip in net:
+            raise ValueError(
+                f"hôte interdit : {host!r} cible la plage link-local {net} "
+                f"(risque de SSRF vers les métadonnées cloud)"
+            )
+    return host
 
 
 # Schéma de base
@@ -20,6 +60,12 @@ class HypervisorBase(BaseModel):
     type: HypervisorTypeEnum = Field(..., description="Type d'hyperviseur")
     host: str = Field(..., min_length=1, max_length=255, description="Hostname ou IP")
     port: Optional[int] = Field(None, ge=1, le=65535, description="Port de connexion")
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
+        """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
+        return v if v is None else _check_host_not_ssrf(v)
 
 
 # Schéma pour la création (avec credentials)
@@ -47,6 +93,12 @@ class HypervisorUpdate(BaseModel):
     is_active: Optional[bool] = None
     connection_config: Optional[dict] = None
     tags: Optional[dict] = None
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
+        """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
+        return v if v is None else _check_host_not_ssrf(v)
 
 
 # Schéma pour la réponse (SANS password par défaut)
@@ -93,6 +145,12 @@ class HypervisorTestConnection(BaseModel):
     username: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=1)
     verify_ssl: bool = False
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
+        """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
+        return v if v is None else _check_host_not_ssrf(v)
 
 
 # Schéma de réponse du test de connexion
