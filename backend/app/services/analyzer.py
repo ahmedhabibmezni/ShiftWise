@@ -35,7 +35,6 @@ class AnalyzerService:
     def __init__(self):
         self.model = None
         self.feature_names = list(FEATURE_NAMES)
-        self.labels = ("COMPATIBLE", "PARTIAL", "INCOMPATIBLE")
         self.threshold = settings.ANALYZER_CONFIDENCE_THRESHOLD
 
         self._load_model()
@@ -133,7 +132,11 @@ class AnalyzerService:
                 proba = self.model.predict_proba([features])[0]
                 pred_idx = int(np.argmax(proba))
                 confidence = float(proba[pred_idx])
-                model_grade = self.labels[pred_idx]
+                # Audit C-11 : l'ordre des classes vient du modèle lui-même
+                # (scikit-learn trie les labels alphabétiquement) — surtout
+                # pas d'un tuple codé en dur, qui inverserait PARTIAL et
+                # INCOMPATIBLE.
+                model_grade = str(self.model.classes_[pred_idx])
 
                 if confidence >= self.threshold:
                     engine = "model"

@@ -476,3 +476,26 @@ class TestAnalyzerIntegration:
         result = analyzer.analyze_batch(db_session, vm_ids)
         # Only 20 should be processed
         assert len(result["results"]) <= 20
+
+    def test_model_grade_uses_model_class_order(self, db_session, test_vm_compatible):
+        """Audit C-11: the model grade must come from model.classes_, not a
+        hard-coded label tuple — sklearn orders classes_ alphabetically, so a
+        hard-coded ('COMPATIBLE','PARTIAL','INCOMPATIBLE') tuple mislabels."""
+        class _FakeModel:
+            classes_ = ["COMPATIBLE", "INCOMPATIBLE", "PARTIAL"]
+
+            def predict_proba(self, _x):
+                return [[0.05, 0.05, 0.90]]  # argmax -> index 2
+
+        analyzer = AnalyzerService()
+        analyzer.model = _FakeModel()
+        analyzer.threshold = 0.0  # force the model branch
+
+        analyzer.analyze_vm(db_session, test_vm_compatible.id)
+        vm = db_session.query(VirtualMachine).filter(
+            VirtualMachine.id == test_vm_compatible.id
+        ).first()
+
+        # classes_[2] is "PARTIAL"; the bug read labels[2] == "INCOMPATIBLE".
+        assert vm.compatibility_details["model_grade"] == "PARTIAL"
+        assert vm.compatibility_details["engine"] == "model"
