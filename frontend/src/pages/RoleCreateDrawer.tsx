@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { z } from "zod";
 import { Button } from "@/components/ui/Button";
@@ -14,7 +13,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Textarea } from "@/components/ui/Textarea";
 import { createRole, getRoleResources, type RolePermissions } from "@/api/roles";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 
 // Mirror of backend RoleBase.validate_name. Tight slug rule prevents the API
 // from rejecting our payload — we'd rather show inline errors than round-trip
@@ -30,14 +29,6 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 function countGrants(perms: RolePermissions): number {
   return Object.values(perms).reduce(

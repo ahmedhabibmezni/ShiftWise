@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import { Ban, ListTree, Play, ScrollText } from "lucide-react";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
@@ -25,7 +24,7 @@ import {
 import type { Vm } from "@/api/vms";
 import { formatDuration, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 
 const PIPELINE_STEPS = [
   { key: "validating",  label: "Validate" },
@@ -38,14 +37,6 @@ const PIPELINE_STEPS = [
 
 const TERMINAL_OK = new Set(["completed"]);
 const TERMINAL_KO = new Set(["failed", "cancelled", "rolled_back"]);
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 export function MigrationDetailDrawer({
   id,

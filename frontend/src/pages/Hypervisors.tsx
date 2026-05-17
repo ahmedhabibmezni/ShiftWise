@@ -14,7 +14,6 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { AxiosError } from "axios";
 import { HypervisorStatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -52,20 +51,12 @@ import {
 } from "@/api/hypervisors";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 import { Callout } from "@/components/ui/Callout";
 import { HypervisorCreateDrawer } from "./HypervisorCreateDrawer";
 
 const PAGE_SIZE = 25;
 const REFETCH_INTERVAL_MS = 60_000;
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 export default function Hypervisors() {
   const [page, setPage] = useState(1);

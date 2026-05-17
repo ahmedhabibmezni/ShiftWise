@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AxiosError } from "axios";
 import { ArrowRight, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/Checkbox";
 import toast from "react-hot-toast";
@@ -19,7 +18,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { createMigration, startMigration } from "@/api/migrations";
 import { listVms, type Vm } from "@/api/vms";
 import { useHasPermission } from "@/lib/permissions";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 
 const schema = z.object({
   vm_id: z.string().min(1, "Select a VM"),
@@ -44,14 +43,6 @@ function migrationBlockReason(vm: Vm): string | null {
   if (vm.status === "archived") return "archived";
   if (vm.status === "analyzing") return "analyzing";
   return vm.status;
-}
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
 }
 
 export function MigrationCreateDrawer({

@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -51,18 +50,10 @@ import {
 import { listHypervisors, type Hypervisor } from "@/api/hypervisors";
 import { formatGB, formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 
 const PAGE_SIZE = 25;
 const REFETCH_INTERVAL_MS = 60_000;
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 function formatMemoryMb(mb: number | null | undefined): string {
   if (mb == null) return "—";
