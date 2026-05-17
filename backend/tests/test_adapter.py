@@ -89,6 +89,8 @@ class TestAdapterJobManifest:
             migration_id=1,
             disk_index=0,
             src_relative_path="tnt1/outputs/uuid/0.qcow2",
+            nfs_server="10.0.0.9",
+            nfs_path="/exports/transit",
             backoff_limit=0,
             active_deadline_seconds=1800,
         )
@@ -105,6 +107,15 @@ class TestAdapterJobManifest:
         volumes = m["spec"]["template"]["spec"]["volumes"]
         assert any("nfs" in v for v in volumes)
         assert not any("persistentVolumeClaim" in v for v in volumes)
+
+    def test_nfs_volume_uses_provided_server_and_path(self):
+        # Audit C-07: the adapter Job must mount the NFS server/path passed in
+        # (discovered from the bound PV), not empty MIGRATOR_NFS_* settings.
+        m = self._build()
+        volumes = m["spec"]["template"]["spec"]["volumes"]
+        nfs = next(v["nfs"] for v in volumes if "nfs" in v)
+        assert nfs["server"] == "10.0.0.9"
+        assert nfs["path"] == "/exports/transit"
 
     def test_disk_path_env_is_set_correctly(self):
         m = self._build()

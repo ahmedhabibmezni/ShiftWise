@@ -36,6 +36,7 @@ from kubernetes.client.rest import ApiException
 from app.core.config import settings
 from app.core.kubevirt_client import get_kubevirt_client
 from app.services.adapter.errors import AdapterError
+from app.services.migrator.transit_discovery import discover_transit_nfs
 
 logger = logging.getLogger(__name__)
 
@@ -183,12 +184,19 @@ def submit_adapter_job(
 ) -> str:
     """Submit the adapter Job. Idempotent on AlreadyExists."""
     kv = get_kubevirt_client()
+    # Audit C-07 : découvrir le serveur/chemin NFS de transit depuis le PV
+    # lié, comme le fait le populator. settings.MIGRATOR_NFS_* est vide par
+    # défaut — coder en dur ces valeurs faisait échouer le montage NFS du
+    # pod adapter sur tout déploiement sans surcharge manuelle.
+    nfs_server, nfs_path = discover_transit_nfs(kv)
     manifest = _build_manifest(
         namespace=namespace,
         job_name=job_name,
         migration_id=migration_id,
         disk_index=disk_index,
         src_relative_path=src_relative_path,
+        nfs_server=nfs_server,
+        nfs_path=nfs_path,
         backoff_limit=backoff_limit,
         active_deadline_seconds=active_deadline_seconds,
     )
@@ -303,6 +311,8 @@ def _build_manifest(
     migration_id: int,
     disk_index: int,
     src_relative_path: str,
+    nfs_server: str,
+    nfs_path: str,
     backoff_limit: int,
     active_deadline_seconds: int,
 ) -> dict:
@@ -364,8 +374,8 @@ def _build_manifest(
                         {
                             "name": "src",
                             "nfs": {
-                                "server": settings.MIGRATOR_NFS_SERVER,
-                                "path": settings.MIGRATOR_NFS_PATH,
+                                "server": nfs_server,
+                                "path": nfs_path,
                             },
                         },
                     ],
