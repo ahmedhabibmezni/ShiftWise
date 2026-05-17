@@ -190,7 +190,7 @@ def retry_conversion(
             f"Cannot retry group in state {group.status.value}",
         )
 
-    requeued = 0
+    retried_ids: list[int] = []
     for job in group.jobs:
         if job.status != ConversionStatus.FAILED:
             continue
@@ -199,14 +199,20 @@ def retry_conversion(
             update["attempts"] = 0
         crud_conversion.update_job(db, job.id, update)
         crud_conversion.set_job_status(db, job.id, ConversionStatus.RETRYING)
-        requeued += 1
+        retried_ids.append(job.id)
 
-    if requeued == 0:
+    if not retried_ids:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "No FAILED jobs to retry in this group",
         )
 
-    # Caller (Celery worker) picks up RETRYING jobs and drives them to terminal.
     crud_conversion.recompute_group_status(db, group.id)
+
+    # Audit H-17 : enfiler effectivement les jobs relancés. Sans cet appel
+    # ils restaient bloqués en RETRYING — aucun worker ne scrute ce statut.
+    from app.tasks.conversion import run_conversion_job
+    for job_id in retried_ids:
+        run_conversion_job.delay(job_id)
+
     db.refresh(group)
     return ConversionGroupResponse.model_validate(group)
