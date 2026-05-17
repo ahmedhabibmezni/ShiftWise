@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
+from app.models.virtual_machine import VirtualMachine
 from app.schemas.migration import (
     MigrationCancel,
     MigrationCreate,
@@ -87,6 +88,17 @@ def create_migration(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"VM avec l'ID {migration_data.vm_id} introuvable"
         )
+
+    # Audit H-19 : verrou pessimiste sur la VM — sérialise les créations
+    # concurrentes pour cette VM. Sans le verrou, deux requêtes passent
+    # toutes deux le test « pas de migration active » et créent deux
+    # migrations actives sur la même VM.
+    vm = (
+        db.query(VirtualMachine)
+        .filter(VirtualMachine.id == vm.id)
+        .with_for_update()
+        .first()
+    )
 
     # Vérifier que la VM peut être migrée
     if not vm.can_migrate:
@@ -300,6 +312,17 @@ def start_migration(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Migration avec l'ID {migration_id} introuvable"
         )
+
+    # Audit H-20 : verrou pessimiste — re-lire la ligne FOR UPDATE puis
+    # vérifier le statut sous verrou. Sans ça, deux requêtes /start
+    # concurrentes lisent toutes deux PENDING et enfilent run_migration
+    # en double.
+    migration = (
+        db.query(Migration)
+        .filter(Migration.id == migration.id)
+        .with_for_update()
+        .first()
+    )
 
     if migration.status != MigrationStatus.PENDING:
         raise HTTPException(

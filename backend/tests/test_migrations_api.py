@@ -16,10 +16,17 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.migrations import start_migration
+from app.api.v1.migrations import create_migration, start_migration
 from app.models.base import Base
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.user import User
+from app.models.virtual_machine import (
+    CompatibilityStatus,
+    OSType,
+    VirtualMachine,
+    VMStatus,
+)
+from app.schemas.migration import MigrationCreate
 
 
 @pytest.fixture
@@ -73,3 +80,40 @@ def test_start_enqueues_and_marks_started_when_broker_up(db_session, monkeypatch
     assert fake_task.delay.call_count == 1
     db_session.refresh(mig)
     assert mig.status != MigrationStatus.PENDING
+
+
+def test_start_rejects_non_pending_migration(db_session):
+    mig = Migration(
+        tenant_id="t1", vm_id=1, status=MigrationStatus.COMPLETED,
+        strategy=MigrationStrategy.AUTO, target_namespace="shiftwise-t1",
+    )
+    db_session.add(mig)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        start_migration(mig.id, db_session, _superuser())
+
+    # H-20: the status is re-checked under a row lock before enqueue.
+    assert exc.value.status_code == 400
+
+
+def test_create_rejects_duplicate_active_migration(db_session):
+    vm = VirtualMachine(
+        name="vm1", tenant_id="t1", source_hypervisor_id=1, source_uuid="u1",
+        cpu_cores=2, memory_mb=2048, disk_gb=10, os_type=OSType.LINUX,
+        status=VMStatus.COMPATIBLE,
+        compatibility_status=CompatibilityStatus.COMPATIBLE,
+    )
+    db_session.add(vm)
+    db_session.commit()
+    db_session.add(Migration(
+        tenant_id="t1", vm_id=vm.id, status=MigrationStatus.TRANSFERRING,
+        strategy=MigrationStrategy.AUTO, target_namespace="shiftwise-t1",
+    ))
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        create_migration(MigrationCreate(vm_id=vm.id), db_session, _superuser())
+
+    # H-19: a second active migration on the same VM is rejected (409).
+    assert exc.value.status_code == 409
