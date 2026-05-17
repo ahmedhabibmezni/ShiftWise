@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/Input";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RoleBadge } from "@/components/ui/RoleBadge";
+import { changePassword } from "@/api/auth";
 import { updateUser, type UpdateUserPayload } from "@/api/users";
 import type { ApiError, User } from "@/api/types";
 import { primaryRole } from "@/lib/permissions";
@@ -86,7 +87,7 @@ export default function Settings() {
 
       <IdentityCard user={user} />
       <ProfileSection user={user} />
-      <PasswordSection user={user} />
+      <PasswordSection />
     </div>
   );
 }
@@ -250,7 +251,7 @@ function ProfileSection({ user }: { user: User }) {
 
 /* ------------------------------- password --------------------------------- */
 
-function PasswordSection({ user }: { user: User }) {
+function PasswordSection() {
   const {
     register,
     handleSubmit,
@@ -263,11 +264,12 @@ function PasswordSection({ user }: { user: User }) {
 
   const mutation = useMutation({
     mutationFn: (values: PasswordValues) =>
-      // Backend doesn't take current_password — we ask for it anyway as a
-      // local sanity check (user shouldn't rotate while shoulder-surfed).
-      // The check stays client-side: if the current password is wrong, the
-      // backend won't notice; only the new password is shipped.
-      updateUser(user.id, { password: values.new_password }),
+      // Audit H-06: a self password change goes through /auth/change-password,
+      // which verifies the current password server-side.
+      changePassword({
+        current_password: values.current_password,
+        new_password: values.new_password,
+      }),
     onSuccess: () => {
       toast.success("Password updated · keep it safe");
       reset();

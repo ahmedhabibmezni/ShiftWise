@@ -92,9 +92,9 @@ describe("Settings page", () => {
   it("validates password complexity inline before contacting the API", async () => {
     let called = false;
     server.use(
-      http.put("/api/v1/users/7", () => {
+      http.post("/api/v1/auth/change-password", () => {
         called = true;
-        return HttpResponse.json(makeUser());
+        return HttpResponse.json({ message: "Password changed", success: true });
       }),
     );
 
@@ -115,9 +115,9 @@ describe("Settings page", () => {
   it("posts the new password when the form is valid", async () => {
     let captured: unknown = null;
     server.use(
-      http.put("/api/v1/users/7", async ({ request }) => {
+      http.post("/api/v1/auth/change-password", async ({ request }) => {
         captured = await request.json();
-        return HttpResponse.json(makeUser());
+        return HttpResponse.json({ message: "Password changed", success: true });
       }),
     );
 
@@ -134,8 +134,12 @@ describe("Settings page", () => {
     await user.click(within(passwordForm).getByRole("button", { name: /change password/i }));
 
     await waitFor(() => {
-      // Only the new password ships — current_password is a client-side guard.
-      expect(captured).toEqual({ password: "NewSecret9!" });
+      // Audit H-06: both passwords ship to /auth/change-password, which
+      // verifies the current password server-side.
+      expect(captured).toEqual({
+        current_password: "old-Pass1!",
+        new_password: "NewSecret9!",
+      });
     });
   });
 

@@ -14,3 +14,10 @@ export async function fetchCurrentUser(): Promise<User> {
   const res = await api.get<User>("/auth/me");
   return res.data;
 }
+
+export async function changePassword(payload: {
+  current_password: string;
+  new_password: string;
+}): Promise<void> {
+  await api.post("/auth/change-password", payload);
+}

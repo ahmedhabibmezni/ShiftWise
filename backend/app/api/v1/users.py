@@ -362,6 +362,17 @@ def update_user(
             detail="Vous ne pouvez pas modifier vos propres rôles"
         )
 
+    # Audit H-06 : changer son PROPRE mot de passe exige une ré-authentification
+    # (vérification du mot de passe actuel) — passer par /auth/change-password.
+    # PUT /users/{id} reste utilisable par un admin pour réinitialiser le mot
+    # de passe d'un AUTRE utilisateur.
+    if user_update.password is not None and user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pour changer votre propre mot de passe, utilisez "
+                   "/api/v1/auth/change-password (mot de passe actuel requis)"
+        )
+
     # Guard : empêche l'escalade de privilèges via l'assignation de rôles.
     if not current_user.is_superuser and user_update.role_ids:
         _check_privilege_escalation(current_user, user_update.role_ids, db)

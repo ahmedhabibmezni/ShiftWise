@@ -308,3 +308,26 @@ def test_update_user_crud_skips_protected_fields(db_session, regular):
     assert updated.first_name == "Legit"
     assert updated.is_superuser is False
     assert updated.tenant_id == "t1"
+
+
+def test_user_cannot_change_own_password_via_put(client, admin):
+    # Audit H-06: changing your own password through PUT bypasses
+    # current-password verification — it must be rejected (use
+    # /auth/change-password, which re-authenticates).
+    res = client.put(
+        f"/api/v1/users/{admin.id}",
+        json={"password": "NewStrongPass1!"},
+        headers=_auth(admin),
+    )
+    assert res.status_code == 400
+
+
+def test_admin_can_reset_another_users_password_via_put(client, admin, regular):
+    # Audit H-06: an admin resetting ANOTHER user's password via PUT stays
+    # allowed — the guard only blocks self password changes.
+    res = client.put(
+        f"/api/v1/users/{regular.id}",
+        json={"password": "ResetStrongPass1!"},
+        headers=_auth(admin),
+    )
+    assert res.status_code == 200
