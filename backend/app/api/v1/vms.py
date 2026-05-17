@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.api.deps import check_permission
 from app.models.user import User
 from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus
+from app.models.conversion import ConversionGroupStatus, ConversionStatus
 from app.schemas.vm import (
     VMCreate,
     VMUpdate,
@@ -368,9 +369,28 @@ def convert_vm(
     # ``conversions`` queue and drive each job to a terminal state.
     from app.tasks.conversion import run_conversion_job
     group = crud_conversion.get_group(db, group_id)
-    for job in group.jobs:
-        run_conversion_job.delay(job.id)
+    try:
+        for job in group.jobs:
+            run_conversion_job.delay(job.id)
+    except Exception as exc:
+        # Audit H-18 : broker injoignable — basculer le groupe et ses jobs en
+        # FAILED pour qu'ils ne restent pas bloqués en PENDING sans tâche
+        # (le groupe redevient ainsi re-déclenchable via /conversions/{uuid}/retry).
+        for job in group.jobs:
+            crud_conversion.set_job_status(
+                db, job.id, ConversionStatus.FAILED,
+                error_message="Broker de tâches indisponible",
+            )
+        crud_conversion.set_group_status(
+            db, group_id, ConversionGroupStatus.FAILED,
+            error_message="Broker de tâches indisponible",
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Le broker de tâches est indisponible — conversion non démarrée, réessayez.",
+        ) from exc
 
+    db.refresh(group)
     return ConversionGroupResponse.model_validate(group)
 
 

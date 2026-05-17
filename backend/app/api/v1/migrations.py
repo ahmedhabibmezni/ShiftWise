@@ -314,9 +314,19 @@ def start_migration(
     db.refresh(migration)
 
     # Enqueue l'orchestrateur Celery — la migration tourne en arrière-plan.
-    # L'API retourne immédiatement avec le statut VALIDATING.
+    # Audit H-18 : si le broker est injoignable, .delay() lève. On remet alors
+    # la migration en PENDING pour qu'elle reste re-démarrable, plutôt que de
+    # la laisser bloquée en VALIDATING sans tâche associée.
     from app.tasks.migration import run_migration
-    run_migration.delay(migration.id)
+    try:
+        run_migration.delay(migration.id)
+    except Exception as exc:
+        migration.status = MigrationStatus.PENDING
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Le broker de tâches est indisponible — migration non démarrée, réessayez.",
+        ) from exc
 
     return MigrationResponse.model_validate(migration)
 
