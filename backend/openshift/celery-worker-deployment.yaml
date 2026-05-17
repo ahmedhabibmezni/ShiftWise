@@ -5,6 +5,12 @@
 # in-cluster qemu-img/virt-v2v Jobs read from.
 #
 # Secrets (DB + JWT) come from the existing `shiftwise-secrets` Secret.
+#
+# Image split (G12) — the worker uses `shiftwise-backend-worker`, NOT the slim
+# `shiftwise-backend-api` image. The worker (and the populator/adapter Jobs it
+# spawns at runtime) needs qemu-img + libguestfs-tools + a kernel; the API and
+# Flower pods do not. `Dockerfile.worker` builds FROM the API image and adds
+# only that guest-tooling layer, so the application code stays identical.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -31,9 +37,13 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: worker
+          # Image worker (G12) — `shiftwise-backend-worker`, construite par
+          # backend/Dockerfile.worker (image API + couche guest-tooling :
+          # qemu-img, libguestfs-tools, kernel). NE PAS pointer ici l'image
+          # API slim : le pipeline de migration ne tournerait pas.
           # imagePullPolicy explicite (G14). `:latest` mutable — voir note
           # dans backend-deployment.yaml ; migrer vers un tag immuable.
-          image: docker.io/dida1609/shiftwise-backend:latest
+          image: docker.io/dida1609/shiftwise-backend-worker:latest
           imagePullPolicy: IfNotPresent
           command:
             - celery

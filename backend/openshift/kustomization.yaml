@@ -31,6 +31,17 @@ resources:
 #   avant `./deploy.sh`. Le ConfigMap redis-config (non sensible) reste défini
 #   inline dans redis-deployment.yaml — pas de gain à le générer.
 
+# Découpage des images API / worker (G12) :
+#   Le backend est désormais publié en DEUX images depuis backend/ :
+#     - shiftwise-backend-api    (Dockerfile)        — API / Flower / db-init,
+#                                                      slim, sans guest-tooling
+#     - shiftwise-backend-worker (Dockerfile.worker) — worker Celery + Jobs
+#                                                      populator/adapter, image
+#                                                      API + libguestfs/qemu
+#   backend / flower / db-init référencent l'image API ; celery-worker
+#   référence l'image worker. Le pipeline CI doit construire l'API d'abord,
+#   puis le worker avec `--build-arg API_IMAGE=<image API taguée>`.
+#
 # Épinglage des images par digest (G26) :
 #   Les images postgres / redis sont référencées par tag mutable
 #   (`16-alpine`, `7.2-alpine`). Pour un déploiement reproductible et résistant
@@ -43,9 +54,11 @@ resources:
 #   commentaire à titre documentaire.
 #   Laissé commenté pour ne pas casser `oc apply -k .` avec un digest factice.
 # images:
-#   - name: postgres                                   # tag: 16-alpine
+#   - name: postgres                                          # tag: 16-alpine
 #     digest: sha256:<RESOLVED_DIGEST>
-#   - name: redis                                      # tag: 7.2-alpine
+#   - name: redis                                             # tag: 7.2-alpine
 #     digest: sha256:<RESOLVED_DIGEST>
-#   - name: docker.io/dida1609/shiftwise-backend       # → publier un tag immuable v<semver>
+#   - name: docker.io/dida1609/shiftwise-backend-api          # → publier un tag immuable v<semver>
+#     digest: sha256:<RESOLVED_DIGEST>
+#   - name: docker.io/dida1609/shiftwise-backend-worker       # → publier un tag immuable v<semver>
 #     digest: sha256:<RESOLVED_DIGEST>

@@ -48,7 +48,9 @@ spec:
               drop: [ALL]
       containers:
         - name: bootstrap
-          image: docker.io/dida1609/shiftwise-backend:latest
+          # Image API slim (G12) — bootstrap.py ne fait qu'alembic upgrade +
+          # seed des rôles ; aucun besoin du guest-tooling du worker.
+          image: docker.io/dida1609/shiftwise-backend-api:latest
           imagePullPolicy: IfNotPresent
           command: [python, bootstrap.py]
           envFrom:

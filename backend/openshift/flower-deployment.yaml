@@ -36,9 +36,12 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: flower
+          # Image API slim (G12) — Flower ne fait qu'introspecter les files
+          # Celery ; il n'a aucun besoin du guest-tooling du worker. Il tourne
+          # donc sur la même image slim que l'API.
           # imagePullPolicy explicite (G14). `:latest` mutable — voir note
           # dans backend-deployment.yaml.
-          image: docker.io/dida1609/shiftwise-backend:latest
+          image: docker.io/dida1609/shiftwise-backend-api:latest
           imagePullPolicy: IfNotPresent
           # --basic-auth lit FLOWER_BASIC_AUTH depuis l'env (Secret). On passe
           # par `sh -c` pour expanser la variable. Format user:password.

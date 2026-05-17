@@ -61,10 +61,14 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: api
+          # Image API slim (G12) — `shiftwise-backend-api`, construite par
+          # backend/Dockerfile. N'embarque PAS libguestfs / qemu-img / kernel
+          # (réservés au worker, cf. celery-worker-deployment.yaml). L'API ne
+          # fait qu'exposer le REST + lire le statut des Jobs.
           # imagePullPolicy explicite (G14). NOTE : `:latest` est mutable —
           # remplacer par un tag immuable `:v<semver>` pour des rollouts
           # déterministes (le pipeline CI le fera, cf. ci.yml job image-build).
-          image: docker.io/dida1609/shiftwise-backend:latest
+          image: docker.io/dida1609/shiftwise-backend-api:latest
           imagePullPolicy: IfNotPresent
           command:
             - uvicorn

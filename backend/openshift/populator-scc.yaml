@@ -13,6 +13,13 @@
 # namespace-scoped — pas franchissables. Le NFS direct atteint la même
 # donnée physique sans passer par un PVC cross-namespace.
 #
+# Image des Jobs populator/adapter (G12) :
+# Ces Jobs exécutent qemu-img / virt-customize — ils DOIVENT tourner sur
+# l'image worker (`shiftwise-backend-worker`, cf. backend/Dockerfile.worker),
+# pas sur l'image API slim. Le code worker qui les crée lit l'image via les
+# réglages ADAPTER_IMAGE / MIGRATOR_POPULATOR_IMAGE : pointer ces variables
+# sur l'image worker.
+#
 # Liaison (G9) :
 # Ce SCC est lié à un ServiceAccount DÉDIÉ et nommé — `shiftwise-populator`
 # dans le namespace `shiftwise` — et NON au SA générique `default`. Lier

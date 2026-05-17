@@ -1,15 +1,33 @@
-# Image conteneur ShiftWise — sert :
+# Image conteneur ShiftWise — API (slim).
+#
+# Sert :
 #   - l'API FastAPI (uvicorn)
-#   - les workers Celery
-#   - Flower
-#   - le Job d'init BDD (bootstrap.py)
+#   - Flower (UI de monitoring Celery)
+#   - le Job d'init BDD (bootstrap.py — alembic upgrade + seed des rôles)
 #
 # Le mode est choisi par la commande passée au conteneur (cf. manifests
 # OpenShift). Image multi-stage : stage 1 builde les wheels, stage 2 minimal.
 #
+# Découpage API / worker (G12) :
+#   Cette image N'EMBARQUE PAS `libguestfs-tools` ni `linux-image-amd64`.
+#   Ces paquets (~300 MB avec leurs dépendances + un noyau complet) ne sont
+#   requis QUE par le pipeline de migration (stages Adapter/Migrator), qui
+#   tourne dans le worker Celery et dans les Jobs populator/adapter.
+#   Les emparquer dans l'image API/Flower — exposée publiquement via Route —
+#   gonflait la surface d'attaque (un noyau + des outils de manipulation
+#   d'image disque dans un pod front) sans aucun usage.
+#   Le worker utilise `Dockerfile.worker`, qui PART de cette image API et y
+#   ajoute la seule couche guest-tooling. Conséquence :
+#     - les couches communes (base, wheels, code app) sont partagées et
+#       mises en cache une seule fois ;
+#     - l'image API reste minces ;
+#     - le code applicatif est strictement identique entre les deux images.
+#   Manifests : backend / flower / db-init référencent l'image API ;
+#   celery-worker référence l'image worker (cf. commentaires des manifests).
+#
 # Build local :
-#   docker build -t quay.io/shiftwise/backend:latest -f Dockerfile .
-#   docker push quay.io/shiftwise/backend:latest
+#   docker build -t quay.io/shiftwise/backend-api:latest -f Dockerfile .
+#   docker push quay.io/shiftwise/backend-api:latest
 #
 # Base image pinning (G10) :
 #   La base DOIT être épinglée par digest @sha256: en production — un tag
@@ -62,22 +80,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Runtime deps :
+# Runtime deps (API — slim, cf. G12) :
 #   - libpq5    : psycopg2-binary
-#   - libvirt0  : libvirt-python (chargée à l'exécution)
+#   - libvirt0  : libvirt-python (chargée à l'exécution — import au démarrage
+#                 du service discovery)
 #   - libxml2, libcurl4 : ovirt-engine-sdk-python (extension C)
 #   - ca-certificates, curl : healthchecks + appels HTTPS sortants
-#   - qemu-utils : binaire qemu-img utilisé par le migrator populator
-#                  (qemu-img convert qcow2 -> raw, single binary ~3 MB)
-#   - libguestfs-tools : virt-customize / virt-inspector pour le stage
-#                        Adapter (mute le qcow2 en place pour fix réseau,
-#                        console série, GRUB). ~250 MB avec deps mais
-#                        permet une seule image partagée backend/worker/
-#                        populator/adapter.
+#   PAS de qemu-utils / libguestfs-tools / linux-image-amd64 ici — ce sont des
+#   dépendances du pipeline de migration, ajoutées par Dockerfile.worker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 libvirt0 libxml2 libcurl4 ca-certificates curl \
-        qemu-utils \
-        libguestfs-tools linux-image-amd64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Utilisateur non-root. OpenShift restricted SCC remplace l'UID par un
@@ -116,9 +128,9 @@ EXPOSE 8000
 
 # Healthcheck (G13) — interroge l'endpoint /health de l'API.
 # Pertinent uniquement quand le conteneur tourne en mode API (CMD par défaut).
-# Pour les modes worker / flower / db-init, les manifests OpenShift définissent
-# leurs propres probes (exec celery ping, tcpSocket, etc.) ; Kubernetes ignore
-# de toute façon le HEALTHCHECK Docker au profit des probes du pod.
+# Pour les modes flower / db-init, les manifests OpenShift définissent leurs
+# propres probes (httpGet /healthcheck, exec, etc.) ; Kubernetes ignore de
+# toute façon le HEALTHCHECK Docker au profit des probes du pod.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 

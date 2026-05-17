@@ -20,9 +20,16 @@ permissions:
 
 # Cancel in-flight runs when a new commit lands on the same ref — saves
 # minutes on rapid pushes during active development.
+#
+# cancel-in-progress is SCOPED to non-default branches (G28). On main, a run
+# is the gate that records whether the shipped commit is green and feeds the
+# image build/scan job; cancelling it mid-flight would leave main with no
+# authoritative CI result. Feature branches (develop, PR branches) keep the
+# fast-cancel behaviour. The expression evaluates to `true` everywhere except
+# refs/heads/main.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # ----------------------------------------------------------------------------
 # Action pinning (G4) — supply-chain hardening.
@@ -77,11 +84,16 @@ jobs:
     defaults:
       run:
         working-directory: backend
-    # SECRET_KEY has a dev fallback in config.py — CI doesn't need a real
-    # one. Pinned to make the intent explicit and avoid a future "why is
-    # SECRET_KEY undefined" debugging session.
+    # SECRET_KEY (G27) — sourced from the repo variable CI_SECRET_KEY when
+    # set, otherwise a fixed, clearly-fake CI literal. config.py rejects keys
+    # shorter than 32 chars / known placeholders, so the fallback is a valid
+    # 32+ char non-placeholder string. It is NOT a real secret — every test
+    # signs and verifies its own tokens in-process, nothing external trusts
+    # this key. Defining it as a repo variable lets an operator override it
+    # without editing this file. (A real secret would live in `secrets.*`;
+    # this value is deliberately not sensitive.)
     env:
-      SECRET_KEY: ci-test-secret-32-characters-long
+      SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
     steps:
       - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
 
@@ -97,28 +109,64 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: pytest (CI-safe suites only)
-        # Excluded suites need live infra and have no CI value here:
-        #   - test_complete_api.py        → requires a running server
-        #   - test_user_management.py     → requires a running server
-        #   - test_analyzer_live.py       → calls the trained model on disk
-        #   - test_hyperv_discovery.py    → requires Hyper-V on Windows
-        #   - test_*_sync.py              → require real hypervisor sources
-        #   - test_kubevirt_client.py     → has manual-only fixtures
-        # The remaining set covers /health, analyzer, adapter, converter,
-        # celery, migrator, and migrator-p1 — pure unit tests with mocks.
+      # CI-safe suite (G22 / J2). Every suite below runs WITHOUT live
+      # infrastructure: the RBAC / API suites use Starlette's TestClient with
+      # an in-memory SQLite engine and FastAPI dependency overrides — no
+      # Postgres, no Redis, no running server.
+      #
+      # G22 / J2 fix — the previous workflow ran ~10 suites and silently
+      # skipped the RBAC ones, so privilege-escalation regressions went
+      # uncaught. test_user_admin_rbac.py is now in the set: it exercises the
+      # super-admin protection rules and the PUT privilege-escalation guard
+      # (TestClient + in-memory SQLite). test_main / test_security / test_config
+      # / test_init_db / test_converter_security / test_hypervisor_schema /
+      # test_conversions_api are added likewise — pure-unit / TestClient
+      # suites that need no infra.
+      #
+      # Genuinely excluded — cannot run in CI (documented, not an oversight):
+      #   - test_complete_api.py      → a `requests` script that hits a live
+      #                                 http://localhost:8000 server; not a
+      #                                 TestClient suite, cannot self-host.
+      #   - test_user_management.py   → same — `requests` + a direct psycopg2
+      #                                 connection to a populated Postgres.
+      #   - test_*_sync.py            → require real hypervisor sources
+      #                                 (VMware Workstation, Hyper-V, KVM,
+      #                                 Proxmox) reachable over the network.
+      #   - test_hyperv_discovery.py  → requires Hyper-V (Windows host).
+      #   - test_analyzer_live.py     → exercises the on-disk trained model
+      #                                 against a live scenario set.
+      #   - test_kubevirt_client.py   → a manual script mis-collected as
+      #                                 pytest (functions `return` objects,
+      #                                 reference an undefined `client`
+      #                                 fixture) — tracked as J1.
+      #   - test_migrations_api.py    → CI-safe in principle (TestClient +
+      #                                 SQLite) but currently coupled to the
+      #                                 in-flight migrations-endpoint refactor
+      #                                 (row-lock re-assert + Celery-task
+      #                                 import path). Add it once that work
+      #                                 lands so a transient mid-refactor
+      #                                 state doesn't red the gate.
+      - name: pytest (CI-safe suites)
         run: |
           python -m pytest \
             tests/test_health.py \
+            tests/test_config.py \
+            tests/test_main.py \
+            tests/test_security.py \
+            tests/test_init_db.py \
             tests/test_analyzer.py \
             tests/test_adapter.py \
             tests/test_celery_tasks.py \
             tests/test_converter.py \
+            tests/test_converter_security.py \
             tests/test_migrator.py \
             tests/test_migrator_p1.py \
             tests/test_namespace_quota.py \
             tests/test_login_audit.py \
             tests/test_login_throttle.py \
+            tests/test_user_admin_rbac.py \
+            tests/test_hypervisor_schema.py \
+            tests/test_conversions_api.py \
             --tb=short -v
 
   backend-audit:
@@ -144,9 +192,9 @@ jobs:
           pip-audit --requirement requirements.txt --strict --desc
 
   image:
-    name: image · build + scan
+    name: image · build + scan + SBOM
     # Only on a push to main — building/scanning the container image on every
-    # PR would be wasteful. Gated so feature branches stay fast (G22).
+    # PR would be wasteful. Gated so feature branches stay fast.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -155,55 +203,115 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
 
-      # Build the runtime image locally (no push). `load: true` keeps it in
-      # the local docker daemon so the scanner can read it.
+      # Build the slim API image locally (no push). `load: true` keeps it in
+      # the local docker daemon so the scanner + SBOM step can read it.
       # PYTHON_BASE — pin the Python base image by digest (G10). Set the repo
       # variable PYTHON_BASE_PINNED to `python:3.11-slim@sha256:<digest>` so
       # production builds are reproducible; falls back to the mutable tag if
       # the variable is unset.
-      - name: Build backend image
+      - name: Build backend API image
         uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
         with:
           context: backend
           file: backend/Dockerfile
           push: false
           load: true
-          tags: shiftwise-backend:ci-${{ github.sha }}
+          tags: shiftwise-backend-api:ci-${{ github.sha }}
           build-args: |
             PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
 
-      # Vulnerability scan of the built image (G22). Fails the job on a
+      # Build the worker image (G12) — FROM the API image just built, adds the
+      # libguestfs / qemu-img guest-tooling layer. API_IMAGE points at the API
+      # tag produced by the step above so the worker inherits identical code.
+      - name: Build backend worker image
+        uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+        with:
+          context: backend
+          file: backend/Dockerfile.worker
+          push: false
+          load: true
+          tags: shiftwise-backend-worker:ci-${{ github.sha }}
+          build-args: |
+            API_IMAGE=shiftwise-backend-api:ci-${{ github.sha }}
+
+      # Vulnerability scan of BOTH built images. Fails the job on a
       # HIGH/CRITICAL OS- or library-level CVE so a vulnerable image never
-      # reaches the registry.
-      - name: Scan image with Trivy
+      # reaches the registry. The worker image is the larger surface
+      # (libguestfs + kernel) so it is scanned explicitly, not assumed clean
+      # because the API image passed.
+      - name: Scan API image with Trivy
         uses: aquasecurity/trivy-action@0.28.0   # 0.28.0 — TODO: pin to commit SHA
         with:
-          image-ref: shiftwise-backend:ci-${{ github.sha }}
+          image-ref: shiftwise-backend-api:ci-${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
 
+      - name: Scan worker image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0   # 0.28.0 — TODO: pin to commit SHA
+        with:
+          image-ref: shiftwise-backend-worker:ci-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      # SBOM generation (G31) — a CycloneDX software bill of materials for
+      # each image, produced with Anchore syft. The SBOM is the supply-chain
+      # inventory: it lists every OS package and Python dependency baked into
+      # the image, enabling later CVE matching against an artifact that is
+      # already in production. Uploaded as a build artifact (retained 90 days
+      # by default); when the registry push is enabled it should instead be
+      # attached to the image as an attestation.
+      - name: Generate SBOM — API image
+        uses: anchore/sbom-action@v0.17.8        # v0.17.8 — TODO: pin to commit SHA
+        with:
+          image: shiftwise-backend-api:ci-${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom-api.cyclonedx.json
+          artifact-name: sbom-api.cyclonedx.json
+
+      - name: Generate SBOM — worker image
+        uses: anchore/sbom-action@v0.17.8        # v0.17.8 — TODO: pin to commit SHA
+        with:
+          image: shiftwise-backend-worker:ci-${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom-worker.cyclonedx.json
+          artifact-name: sbom-worker.cyclonedx.json
+
       # Registry push — STUB. Enable once registry credentials exist as repo
       # secrets and an immutable tag scheme (v<semver>) replaces `:latest`.
       # Uncomment `packages: write` in this job's `permissions` block too.
+      # Both images must be pushed: shiftwise-backend-api AND
+      # shiftwise-backend-worker (G12). Build the API first, then the worker
+      # with --build-arg API_IMAGE=<the API tag just pushed>.
       # - name: Log in to registry
       #   uses: docker/login-action@v3.3.0       # v3.3.0 — TODO: pin to commit SHA
       #   with:
       #     registry: docker.io
       #     username: ${{ secrets.REGISTRY_USERNAME }}
       #     password: ${{ secrets.REGISTRY_TOKEN }}
-      # - name: Build + push immutable tag
+      # - name: Build + push API image (immutable tag)
       #   uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
       #   with:
       #     context: backend
       #     file: backend/Dockerfile
       #     push: true
-      #     tags: docker.io/dida1609/shiftwise-backend:v${{ github.run_number }}
+      #     tags: docker.io/dida1609/shiftwise-backend-api:v${{ github.run_number }}
       #     build-args: |
       #       PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
+      # - name: Build + push worker image (immutable tag)
+      #   uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+      #   with:
+      #     context: backend
+      #     file: backend/Dockerfile.worker
+      #     push: true
+      #     tags: docker.io/dida1609/shiftwise-backend-worker:v${{ github.run_number }}
+      #     build-args: |
+      #       API_IMAGE=docker.io/dida1609/shiftwise-backend-api:v${{ github.run_number }}
       - name: Registry push (stub)
         run: |
-          echo "Image build + scan passed."
+          echo "API + worker images: build, scan and SBOM all passed."
           echo "Registry push is stubbed — enable the docker/login-action +"
           echo "build-push-action steps above and add REGISTRY_* secrets."
