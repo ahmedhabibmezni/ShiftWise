@@ -25,6 +25,24 @@ NO_WAIT=false
 
 cd "$(dirname "$0")"
 
+# Préflight — le Secret shiftwise-secrets et le ConfigMap shiftwise-config
+# ne sont PAS dans la kustomization (ils contiennent / dérivent de secrets et
+# sont gérés hors-Git). Ils doivent exister avant l'apply, sinon les pods
+# restent en CreateContainerConfigError. Voir secrets.example.yaml.
+echo "==> [0/6] Checking prerequisites (shiftwise-secrets / shiftwise-config)"
+if ! oc get secret shiftwise-secrets -n "$NAMESPACE" >/dev/null 2>&1; then
+  echo "ERROR: Secret 'shiftwise-secrets' missing in namespace '$NAMESPACE'." >&2
+  echo "       cp secrets.example.yaml secrets.local.yaml, fill it, then:" >&2
+  echo "       oc apply -f secrets.local.yaml -n $NAMESPACE" >&2
+  echo "       (see secrets.example.yaml — do NOT commit the filled file)" >&2
+  exit 1
+fi
+if ! oc get configmap shiftwise-config -n "$NAMESPACE" >/dev/null 2>&1; then
+  echo "ERROR: ConfigMap 'shiftwise-config' missing in namespace '$NAMESPACE'." >&2
+  echo "       It is defined alongside the Secret in secrets.example.yaml." >&2
+  exit 1
+fi
+
 echo "==> [1/6] Applying kustomization to namespace '$NAMESPACE'"
 oc apply -k .
 
@@ -54,4 +72,5 @@ echo "==> [6/6] Cluster ready"
 oc get pods -n "$NAMESPACE"
 echo
 echo "Backend route:  https://$(oc get route backend -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
-echo "Flower route:   https://$(oc get route flower  -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
+# Flower n'a plus de Route publique (durcissement G18). Accès opérateur :
+echo "Flower (interne, basic-auth):  oc port-forward -n $NAMESPACE svc/flower 5555:5555  → http://localhost:5555"

@@ -32,9 +32,14 @@ spec:
     metadata:
       labels: {app: postgresql, component: database}
     spec:
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: postgres
           image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
           ports:
             - {name: postgres, containerPort: 5432}
           env:
@@ -43,10 +48,21 @@ spec:
             - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_PASSWORD}}}
             - {name: PGDATA,            value: /var/lib/postgresql/data/pgdata}
           volumeMounts:
-            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: data,     mountPath: /var/lib/postgresql/data}
+            # rootfs en lecture seule (G8) : postgres écrit son socket Unix
+            # dans /var/run/postgresql et des fichiers temporaires dans /tmp.
+            - {name: run,      mountPath: /var/run/postgresql}
+            - {name: tmp,      mountPath: /tmp}
           resources:
             requests: {cpu: 200m, memory: 512Mi}
             limits:   {cpu: 1000m, memory: 1Gi}
+          # securityContext conteneur (G8). Données sur le PVC ; socket + tmp
+          # sur emptyDir — donc le rootfs peut être monté en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           livenessProbe:
             exec:
               command: [pg_isready, -U, shiftwise]
@@ -60,6 +76,10 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim: {claimName: postgresql-data}
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

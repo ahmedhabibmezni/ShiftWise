@@ -55,8 +55,15 @@ spec:
       labels: {app: backend, component: api}
     spec:
       serviceAccountName: shiftwise-api
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: api
+          # imagePullPolicy explicite (G14). NOTE : `:latest` est mutable —
+          # remplacer par un tag immuable `:v<semver>` pour des rollouts
+          # déterministes (le pipeline CI le fera, cf. ci.yml job image-build).
           image: docker.io/dida1609/shiftwise-backend:latest
           imagePullPolicy: IfNotPresent
           command:
@@ -70,13 +77,24 @@ spec:
             - configMapRef: {name: shiftwise-config}
           env:
             - {name: DATABASE_HOST,         value: postgresql}
-            - {name: CELERY_BROKER_URL,     value: "redis://redis:6379/0"}
-            - {name: CELERY_RESULT_BACKEND, value: "redis://redis:6379/0"}
+            # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
+            # (ils embarquent le mot de passe Redis depuis le durcissement
+            # G20) — on ne les surcharge plus ici en clair.
           ports:
             - {name: http, containerPort: 8000}
           resources:
             requests: {cpu: 200m, memory: 384Mi}
             limits:   {cpu: 1000m, memory: 768Mi}
+          # securityContext conteneur (G8). rootfs en lecture seule : l'API
+          # n'écrit rien sous / (PYTHONDONTWRITEBYTECODE=1) ; /tmp est fourni
+          # par un emptyDir pour les fichiers temporaires éventuels.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
           livenessProbe:
             httpGet: {path: /health, port: 8000}
             initialDelaySeconds: 20
@@ -85,6 +103,9 @@ spec:
             httpGet: {path: /health, port: 8000}
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

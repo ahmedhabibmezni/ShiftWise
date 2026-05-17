@@ -13,9 +13,27 @@
 # namespace-scoped — pas franchissables. Le NFS direct atteint la même
 # donnée physique sans passer par un PVC cross-namespace.
 #
-# Lié au SA `default` du namespace tenant `shiftwise-system` pour le test
-# initial. En production, le migrator devra auto-créer un SA dédié dans
-# chaque namespace tenant et lier ce SCC dynamiquement.
+# Liaison (G9) :
+# Ce SCC est lié à un ServiceAccount DÉDIÉ et nommé — `shiftwise-populator`
+# dans le namespace `shiftwise` — et NON au SA générique `default`. Lier
+# `default` aurait accordé le droit `privileged` à TOUT pod du namespace
+# tournant sous ce SA, pas seulement aux pods populator/adapter. Le worker
+# lance les Jobs populator/adapter avec ce SA via le réglage
+# `MIGRATOR_POPULATOR_SA=shiftwise-populator`.
+# En production multi-tenant, le migrator devra provisionner un SA équivalent
+# dans chaque namespace tenant et l'ajouter à la liste `users` de ce SCC
+# (ou utiliser un RoleBinding sur le SCC). Le SA committé ci-dessous couvre
+# le namespace de contrôle `shiftwise`.
+---
+# ServiceAccount dédié (G9) — porte le droit `privileged` accordé par le SCC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shiftwise-populator
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+    app.kubernetes.io/component: populator
 ---
 apiVersion: security.openshift.io/v1
 kind: SecurityContextConstraints
@@ -36,8 +54,8 @@ allowPrivilegeEscalation: true
 # a besoin pour faire tourner son appliance qemu interne — sans privileged
 # guestfs_launch échoue avec "appliance failed to start" parce que le
 # seccomp + capabilities par défaut bloquent les syscalls que qemu utilise.
-# Le SCC est lié au SA `default` du namespace tenant uniquement, donc le
-# blast radius reste contenu à ce namespace.
+# Le SCC est lié au seul SA dédié `shiftwise-populator` (cf. `users` plus
+# bas), donc le blast radius reste contenu à ce SA — pas tout le namespace.
 allowPrivilegedContainer: true
 allowedCapabilities: null
 defaultAddCapabilities: null
@@ -67,6 +85,7 @@ allowedVolumeTypes:
   - projected
   - secret
 users:
-  # SA par défaut des namespaces tenants où tournent les populator pods.
-  # En production, on liera dynamiquement à un SA dédié.
-  - system:serviceaccount:shiftwise-system:default
+  # SA DÉDIÉ (G9) — uniquement les pods populator/adapter lancés sous ce SA
+  # obtiennent `privileged`. Pas le SA `default` du namespace.
+  # Format : system:serviceaccount:<namespace>:<sa-name>
+  - system:serviceaccount:shiftwise:shiftwise-populator

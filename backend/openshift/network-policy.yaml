@@ -1,0 +1,109 @@
+# NetworkPolicy — segmentation réseau du namespace `shiftwise` (G17).
+#
+# Modèle : default-deny en INGRESS, puis on ré-autorise explicitement les
+# seuls flux légitimes. L'EGRESS n'est volontairement pas restreint ici —
+# les workers doivent joindre des hyperviseurs externes, le serveur NFS, et
+# l'API Kubernetes, dont les plages ne sont pas stables ; un default-deny
+# egress demanderait une cartographie réseau séparée (à traiter plus tard).
+#
+# Conséquence du default-deny ingress :
+#   - PostgreSQL n'accepte du trafic que des pods backend / worker / db-init.
+#   - Redis n'accepte du trafic que des pods backend / worker / flower.
+#   - Le backend n'accepte du trafic HTTP que du routeur OpenShift.
+#   - Flower n'a aucune règle d'ingress entrante : il n'est joignable que
+#     via `oc port-forward` (qui passe par l'API server, hors NetworkPolicy).
+#
+# Les sondes liveness/readiness du kubelet ne sont PAS affectées : le kubelet
+# sonde depuis le nœud, ce qui contourne les NetworkPolicy.
+#
+# Sélecteurs de pods utilisés (labels portés par chaque workload) :
+#   backend → app=backend   celery-worker → app=celery-worker
+#   flower  → app=flower     db-init → app=db-init
+#   postgresql → app=postgresql   redis → app=redis
+---
+# 1. Default-deny : aucun ingress vers aucun pod du namespace, sauf
+#    réautorisation explicite par les policies ci-dessous (elles sont additives).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+spec:
+  podSelector: {}            # tous les pods du namespace
+  policyTypes:
+    - Ingress
+  # Pas de bloc `ingress:` → tout trafic entrant est refusé.
+---
+# 2. PostgreSQL :5432 — accepte uniquement backend / worker / db-init.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-ingress
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+spec:
+  podSelector:
+    matchLabels: {app: postgresql}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: backend}
+        - podSelector:
+            matchLabels: {app: celery-worker}
+        - podSelector:
+            matchLabels: {app: db-init}
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+# 3. Redis :6379 — accepte uniquement backend / worker / flower.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+spec:
+  podSelector:
+    matchLabels: {app: redis}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: backend}
+        - podSelector:
+            matchLabels: {app: celery-worker}
+        - podSelector:
+            matchLabels: {app: flower}
+      ports:
+        - {protocol: TCP, port: 6379}
+---
+# 4. Backend :8000 — accepte le trafic HTTP du routeur OpenShift (la Route
+#    `backend` est TLS edge ; le routeur vit dans le namespace
+#    `openshift-ingress`). `kubernetes.io/metadata.name` est un label posé
+#    automatiquement par Kubernetes sur chaque namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-from-router
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+spec:
+  podSelector:
+    matchLabels: {app: backend}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - {protocol: TCP, port: 8000}

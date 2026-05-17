@@ -17,6 +17,35 @@ resources:
   - transit-pvc.yaml
   - worker-rbac.yaml
   - populator-scc.yaml
+  - network-policy.yaml          # G17 — default-deny + flux scopés
   - backend-deployment.yaml
   - celery-worker-deployment.yaml
   - flower-deployment.yaml
+
+# secretGenerator / configMapGenerator (G25) :
+#   shiftwise-secrets et shiftwise-config NE sont volontairement PAS générés
+#   par kustomize. Un secretGenerator exigerait soit les valeurs en clair
+#   dans ce fichier, soit un fichier d'env référencé — dans les deux cas le
+#   secret entrerait dans Git, ce que le durcissement G6 interdit. Ces objets
+#   sont gérés hors-Git : `oc apply -f secrets.yaml` (cf. secrets.example.yaml)
+#   avant `./deploy.sh`. Le ConfigMap redis-config (non sensible) reste défini
+#   inline dans redis-deployment.yaml — pas de gain à le générer.
+
+# Épinglage des images par digest (G26) :
+#   Les images postgres / redis sont référencées par tag mutable
+#   (`16-alpine`, `7.2-alpine`). Pour un déploiement reproductible et résistant
+#   au supply-chain, les épingler par digest. Résoudre le digest réel :
+#       skopeo inspect docker://postgres:16-alpine --format '{{.Digest}}'
+#       skopeo inspect docker://redis:7.2-alpine    --format '{{.Digest}}'
+#   puis décommenter et compléter le bloc ci-dessous.
+#   NOTE kustomize : pour une même image, `digest` et `newTag` sont mutuellement
+#   exclusifs — on garde uniquement `digest`, le tag d'origine reste en
+#   commentaire à titre documentaire.
+#   Laissé commenté pour ne pas casser `oc apply -k .` avec un digest factice.
+# images:
+#   - name: postgres                                   # tag: 16-alpine
+#     digest: sha256:<RESOLVED_DIGEST>
+#   - name: redis                                      # tag: 7.2-alpine
+#     digest: sha256:<RESOLVED_DIGEST>
+#   - name: docker.io/dida1609/shiftwise-backend       # → publier un tag immuable v<semver>
+#     digest: sha256:<RESOLVED_DIGEST>

@@ -21,9 +21,20 @@ spec:
       labels: {app: celery-worker, component: orchestration}
     spec:
       serviceAccountName: shiftwise-worker   # needs RBAC to create K8s Jobs
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      # NB : ce pod Celery ne fait qu'orchestrer ; il ne demande PAS
+      # `privileged`. Les pods adapter/populator (libguestfs/virt-customize),
+      # qui eux exigent privileged, sont des Jobs K8s distincts créés au
+      # runtime par le code worker — ils ne sont pas couverts par ce contexte.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: worker
+          # imagePullPolicy explicite (G14). `:latest` mutable — voir note
+          # dans backend-deployment.yaml ; migrer vers un tag immuable.
           image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
           command:
             - celery
             - -A
@@ -38,8 +49,8 @@ spec:
             - secretRef: {name: shiftwise-secrets}
             - configMapRef: {name: shiftwise-config}
           env:
-            - {name: CELERY_BROKER_URL,     value: "redis://redis:6379/0"}
-            - {name: CELERY_RESULT_BACKEND, value: "redis://redis:6379/0"}
+            # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
+            # (ils embarquent le mot de passe Redis — durcissement G20).
             - {name: CONVERTER_TRANSIT_ROOT, value: "/mnt/shiftwise-transit"}
             # Le migrator découvre automatiquement le NFS au runtime à
             # partir du PV qui backe transit-pvc (cf. transit_discovery.py).
@@ -50,9 +61,17 @@ spec:
             # - {name: MIGRATOR_NFS_PATH,   valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_PATH}}}
           volumeMounts:
             - {name: transit, mountPath: /mnt/shiftwise-transit}
+            - {name: tmp,     mountPath: /tmp}
           resources:
             requests: {cpu: 200m, memory: 512Mi}
             limits:   {cpu: 1000m, memory: 1Gi}
+          # securityContext conteneur (G8). Le worker n'écrit que sur le
+          # volume transit (RWX) et /tmp (emptyDir) — rootfs en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           livenessProbe:
             exec:
               command:
@@ -64,6 +83,25 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 10
+          # readinessProbe (G19) — le worker ne reçoit du trafic d'aucun
+          # Service, mais la probe gate les rollouts : un worker qui n'a pas
+          # encore enregistré sa file (broker Redis injoignable) n'est pas
+          # compté Ready, donc `oc rollout status` ne valide pas un déploiement
+          # cassé. Même commande que la liveness (Celery ping), cadence plus
+          # serrée.
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.core.celery_app
+                - inspect
+                - ping
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 10
       volumes:
         - name: transit
           persistentVolumeClaim: {claimName: transit-pvc}
+        - name: tmp
+          emptyDir: {}
