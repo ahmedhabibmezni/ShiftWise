@@ -23,6 +23,7 @@ import shlex
 from pathlib import Path
 from typing import List, Optional
 
+from app.core.ssh import apply_host_key_policy
 from app.models.conversion import SourceFormat
 from app.models.hypervisor import Hypervisor
 from app.models.virtual_machine import VirtualMachine
@@ -239,7 +240,7 @@ class ProxmoxPuller:
             ) from e
 
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
         try:
             ssh.connect(
                 hostname=hv.host,
@@ -300,7 +301,7 @@ class ProxmoxPuller:
         h = hashlib.sha256()
 
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
         try:
             ssh.connect(
                 hostname=hv.host,

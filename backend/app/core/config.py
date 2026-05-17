@@ -188,6 +188,17 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # ============================================
+    # SSH (connecteurs hyperviseurs KVM / Proxmox)
+    # ============================================
+    #
+    # Audit H-02 — vérification des clés d'hôte SSH. Par défaut (False), une
+    # connexion SSH rejette tout hôte absent des known_hosts du système, ce
+    # qui empêche l'interception (MITM) et le vol du mot de passe SSH. Mettre
+    # à True active le « trust on first use » (AutoAddPolicy) — pratique en
+    # dev / POC, à NE PAS utiliser en production.
+    SSH_AUTO_ADD_HOST_KEYS: bool = False
+
+    # ============================================
     # ANALYZER CONFIGURATION
     # ============================================
 

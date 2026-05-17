@@ -36,3 +36,27 @@ def test_validate_volid_accepts_legitimate_volids(volid):
 def test_validate_volid_rejects_command_injection(payload):
     with pytest.raises(ConversionError):
         _validate_volid(payload)
+
+
+# --- H-02 : politique de vérification des clés d'hôte SSH ---
+
+def test_ssh_policy_rejects_unknown_hosts_by_default(monkeypatch):
+    import paramiko
+    from app.core import ssh as ssh_mod
+    from app.core.ssh import apply_host_key_policy
+
+    monkeypatch.setattr(ssh_mod.settings, "SSH_AUTO_ADD_HOST_KEYS", False)
+    client = paramiko.SSHClient()
+    apply_host_key_policy(client)
+    assert isinstance(client._policy, paramiko.RejectPolicy)
+
+
+def test_ssh_policy_auto_add_only_when_explicitly_enabled(monkeypatch):
+    import paramiko
+    from app.core import ssh as ssh_mod
+    from app.core.ssh import apply_host_key_policy
+
+    monkeypatch.setattr(ssh_mod.settings, "SSH_AUTO_ADD_HOST_KEYS", True)
+    client = paramiko.SSHClient()
+    apply_host_key_policy(client)
+    assert isinstance(client._policy, paramiko.AutoAddPolicy)

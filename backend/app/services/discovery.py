@@ -1362,6 +1362,7 @@ class DiscoveryService:
         """
         import warnings as _warnings
         import paramiko
+        from app.core.ssh import apply_host_key_policy
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
         host_uri: str = hypervisor.host or "qemu:///system"
@@ -1388,7 +1389,7 @@ class DiscoveryService:
         with _warnings.catch_warnings():
             _warnings.simplefilter("ignore")
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            apply_host_key_policy(client)  # Audit H-02 — vérifie les clés d'hôte SSH
             try:
                 client.connect(
                     ssh_host,

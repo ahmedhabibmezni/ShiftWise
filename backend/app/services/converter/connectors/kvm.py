@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Optional
 
+from app.core.ssh import apply_host_key_policy
 from app.models.conversion import SourceFormat
 from app.models.hypervisor import Hypervisor
 from app.models.virtual_machine import VirtualMachine
@@ -41,7 +42,7 @@ def _ssh_connect(hv: Hypervisor):
             cause=e,
         ) from e
     ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
     try:
         ssh.connect(
             hostname=hv.host,
