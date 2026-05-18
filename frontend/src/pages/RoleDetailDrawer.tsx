@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import { Ban, CheckCircle2, Lock, Pencil, Save, Trash2, Users as UsersIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -24,15 +23,7 @@ import {
 } from "@/api/roles";
 import { useHasPermission } from "@/lib/permissions";
 import { formatRelativeTime } from "@/lib/format";
-import type { ApiError } from "@/api/types";
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
+import { describeError } from "@/lib/errors";
 
 export function RoleDetailDrawer({
   id,

@@ -52,7 +52,7 @@ export function PermissionsMatrix({
     } else {
       next[resource] = nextList;
     }
-    onChange!(next);
+    onChange(next);
   };
 
   return (

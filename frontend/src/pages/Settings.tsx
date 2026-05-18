@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AxiosError } from "axios";
 import { Ban, CheckCircle2, KeyRound, Save, UserCog } from "lucide-react";
 import toast from "react-hot-toast";
 import { z } from "zod";
@@ -16,17 +15,10 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { changePassword } from "@/api/auth";
 import { updateUser, type UpdateUserPayload } from "@/api/users";
-import type { ApiError, User } from "@/api/types";
+import type { User } from "@/api/types";
+import { describeError } from "@/lib/errors";
 import { primaryRole } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 const profileSchema = z.object({
   email: z.string().email("Invalid email address").max(255),

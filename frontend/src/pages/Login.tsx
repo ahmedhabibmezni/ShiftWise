@@ -16,7 +16,7 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
 import { setAccessToken, useAuthStore } from "@/store/auth";
 import { queryClient } from "@/lib/queryClient";
-import type { ApiError } from "@/api/types";
+import { describeErrorOrNull } from "@/lib/errors";
 
 const loginSchema = z.object({
   email: z.string().min(1, "Email is required").email("Invalid email address"),
@@ -27,14 +27,6 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 type LocationState = { from?: string };
 
 const GENERIC_LOGIN_ERROR = "Login failed. Check your credentials.";
-
-function extractDetail(err: unknown): string | null {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return null;
-}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -74,7 +66,7 @@ export default function Login() {
     },
     onError: (err) => {
       const status = (err as AxiosError).response?.status;
-      const detail = extractDetail(err);
+      const detail = describeErrorOrNull(err);
 
       if (status === 403) {
         const msg =

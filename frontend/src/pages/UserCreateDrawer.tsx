@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
@@ -11,26 +10,10 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { createUser, listRoles } from "@/api/users";
+import { describeError } from "@/lib/errors";
 import { SUPER_ADMIN_ROLE } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
 import { userCreateSchema, type UserCreateValues } from "./userForm";
-
-type FastApiValidationError = { msg?: string };
-
-function extractDetail(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as
-      | { detail?: string | FastApiValidationError[] }
-      | undefined;
-    const detail = data?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail) && detail.length > 0) {
-      const first = detail[0];
-      if (typeof first?.msg === "string") return first.msg;
-    }
-  }
-  return fallback;
-}
 
 export function UserCreateDrawer({
   open,
@@ -88,7 +71,7 @@ export function UserCreateDrawer({
       onClose();
     },
     onError: (err) => {
-      toast.error(extractDetail(err, "Failed to create user."));
+      toast.error(describeError(err, "Failed to create user."));
     },
   });
 
@@ -140,7 +123,7 @@ export function UserCreateDrawer({
             only as an auto-dismissing toast, easy to miss (F12). */}
         {mutation.isError && (
           <Callout tone="err" kicker="Creation failed" role="alert">
-            {extractDetail(
+            {describeError(
               mutation.error,
               "Could not create the user. Check the fields and try again.",
             )}

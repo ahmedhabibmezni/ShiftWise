@@ -41,7 +41,7 @@ describe("HypervisorCreateDrawer", () => {
   it("shows a success banner when test-connection succeeds", async () => {
     let testCalls = 0;
     server.use(
-      http.post("/api/v1/hypervisors/test-connection", async () => {
+      http.post("/api/v1/hypervisors/test-connection", () => {
         testCalls += 1;
         return HttpResponse.json({
           success: true,
@@ -150,7 +150,7 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     renderDrawer();
 
-    const portInput = screen.getByLabelText(/^port$/i) as HTMLInputElement;
+    const portInput = screen.getByLabelText(/^port$/i);
     expect(portInput.value).toBe("22");
 
     await user.selectOptions(screen.getByLabelText(/^type$/i), "proxmox");

@@ -70,7 +70,7 @@ function isAccountDeactivated(error: unknown): boolean {
   if (!axios.isAxiosError(error)) return false;
   const res = error.response;
   if (!res || res.status !== 403) return false;
-  const header = res.headers?.["x-account-status"];
+  const header: unknown = res.headers?.["x-account-status"];
   if (typeof header === "string" && header.toLowerCase() === "deactivated") {
     return true;
   }
@@ -128,7 +128,9 @@ api.interceptors.response.use(
       } else {
         forceLogout();
       }
-      return Promise.reject(refreshErr);
+      // Re-throw rather than `Promise.reject` so the original error value
+      // (an AxiosError, which callers inspect) reaches the caller unchanged.
+      throw refreshErr;
     }
   },
 );

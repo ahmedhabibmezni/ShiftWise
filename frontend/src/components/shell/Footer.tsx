@@ -11,7 +11,7 @@ export function Footer({
   environment?: string;
   version?: string;
 }) {
-  const buildHash = (typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev") as string;
+  const buildHash = (typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev");
 
   const items: { label: string; value: string; tone?: "ok" | "muted" }[] = [
     { label: "Env", value: environment, tone: "ok" },

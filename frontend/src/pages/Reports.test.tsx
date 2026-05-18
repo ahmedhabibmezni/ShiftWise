@@ -211,8 +211,10 @@ describe("Reports page", () => {
     // jsdom doesn't implement createObjectURL — stub it and capture the
     // Blob so we can assert the body.
     const capturedBlobs: Blob[] = [];
-    const originalCreate = URL.createObjectURL;
-    const originalRevoke = URL.revokeObjectURL;
+    // Bind so the saved references can be restored without the
+    // unbound-method lint flagging a `this`-scoping hazard.
+    const originalCreate = URL.createObjectURL.bind(URL);
+    const originalRevoke = URL.revokeObjectURL.bind(URL);
     URL.createObjectURL = vi.fn((blob: Blob) => {
       capturedBlobs.push(blob);
       const url = `blob:fake-${capturedBlobs.length}`;

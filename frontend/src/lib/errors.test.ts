@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AxiosError } from "axios";
-import { describeError } from "./errors";
+import { describeError, describeErrorOrNull } from "./errors";
 
 function axiosErrorWith(data: unknown, status = 400): AxiosError {
   const err = new AxiosError("request failed");
@@ -60,5 +60,28 @@ describe("describeError", () => {
   it("falls back when `detail` is an unexpected type", () => {
     const err = axiosErrorWith({ detail: { nested: true } });
     expect(describeError(err, "fallback")).toBe("fallback");
+  });
+});
+
+describe("describeErrorOrNull", () => {
+  it("returns null for a non-Axios error", () => {
+    expect(describeErrorOrNull(new Error("boom"))).toBeNull();
+  });
+
+  it("returns null when there is no usable detail", () => {
+    expect(describeErrorOrNull(new AxiosError("network"))).toBeNull();
+  });
+
+  it("extracts a plain string `detail`", () => {
+    const err = axiosErrorWith({ detail: "Account is inactive" });
+    expect(describeErrorOrNull(err)).toBe("Account is inactive");
+  });
+
+  it("extracts the first message from a FastAPI 422 detail array", () => {
+    const err = axiosErrorWith(
+      { detail: [{ loc: ["body", "email"], msg: "field required" }] },
+      422,
+    );
+    expect(describeErrorOrNull(err)).toBe("field required");
   });
 });

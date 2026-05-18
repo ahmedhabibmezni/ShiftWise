@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { Controller, useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import { Ban, CheckCircle2, Pencil, Save, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -23,7 +22,8 @@ import {
   updateUser,
   type UpdateUserPayload,
 } from "@/api/users";
-import type { ApiError, User } from "@/api/types";
+import type { User } from "@/api/types";
+import { describeError } from "@/lib/errors";
 import { formatRelativeTime } from "@/lib/format";
 import {
   isSuperAdminUser,
@@ -33,14 +33,6 @@ import {
 } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
 import { userEditSchema, type UserEditValues } from "./userForm";
-
-function describeError(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 const USER_EDIT_FORM_ID = "user-edit-form";
 

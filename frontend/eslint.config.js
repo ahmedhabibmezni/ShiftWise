@@ -11,13 +11,33 @@ export default defineConfig([
     files: ['**/*.{ts,tsx}'],
     extends: [
       js.configs.recommended,
-      tseslint.configs.recommended,
+      // Type-checked rules require type information — `projectService` below
+      // wires the TypeScript program in. `recommendedTypeChecked` is the
+      // lighter of the two type-aware presets (vs `strictTypeChecked`).
+      tseslint.configs.recommendedTypeChecked,
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
     languageOptions: {
-      ecmaVersion: 2020,
+      // Matches `target: ES2022` in tsconfig.app.json — the two were out of
+      // sync (config said 2020).
+      ecmaVersion: 2022,
       globals: globals.browser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // The codebase intentionally calls async mutation/query functions in
+      // event handlers (TanStack Query's `mutate`, fire-and-forget refetches)
+      // without awaiting them. The promise is handled by the library, so the
+      // floating-promise warning is noise here.
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/no-misused-promises': [
+        'error',
+        { checksVoidReturn: { attributes: false } },
+      ],
     },
   },
 ])

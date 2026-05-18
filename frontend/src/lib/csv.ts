@@ -21,7 +21,9 @@ export type CsvColumn<T> = {
 // re-evaluates the remainder.
 const FORMULA_TRIGGERS = new Set(["=", "+", "-", "@", "\t", "\r"]);
 
-function escapeCell(raw: unknown): string {
+function escapeCell(
+  raw: string | number | boolean | null | undefined,
+): string {
   if (raw === null || raw === undefined) return "";
   let s = String(raw);
   // Formula-injection neutralisation: prefix a single quote so the cell is

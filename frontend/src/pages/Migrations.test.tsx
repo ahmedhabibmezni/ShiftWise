@@ -273,7 +273,7 @@ describe("Migrations page", () => {
     // Every tenant VM is listed. The non-migratable one stays visible but
     // disabled, with the reason inline — it is no longer dropped silently.
     const select = within(dialog).getByLabelText(/target vm/i);
-    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
+    const options = within(select).getAllByRole("option");
     const ubuntu = options.find((o) => o.textContent?.includes("ubuntu-22-prod"));
     const windows = options.find((o) => o.textContent?.includes("windows-2019"));
     expect(ubuntu?.disabled).toBe(false);

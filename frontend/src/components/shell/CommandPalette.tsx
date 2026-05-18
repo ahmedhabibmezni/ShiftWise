@@ -46,6 +46,16 @@ export function CommandPalette() {
 
   const close = useCallback(() => setOpen(false), []);
 
+  // `navigate` returns a Promise in react-router v7; the command `run`
+  // signature is `() => void`, so wrap it in a void-returning closure rather
+  // than handing the floating promise to the property.
+  const go = useCallback(
+    (path: string) => () => {
+      void navigate(path);
+    },
+    [navigate],
+  );
+
   // `forceLogout` clears the auth store, purges the query cache (so a
   // next sign-in cannot show the prior tenant's data), and redirects to
   // /login — fired whether the server logout succeeds or fails.
@@ -56,14 +66,14 @@ export function CommandPalette() {
 
   const commands = useMemo<Command[]>(
     () => [
-      { id: "go-overview",    label: "Go to Dashboard",        hint: "/",            group: "Navigate",    icon: LayoutDashboard, run: () => navigate("/") },
-      { id: "go-hypervisors", label: "Go to Hypervisors",      hint: "/hypervisors", group: "Navigate",    icon: Server,          run: () => navigate("/hypervisors") },
-      { id: "go-vms",         label: "Go to Virtual Machines", hint: "/vms",         group: "Navigate",    icon: Monitor,         run: () => navigate("/vms") },
-      { id: "go-migrations",  label: "Go to Migrations",       hint: "/migrations",  group: "Navigate",    icon: ArrowRightLeft,  run: () => navigate("/migrations") },
-      { id: "go-reports",     label: "Go to Reports",          hint: "/reports",     group: "Navigate",    icon: BarChart3,       run: () => navigate("/reports") },
-      { id: "go-users",       label: "Go to Users",            hint: "/users",       group: "Navigate",    icon: UsersIcon,       run: () => navigate("/users") },
-      { id: "go-roles",       label: "Go to Roles",            hint: "/roles",       group: "Navigate",    icon: ShieldCheck,     run: () => navigate("/roles") },
-      { id: "go-settings",    label: "Go to Settings",         hint: "/settings",    group: "Navigate",    icon: Settings2,       run: () => navigate("/settings") },
+      { id: "go-overview",    label: "Go to Dashboard",        hint: "/",            group: "Navigate",    icon: LayoutDashboard, run: go("/") },
+      { id: "go-hypervisors", label: "Go to Hypervisors",      hint: "/hypervisors", group: "Navigate",    icon: Server,          run: go("/hypervisors") },
+      { id: "go-vms",         label: "Go to Virtual Machines", hint: "/vms",         group: "Navigate",    icon: Monitor,         run: go("/vms") },
+      { id: "go-migrations",  label: "Go to Migrations",       hint: "/migrations",  group: "Navigate",    icon: ArrowRightLeft,  run: go("/migrations") },
+      { id: "go-reports",     label: "Go to Reports",          hint: "/reports",     group: "Navigate",    icon: BarChart3,       run: go("/reports") },
+      { id: "go-users",       label: "Go to Users",            hint: "/users",       group: "Navigate",    icon: UsersIcon,       run: go("/users") },
+      { id: "go-roles",       label: "Go to Roles",            hint: "/roles",       group: "Navigate",    icon: ShieldCheck,     run: go("/roles") },
+      { id: "go-settings",    label: "Go to Settings",         hint: "/settings",    group: "Navigate",    icon: Settings2,       run: go("/settings") },
       {
         id: "toggle-theme",
         label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
@@ -77,7 +87,7 @@ export function CommandPalette() {
     // Depend on the stable `.mutate` reference, not the `logoutMutation`
     // object — TanStack Query returns a fresh result object every render,
     // so depending on it would defeat the memo entirely.
-    [navigate, theme, toggle, logoutMutation.mutate],
+    [go, theme, toggle, logoutMutation.mutate],
   );
 
   // Commands matching the typed query — a case-insensitive substring match

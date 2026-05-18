@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import { Check, Plug, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
@@ -20,7 +19,7 @@ import {
   type HypervisorType,
   type TestConnectionResult,
 } from "@/api/hypervisors";
-import type { ApiError } from "@/api/types";
+import { describeError } from "@/lib/errors";
 import {
   hypervisorCreateSchema,
   portToNumber,
@@ -49,14 +48,6 @@ const HOST_HINT: Partial<Record<HypervisorType, string>> = {
   proxmox: "e.g. https://pve.example.com",
   ovirt: "e.g. https://manager.example.com/ovirt-engine/api",
 };
-
-function extractDetail(err: unknown, fallback: string): string {
-  if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    if (data?.detail) return data.detail;
-  }
-  return fallback;
-}
 
 export function HypervisorCreateDrawer({
   open,
@@ -114,9 +105,9 @@ export function HypervisorCreateDrawer({
     onError: (err) => {
       setTestResult({
         success: false,
-        message: extractDetail(err, "Connection test failed"),
+        message: describeError(err, "Connection test failed"),
         vms_count: null,
-        error: extractDetail(err, "Network error. Check the host and port."),
+        error: describeError(err, "Network error. Check the host and port."),
       });
     },
   });
@@ -140,7 +131,7 @@ export function HypervisorCreateDrawer({
       onClose();
     },
     onError: (err) => {
-      toast.error(extractDetail(err, "Creation failed"));
+      toast.error(describeError(err, "Creation failed"));
     },
   });
 
@@ -183,7 +174,7 @@ export function HypervisorCreateDrawer({
             only as an auto-dismissing toast, easy to miss (F12). */}
         {createMutation.isError && (
           <Callout tone="err" kicker="Creation failed" role="alert">
-            {extractDetail(
+            {describeError(
               createMutation.error,
               "Could not create the hypervisor. Check the fields and try again.",
             )}
