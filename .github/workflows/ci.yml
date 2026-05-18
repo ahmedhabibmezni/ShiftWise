@@ -34,17 +34,27 @@ concurrency:
 # ----------------------------------------------------------------------------
 # Action pinning (G4) — supply-chain hardening.
 #
-# Third-party actions below are pinned to immutable PATCH-version tags
-# (e.g. @v4.2.2), NOT moving major tags (@v4). A major tag is repointed by
-# the maintainer on every release and is a supply-chain risk.
+# Every third-party action below is pinned to a full 40-char commit SHA, with
+# a trailing `# vX.Y.Z` comment for human readability. A tag — even a patch
+# tag like @v4.2.2 — can be force-moved by the maintainer; a commit SHA is
+# immutable. This is the GitHub-recommended hardening for untrusted actions.
 #
-# HARDENING TODO (production): pin each action to its full 40-char commit
-# SHA — a tag, even a patch tag, can in principle be force-moved; a SHA
-# cannot. Resolve the SHA for a given tag with:
-#     gh api repos/actions/checkout/git/refs/tags/v4.2.2 --jq .object.sha
-# then replace `@v4.2.2` with `@<sha>` and keep `# v4.2.2` as a comment.
-# Not done inline here because the exact SHAs could not be verified at
-# authoring time and a wrong SHA would silently pin an unexpected commit.
+# SHAs resolved on 2026-05-18 against each action's GitHub git refs API and
+# verified to be real commits:
+#   gh api repos/<owner>/<action>/git/refs/tags/<tag> --jq '.object.sha,.object.type'
+# (all returned object.type=commit — no annotated-tag dereference needed).
+#
+# Pinned SHAs:
+#   actions/checkout@v4.2.2              11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0            39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0          0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/build-push-action@v6.10.0     48aba3b46d1b1fec4febb7c5d0c644b249a11355
+#   aquasecurity/trivy-action@v0.28.0    915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   anchore/sbom-action@v0.17.8          55dc4ee22412511ee8c3142cbea40418e6cec693
+#   docker/login-action@v3.3.0           9780b0c442fbb1117ed29e0efdff1e18412f7567
+#
+# When bumping an action: resolve the new tag's SHA with the gh command above,
+# replace BOTH the SHA and the `# vX.Y.Z` comment.
 # ----------------------------------------------------------------------------
 
 jobs:
@@ -55,10 +65,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4.1.0        # v4.1.0 — TODO: pin to commit SHA
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
         with:
           node-version: "20"
           cache: npm
@@ -95,10 +105,10 @@ jobs:
     env:
       SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
     steps:
-      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5.3.0      # v5.3.0 — TODO: pin to commit SHA
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with:
           python-version: "3.11"
           cache: pip
@@ -171,6 +181,49 @@ jobs:
             tests/test_conversions_api.py \
             --tb=short -v
 
+      # ML model artifact integrity (H7). compatibility_model.joblib (~10 MB)
+      # is intentionally committed for deterministic builds — it is the
+      # serialised scikit-learn classifier the Analyzer loads at startup.
+      # This step is the guard against the file being lost, truncated, or
+      # corrupted in a commit: it verifies the file is present, deserialises
+      # cleanly with joblib, and carries the payload structure the Analyzer
+      # expects (`feature_names` matching the runtime feature space, plus a
+      # `model` estimator with `predict_proba`). A bad artifact fails CI here
+      # instead of degrading silently to the rules fallback in production.
+      - name: Verify ML model artifact (H7)
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          import joblib
+          from app.services.feature_extractor import FEATURE_NAMES
+
+          artifact = Path("app/ml/artifacts/compatibility_model.joblib")
+          if not artifact.is_file():
+              sys.exit(f"FAIL: model artifact missing: {artifact}")
+
+          size = artifact.stat().st_size
+          if size < 1_000_000:
+              sys.exit(f"FAIL: model artifact suspiciously small ({size} bytes) "
+                       "— likely truncated or an LFS pointer")
+
+          payload = joblib.load(artifact)
+          stored = list(payload.get("feature_names") or [])
+          if stored != list(FEATURE_NAMES):
+              sys.exit(f"FAIL: model feature space mismatch — artifact has "
+                       f"{len(stored)} cols, runtime expects {len(FEATURE_NAMES)}. "
+                       "Retrain: python -m app.ml.train_model --save")
+
+          model = payload.get("model")
+          if model is None or not hasattr(model, "predict_proba"):
+              sys.exit("FAIL: payload has no usable classifier ('model' with "
+                       "predict_proba)")
+
+          print(f"OK: model artifact loads — {size} bytes, "
+                f"{len(stored)} features, kind={payload.get('model_kind', 'unknown')}, "
+                f"sklearn={payload.get('sklearn_version', 'unknown')}")
+          PY
+
   backend-audit:
     name: backend · pip-audit
     runs-on: ubuntu-latest
@@ -178,10 +231,10 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5.3.0      # v5.3.0 — TODO: pin to commit SHA
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with:
           python-version: "3.11"
 
@@ -194,16 +247,15 @@ jobs:
           pip-audit --requirement requirements.txt --strict --desc
 
   image:
-    name: image · build + scan + SBOM
+    name: image · build + scan + SBOM + push
     # Only on a push to main — building/scanning the container image on every
     # PR would be wasteful. Gated so feature branches stay fast.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # packages: write     # uncomment when the registry push below is enabled
     steps:
-      - uses: actions/checkout@v4.2.2          # v4.2.2 — TODO: pin to commit SHA
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       # Build the slim API image locally (no push). `load: true` keeps it in
       # the local docker daemon so the scanner + SBOM step can read it.
@@ -212,7 +264,7 @@ jobs:
       # production builds are reproducible; falls back to the mutable tag if
       # the variable is unset.
       - name: Build backend API image
-        uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
         with:
           context: backend
           file: backend/Dockerfile
@@ -220,13 +272,13 @@ jobs:
           load: true
           tags: shiftwise-backend-api:ci-${{ github.sha }}
           build-args: |
-            PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
+            PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim@sha256:9a7765b36773a37061455b332f18e265e7f58f6fea9c419a550d2a8b0e9db834' }}
 
       # Build the worker image (G12) — FROM the API image just built, adds the
       # libguestfs / qemu-img guest-tooling layer. API_IMAGE points at the API
       # tag produced by the step above so the worker inherits identical code.
       - name: Build backend worker image
-        uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
         with:
           context: backend
           file: backend/Dockerfile.worker
@@ -242,7 +294,7 @@ jobs:
       # (libguestfs + kernel) so it is scanned explicitly, not assumed clean
       # because the API image passed.
       - name: Scan API image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0   # 0.28.0 — TODO: pin to commit SHA
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
         with:
           image-ref: shiftwise-backend-api:ci-${{ github.sha }}
           format: table
@@ -251,7 +303,7 @@ jobs:
           severity: HIGH,CRITICAL
 
       - name: Scan worker image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0   # 0.28.0 — TODO: pin to commit SHA
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
         with:
           image-ref: shiftwise-backend-worker:ci-${{ github.sha }}
           format: table
@@ -267,7 +319,7 @@ jobs:
       # by default); when the registry push is enabled it should instead be
       # attached to the image as an attestation.
       - name: Generate SBOM — API image
-        uses: anchore/sbom-action@v0.17.8        # v0.17.8 — TODO: pin to commit SHA
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
         with:
           image: shiftwise-backend-api:ci-${{ github.sha }}
           format: cyclonedx-json
@@ -275,45 +327,72 @@ jobs:
           artifact-name: sbom-api.cyclonedx.json
 
       - name: Generate SBOM — worker image
-        uses: anchore/sbom-action@v0.17.8        # v0.17.8 — TODO: pin to commit SHA
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
         with:
           image: shiftwise-backend-worker:ci-${{ github.sha }}
           format: cyclonedx-json
           output-file: sbom-worker.cyclonedx.json
           artifact-name: sbom-worker.cyclonedx.json
 
-      # Registry push — STUB. Enable once registry credentials exist as repo
-      # secrets and an immutable tag scheme (v<semver>) replaces `:latest`.
-      # Uncomment `packages: write` in this job's `permissions` block too.
-      # Both images must be pushed: shiftwise-backend-api AND
-      # shiftwise-backend-worker (G12). Build the API first, then the worker
-      # with --build-arg API_IMAGE=<the API tag just pushed>.
-      # - name: Log in to registry
-      #   uses: docker/login-action@v3.3.0       # v3.3.0 — TODO: pin to commit SHA
-      #   with:
-      #     registry: docker.io
-      #     username: ${{ secrets.REGISTRY_USERNAME }}
-      #     password: ${{ secrets.REGISTRY_TOKEN }}
-      # - name: Build + push API image (immutable tag)
-      #   uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
-      #   with:
-      #     context: backend
-      #     file: backend/Dockerfile
-      #     push: true
-      #     tags: docker.io/dida1609/shiftwise-backend-api:v${{ github.run_number }}
-      #     build-args: |
-      #       PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim' }}
-      # - name: Build + push worker image (immutable tag)
-      #   uses: docker/build-push-action@v6.10.0  # v6.10.0 — TODO: pin to commit SHA
-      #   with:
-      #     context: backend
-      #     file: backend/Dockerfile.worker
-      #     push: true
-      #     tags: docker.io/dida1609/shiftwise-backend-worker:v${{ github.run_number }}
-      #     build-args: |
-      #       API_IMAGE=docker.io/dida1609/shiftwise-backend-api:v${{ github.run_number }}
-      - name: Registry push (stub)
+      # ----------------------------------------------------------------------
+      # Registry push (G21).
+      #
+      # The push steps are GATED on the presence of registry credentials:
+      # each one carries `if: ${{ secrets.REGISTRY_USERNAME != '' }}`. When
+      # the operator has NOT created the secrets, the build + scan + SBOM
+      # steps above still run (so a vulnerable image is caught) and the push
+      # is simply skipped — the job stays green. Once the operator adds the
+      # secrets, the push activates automatically with no workflow edit.
+      #
+      # REQUIRED REPOSITORY SECRETS (Settings → Secrets and variables →
+      # Actions → repository secrets) — create these to enable the push:
+      #   REGISTRY_SERVER     registry hostname, e.g. `docker.io`
+      #                       (or `quay.io`, `ghcr.io`, a private registry)
+      #   REGISTRY_USERNAME   registry account / robot username
+      #   REGISTRY_TOKEN      registry password or access token (NOT a
+      #                       long-lived account password — use a scoped
+      #                       push token / robot account)
+      #   REGISTRY_REPO       image repo prefix WITHOUT tag, e.g.
+      #                       `docker.io/dida1609`
+      #
+      # Images are tagged with an immutable `v<run_number>` scheme — never
+      # `:latest`. The worker is built FROM the API image just pushed so the
+      # two images carry byte-identical application code (G12).
+      # ----------------------------------------------------------------------
+      - name: Log in to registry
+        if: ${{ secrets.REGISTRY_USERNAME != '' }}
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+        with:
+          registry: ${{ secrets.REGISTRY_SERVER }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Build + push API image (immutable tag)
+        if: ${{ secrets.REGISTRY_USERNAME != '' }}
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ secrets.REGISTRY_REPO }}/shiftwise-backend-api:v${{ github.run_number }}
+          build-args: |
+            PYTHON_BASE=${{ vars.PYTHON_BASE_PINNED || 'python:3.11-slim@sha256:9a7765b36773a37061455b332f18e265e7f58f6fea9c419a550d2a8b0e9db834' }}
+
+      - name: Build + push worker image (immutable tag)
+        if: ${{ secrets.REGISTRY_USERNAME != '' }}
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
+        with:
+          context: backend
+          file: backend/Dockerfile.worker
+          push: true
+          tags: ${{ secrets.REGISTRY_REPO }}/shiftwise-backend-worker:v${{ github.run_number }}
+          build-args: |
+            API_IMAGE=${{ secrets.REGISTRY_REPO }}/shiftwise-backend-api:v${{ github.run_number }}
+
+      - name: Registry push — skipped (no credentials)
+        if: ${{ secrets.REGISTRY_USERNAME == '' }}
         run: |
           echo "API + worker images: build, scan and SBOM all passed."
-          echo "Registry push is stubbed — enable the docker/login-action +"
-          echo "build-push-action steps above and add REGISTRY_* secrets."
+          echo "Registry push skipped — REGISTRY_* repository secrets are not set."
+          echo "Create REGISTRY_SERVER / REGISTRY_USERNAME / REGISTRY_TOKEN /"
+          echo "REGISTRY_REPO to enable the push (see the comment block above)."

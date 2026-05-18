@@ -42,23 +42,19 @@ resources:
 #   référence l'image worker. Le pipeline CI doit construire l'API d'abord,
 #   puis le worker avec `--build-arg API_IMAGE=<image API taguée>`.
 #
-# Épinglage des images par digest (G26) :
-#   Les images postgres / redis sont référencées par tag mutable
-#   (`16-alpine`, `7.2-alpine`). Pour un déploiement reproductible et résistant
-#   au supply-chain, les épingler par digest. Résoudre le digest réel :
-#       skopeo inspect docker://postgres:16-alpine --format '{{.Digest}}'
-#       skopeo inspect docker://redis:7.2-alpine    --format '{{.Digest}}'
-#   puis décommenter et compléter le bloc ci-dessous.
-#   NOTE kustomize : pour une même image, `digest` et `newTag` sont mutuellement
-#   exclusifs — on garde uniquement `digest`, le tag d'origine reste en
-#   commentaire à titre documentaire.
-#   Laissé commenté pour ne pas casser `oc apply -k .` avec un digest factice.
-# images:
-#   - name: postgres                                          # tag: 16-alpine
-#     digest: sha256:<RESOLVED_DIGEST>
-#   - name: redis                                             # tag: 7.2-alpine
-#     digest: sha256:<RESOLVED_DIGEST>
-#   - name: docker.io/dida1609/shiftwise-backend-api          # → publier un tag immuable v<semver>
-#     digest: sha256:<RESOLVED_DIGEST>
-#   - name: docker.io/dida1609/shiftwise-backend-worker       # → publier un tag immuable v<semver>
-#     digest: sha256:<RESOLVED_DIGEST>
+# Épinglage des images par digest (G14 / G26) :
+#   postgres et redis sont désormais épinglés PAR DIGEST directement dans
+#   postgresql-deployment.yaml et redis-deployment.yaml (tag + @sha256: figés,
+#   imagePullPolicy: IfNotPresent). Pas de bloc `images:` ici — un override
+#   kustomize ferait doublon avec le pinning inline et `digest`/`newTag` sont
+#   mutuellement exclusifs pour une même image.
+#
+#   Restent NON épinglées (images applicatives ShiftWise) :
+#     docker.io/dida1609/shiftwise-backend-api    (db-init, backend, flower)
+#     docker.io/dida1609/shiftwise-backend-worker (celery-worker, Jobs)
+#   Elles utilisent encore `:latest` car aucun schéma de tag immuable
+#   `v<semver>` n'est publié — le push registre du workflow CI est en stub.
+#   À activer le push CI, puis épingler ces deux images par
+#   `...:v<semver>@sha256:<digest>` dans leurs manifests respectifs ; résoudre
+#   le digest après push avec :
+#       docker buildx imagetools inspect docker.io/dida1609/shiftwise-backend-api:v<semver>

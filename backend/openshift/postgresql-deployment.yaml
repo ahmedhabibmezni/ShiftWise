@@ -38,7 +38,17 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          # Image épinglée par digest (G14 / G26) — un tag mutable
+          # (`16-alpine`, `16.14-alpine`) peut être ré-poussé : build
+          # non-reproductible + fenêtre supply-chain. Le digest est immuable.
+          # Tag de référence : postgres:16.14-alpine (PostgreSQL 16.14, Alpine).
+          # Digest résolu via l'API registre Docker Hub le 2026-05-18 :
+          #   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull" | jq -r .token)
+          #   curl -sI -H "Authorization: Bearer $TOKEN" \
+          #     -H "Accept: application/vnd.oci.image.index.v1+json" \
+          #     https://registry-1.docker.io/v2/library/postgres/manifests/16.14-alpine \
+          #     | grep -i docker-content-digest
+          image: postgres:16.14-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
           imagePullPolicy: IfNotPresent
           ports:
             - {name: postgres, containerPort: 5432}

@@ -70,7 +70,19 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: redis
-          image: redis:7.2-alpine
+          # Image épinglée par digest (G14 / G26) — un tag mutable
+          # (`7.2-alpine`, `7.4.9-alpine`) peut être ré-poussé : build
+          # non-reproductible + fenêtre supply-chain. Le digest est immuable.
+          # Tag de référence : redis:7.4.9-alpine (Redis 7.4.9, Alpine).
+          # Bump de 7.2 → 7.4 : compatible — Celery/redis-py n'utilisent que
+          # les commandes core + AOF, inchangées entre 7.2 et 7.4.
+          # Digest résolu via l'API registre Docker Hub le 2026-05-18 :
+          #   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/redis:pull" | jq -r .token)
+          #   curl -sI -H "Authorization: Bearer $TOKEN" \
+          #     -H "Accept: application/vnd.oci.image.index.v1+json" \
+          #     https://registry-1.docker.io/v2/library/redis/manifests/7.4.9-alpine \
+          #     | grep -i docker-content-digest
+          image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           imagePullPolicy: IfNotPresent
           # `requirepass` injecté via l'arg CLI (G20). On passe par `sh -c`
           # pour que $REDIS_PASSWORD (issu du Secret) soit expansé. L'arg CLI

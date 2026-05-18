@@ -30,23 +30,31 @@
 #   docker push quay.io/shiftwise/backend-api:latest
 #
 # Base image pinning (G10) :
-#   La base DOIT être épinglée par digest @sha256: en production — un tag
-#   mutable comme `python:3.11-slim` peut être ré-poussé, ce qui rend le build
+#   La base est épinglée par digest @sha256: — un tag mutable comme
+#   `python:3.11-slim` peut être ré-poussé, ce qui rend le build
 #   non-reproductible et ouvre une fenêtre de supply-chain.
 #
 #   La base est exposée via l'ARG PYTHON_BASE, utilisé par LES DEUX stages
-#   (builder + runtime) pour qu'ils restent identiques. La valeur par défaut
-#   est le tag — le build fonctionne sans paramètre — mais tout build
-#   production / CI DOIT passer le digest résolu :
-#       docker pull python:3.11-slim
-#       docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim
-#       docker build --build-arg \
-#         PYTHON_BASE=python:3.11-slim@sha256:<DIGEST> -f Dockerfile .
-#   (le pipeline CI doit fournir ce digest via une variable de dépôt).
-#   NOTE : le digest n'est pas codé en dur ici car il dépend du registre et
-#   doit être résolu sur une image réellement tirée — pas inventé.
-ARG PYTHON_BASE=python:3.11-slim
-# tag de référence : python:3.11-slim (à figer par @sha256:<DIGEST> en prod)
+#   (builder + runtime) pour qu'ils restent identiques. La valeur PAR DÉFAUT
+#   est désormais le digest figé — tout build (local, CI, prod) est
+#   reproductible sans paramètre. Un opérateur peut toujours surcharger via
+#   `--build-arg PYTHON_BASE=...` pour un bump contrôlé.
+#
+#   Tag de référence : python:3.11-slim → Python 3.11.15 (Debian trixie slim).
+#   Digest résolu via l'API registre Docker Hub le 2026-05-18 :
+#     TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull" | jq -r .token)
+#     curl -sI -H "Authorization: Bearer $TOKEN" \
+#       -H "Accept: application/vnd.oci.image.index.v1+json" \
+#       https://registry-1.docker.io/v2/library/python/manifests/3.11-slim \
+#       | grep -i docker-content-digest
+#   Vérification équivalente avec docker :
+#     docker pull python:3.11-slim
+#     docker buildx imagetools inspect python:3.11-slim
+#
+#   Lors d'un bump de la base : pull le nouveau tag, ré-résoudre le digest,
+#   mettre à jour la ligne ci-dessous (tag + digest cohérents).
+ARG PYTHON_BASE=python:3.11-slim@sha256:9a7765b36773a37061455b332f18e265e7f58f6fea9c419a550d2a8b0e9db834
+# tag de référence : python:3.11-slim (Python 3.11.15) — digest figé ci-dessus
 
 # ----- Stage 1 : build wheels --------------------------------------------------
 FROM ${PYTHON_BASE} AS builder
