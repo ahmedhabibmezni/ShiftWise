@@ -31,7 +31,7 @@ import sys
 # Importe tous les modèles pour peupler Base.metadata avant create_all
 # (effet de bord à l'import — les imports semblent inutilisés mais ils
 # enregistrent les classes auprès de Base.metadata).
-from app.models import (  # noqa: F401
+from app.models import (  # noqa: F401  # NOSONAR — side-effect import (registers models)
     user as _user_module,
     role as _role_module,
     hypervisor as _hypervisor_module,

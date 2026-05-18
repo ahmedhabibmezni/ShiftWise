@@ -24,8 +24,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.celery_app import celery_app
 # Import task modules so the @shared_task decorators register on celery_app.
-import app.tasks.conversion  # noqa: F401
-import app.tasks.migration   # noqa: F401
+import app.tasks.conversion  # noqa: F401  # NOSONAR — side-effect import
+import app.tasks.migration   # noqa: F401  # NOSONAR — side-effect import
 from app.crud import conversion as crud_conversion
 from app.models.base import Base
 from app.models.conversion import ConversionStatus, SourceFormat

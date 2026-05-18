@@ -32,7 +32,7 @@ class _StubDB:
     def __init__(self, mode: str = "ok"):
         self.mode = mode
 
-    def execute(self, _stmt):  # noqa: D401 — protocol stub
+    def execute(self, _stmt):  # NOSONAR — protocol stub
         if self.mode == "down":
             raise OperationalError("SELECT 1", {}, Exception("connection refused"))
         return self

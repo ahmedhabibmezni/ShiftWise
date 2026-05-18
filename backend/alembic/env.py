@@ -17,7 +17,7 @@ from app.core.database import Base
 
 # Importer TOUS les modèles pour que SQLAlchemy les enregistre dans
 # `Base.metadata` (nécessaire au support `autogenerate` d'Alembic).
-from app.models import (  # noqa: F401
+from app.models import (  # noqa: F401  # NOSONAR — side-effect import (registers models)
     User, Role, user_roles,
     Hypervisor, HypervisorType, HypervisorStatus,
     VirtualMachine, VMStatus, CompatibilityStatus, OSType,
