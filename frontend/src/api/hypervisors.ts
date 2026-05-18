@@ -1,4 +1,5 @@
 import { api } from "@/lib/axios";
+import type { Paginated } from "@/api/types";
 
 export const HYPERVISOR_TYPES = [
   "vsphere",
@@ -51,12 +52,7 @@ export type Hypervisor = {
   needs_sync: boolean;
 };
 
-export type HypervisorListResponse = {
-  total: number;
-  items: Hypervisor[];
-  page: number;
-  page_size: number;
-};
+export type HypervisorListResponse = Paginated<Hypervisor>;
 
 export type ListHypervisorsParams = {
   skip?: number;

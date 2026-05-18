@@ -9,6 +9,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Search,
   Server,
   Settings2,
   ShieldCheck,
@@ -20,8 +21,8 @@ import { Icon } from "@/components/ui/Icon";
 import { Kbd } from "@/components/ui/Kbd";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useTheme } from "@/hooks/useTheme";
-import { useAuthStore } from "@/store/auth";
 import { logout as logoutRequest } from "@/api/auth";
+import { forceLogout } from "@/lib/session";
 
 type Command = {
   id: string;
@@ -37,17 +38,20 @@ const OPEN_EVENT = "shiftwise:open-cmdk";
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(0);
+  const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
-  const clearSession = useAuthStore((s) => s.clearSession);
   const trapRef = useFocusTrap<HTMLDivElement>(open);
   const listRef = useRef<HTMLDivElement>(null);
 
   const close = useCallback(() => setOpen(false), []);
 
+  // `forceLogout` clears the auth store, purges the query cache (so a
+  // next sign-in cannot show the prior tenant's data), and redirects to
+  // /login — fired whether the server logout succeeds or fails.
   const logoutMutation = useMutation({
     mutationFn: logoutRequest,
-    onSettled: () => clearSession(),
+    onSettled: () => forceLogout(),
   });
 
   const commands = useMemo<Command[]>(
@@ -70,8 +74,23 @@ export function CommandPalette() {
       },
       { id: "logout", label: "Log out", hint: "End session", group: "Session", icon: LogOut, run: () => logoutMutation.mutate() },
     ],
-    [navigate, theme, toggle, logoutMutation],
+    // Depend on the stable `.mutate` reference, not the `logoutMutation`
+    // object — TanStack Query returns a fresh result object every render,
+    // so depending on it would defeat the memo entirely.
+    [navigate, theme, toggle, logoutMutation.mutate],
   );
+
+  // Commands matching the typed query — a case-insensitive substring match
+  // over label and hint. With the query empty, every command shows.
+  const filtered = useMemo<Command[]>(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return commands;
+    return commands.filter(
+      (c) =>
+        c.label.toLowerCase().includes(q) ||
+        (c.hint?.toLowerCase().includes(q) ?? false),
+    );
+  }, [commands, query]);
 
   useEffect(() => {
     const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
@@ -95,26 +114,37 @@ export function CommandPalette() {
     return () => window.removeEventListener(OPEN_EVENT, onOpen);
   }, []);
 
+  // Closing resets the query and selection so the next open starts clean.
   useEffect(() => {
-    if (!open) setSelected(0);
+    if (!open) {
+      setSelected(0);
+      setQuery("");
+    }
   }, [open]);
 
+  // A new query can shrink the result list below the current selection —
+  // clamp it back to the first row so the highlight stays valid.
+  useEffect(() => {
+    setSelected(0);
+  }, [query]);
+
   const runSelected = useCallback(() => {
-    const command = commands[selected];
+    const command = filtered[selected];
     if (!command) return;
     close();
     queueMicrotask(() => command.run());
-  }, [commands, selected, close]);
+  }, [filtered, selected, close]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
+      if (filtered.length === 0) return;
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setSelected((value) => (value + 1) % commands.length);
+        setSelected((value) => (value + 1) % filtered.length);
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
-        setSelected((value) => (value - 1 + commands.length) % commands.length);
+        setSelected((value) => (value - 1 + filtered.length) % filtered.length);
       } else if (event.key === "Enter") {
         event.preventDefault();
         runSelected();
@@ -122,11 +152,11 @@ export function CommandPalette() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, commands.length, runSelected]);
+  }, [open, filtered.length, runSelected]);
 
   if (!open) return null;
 
-  const groups = commands.reduce<Record<string, Command[]>>((acc, command) => {
+  const groups = filtered.reduce<Record<string, Command[]>>((acc, command) => {
     (acc[command.group] ??= []).push(command);
     return acc;
   }, {});
@@ -154,29 +184,38 @@ export function CommandPalette() {
         aria-label="Command palette"
         className="glass-card relative w-full max-w-[600px] overflow-hidden"
       >
-        <header className="relative z-[1] h-12 px-4 flex items-center justify-between border-b border-[var(--hairline)]">
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.04em] font-bold text-[var(--text-secondary)]">
-            <Kbd>⌘</Kbd>
-            <Kbd>K</Kbd>
-            <span>Command palette</span>
-          </div>
-          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
+        {/* The search input is the first focusable element, so the focus
+            trap lands the caret here on open — and the keyboard nav effect
+            still drives ↑/↓/↵ regardless of where focus sits. */}
+        <header className="relative z-[1] h-12 px-3 flex items-center gap-2.5 border-b border-[var(--hairline)]">
+          <Icon icon={Search} size={14} className="text-[var(--text-muted)] shrink-0" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search commands…"
+            aria-label="Search commands"
+            aria-controls="cmdk-listbox"
+            aria-activedescendant={
+              filtered[selected]
+                ? `cmd-opt-${filtered[selected].id}`
+                : undefined
+            }
+            spellCheck={false}
+            autoComplete="off"
+            className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+          />
+          <div className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)] shrink-0">
             <Kbd>↑↓</Kbd>
-            Navigate
-            <span>·</span>
             <Kbd>↵</Kbd>
-            Run
-            <span>·</span>
             <Kbd>Esc</Kbd>
-            Close
           </div>
         </header>
         <div
           ref={listRef}
+          id="cmdk-listbox"
           role="listbox"
           aria-label="Commands"
-          tabIndex={0}
-          aria-activedescendant={`cmd-opt-${commands[selected]?.id ?? ""}`}
           className="relative z-[1] max-h-[60vh] overflow-y-auto py-2 outline-none"
         >
           {Object.entries(groups).map(([group, list]) => (
@@ -227,6 +266,11 @@ export function CommandPalette() {
               })}
             </div>
           ))}
+          {filtered.length === 0 && (
+            <div className="px-5 py-8 text-center text-[13px] text-[var(--text-muted)]">
+              No command matches “{query.trim()}”.
+            </div>
+          )}
         </div>
       </div>
     </div>

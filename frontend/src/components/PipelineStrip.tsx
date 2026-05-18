@@ -1,9 +1,23 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, CircleDashed, Loader2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment } from "react";
 import { cn } from "@/lib/cn";
 
 export type PipelineStageState = "done" | "active" | "pending";
+
+/**
+ * Per-state cue rendered alongside the stage label. Status is otherwise
+ * encoded only by background colour — this icon + word pair makes each
+ * state legible without relying on colour perception (WCAG 1.4.1).
+ */
+const STAGE_STATE_META: Record<
+  PipelineStageState,
+  { icon: LucideIcon; word: string; spin?: boolean }
+> = {
+  done: { icon: Check, word: "Done" },
+  active: { icon: Loader2, word: "Running", spin: true },
+  pending: { icon: CircleDashed, word: "Pending" },
+};
 
 export type PipelineStageData = {
   key: string;
@@ -68,18 +82,41 @@ function Stage({ stage }: { stage: PipelineStageData }) {
       ? "linear-gradient(90deg, var(--alert-success), var(--alert-success-light))"
       : "linear-gradient(90deg, var(--accent-primary), var(--accent-light))";
 
+  const stateMeta = STAGE_STATE_META[state];
+  const stateColor =
+    state === "done"
+      ? "var(--alert-success-light)"
+      : state === "active"
+        ? "var(--accent-light)"
+        : "var(--text-muted)";
+  const StateIcon = stateMeta.icon;
+
   return (
     <div
       className={cn("relative p-4 rounded-2xl transition-all duration-200")}
       style={{ background: stageBg, boxShadow: stageShadow }}
     >
-      <div className="flex items-center gap-2.5 mb-3.5">
+      <div className="flex items-center gap-2.5 mb-2">
         <span className={cn(iconClass, "w-8 h-8 rounded-[9px]")}>
           <IconComponent size={16} strokeWidth={1.75} />
         </span>
         <span className="text-[12px] font-bold text-[var(--text-primary)]">
           {label}
         </span>
+      </div>
+      {/* Non-colour state cue — icon + word — so the stage status is
+          legible without relying on the background colour alone. */}
+      <div
+        className="flex items-center gap-1 mb-2 text-[10px] font-bold uppercase tracking-[0.04em]"
+        style={{ color: stateColor }}
+      >
+        <StateIcon
+          size={11}
+          strokeWidth={2.25}
+          className={stateMeta.spin ? "sw-spin" : undefined}
+          aria-hidden
+        />
+        <span>{stateMeta.word}</span>
       </div>
       <div
         className={cn(

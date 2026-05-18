@@ -244,7 +244,7 @@ describe("Reports page", () => {
       await waitFor(() => expect(capturedBlobs.length).toBe(1));
       const text = await capturedBlobs[0].text();
       // BOM-prefixed UTF-8 — strip it then assert content.
-      const body = text.replace(/^﻿/, "");
+      const body = text.replace(/^\uFEFF/, "");
       expect(body.split("\r\n")[0]).toContain("id,vm_id,vm_name");
       expect(body).toContain("42,10,ubuntu-22-prod,completed,auto");
       expect(clickSpy).toHaveBeenCalledTimes(1);

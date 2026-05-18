@@ -1,4 +1,5 @@
 import { api } from "@/lib/axios";
+import type { Paginated } from "@/api/types";
 
 export const VM_STATUSES = [
   "discovered",
@@ -74,12 +75,7 @@ export type Vm = {
   can_migrate: boolean;
 };
 
-export type VmListResponse = {
-  total: number;
-  items: Vm[];
-  page: number;
-  page_size: number;
-};
+export type VmListResponse = Paginated<Vm>;
 
 export type ListVmsParams = {
   skip?: number;

@@ -1,4 +1,5 @@
 import { api } from "@/lib/axios";
+import { evaluatePermission } from "@/lib/permissions";
 
 /**
  * Backend mirror of `VALID_ACTIONS`. Order is fixed so the matrix editor
@@ -105,15 +106,18 @@ export async function deleteRole(id: number): Promise<void> {
 
 /* ------------------------------- helpers --------------------------------- */
 
-/** Does the role grant the given (resource, action)? Mirrors backend logic. */
+/**
+ * Does the role grant the given (resource, action)? Delegates to the shared
+ * `evaluatePermission` evaluator in `lib/permissions` — the wildcard rule
+ * has a single implementation so the role-matrix editor and the user-facing
+ * permission checks cannot diverge (F24).
+ */
 export function permissionGranted(
   permissions: RolePermissions,
   resource: string,
   action: RoleAction,
 ): boolean {
-  const list = permissions[resource];
-  if (!list) return false;
-  return list.includes(ALL_ACTIONS) || list.includes(action);
+  return evaluatePermission(permissions, resource, action);
 }
 
 /** Does the role grant `*` on the resource (wildcard)? */

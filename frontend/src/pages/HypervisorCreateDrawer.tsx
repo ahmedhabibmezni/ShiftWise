@@ -5,8 +5,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Check, Plug, X } from "lucide-react";
 import toast from "react-hot-toast";
-import { z } from "zod";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Icon } from "@/components/ui/Icon";
 import { Input } from "@/components/ui/Input";
@@ -21,6 +21,11 @@ import {
   type TestConnectionResult,
 } from "@/api/hypervisors";
 import type { ApiError } from "@/api/types";
+import {
+  hypervisorCreateSchema,
+  portToNumber,
+  type HypervisorCreateValues,
+} from "./hypervisorForm";
 
 const DEFAULT_PORT: Record<HypervisorType, string> = {
   vsphere: "443",
@@ -44,31 +49,6 @@ const HOST_HINT: Partial<Record<HypervisorType, string>> = {
   proxmox: "e.g. https://pve.example.com",
   ovirt: "e.g. https://manager.example.com/ovirt-engine/api",
 };
-
-const createSchema = z.object({
-  name: z.string().min(1, "Name is required").max(255),
-  description: z.string().max(1000).optional().or(z.literal("")),
-  type: z.enum(HYPERVISOR_TYPES),
-  host: z.string().min(1, "Host is required").max(255),
-  port: z
-    .string()
-    .max(5, "Port must be between 1 and 65535")
-    .refine(
-      (v) => v === "" || (/^\d+$/.test(v) && +v >= 1 && +v <= 65535),
-      "Port must be between 1 and 65535",
-    ),
-  username: z.string().min(1, "Username is required").max(255),
-  password: z.string().min(1, "Password is required"),
-  verify_ssl: z.boolean(),
-});
-
-function portToNumber(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  return Number(trimmed);
-}
-
-type CreateFormValues = z.infer<typeof createSchema>;
 
 function extractDetail(err: unknown, fallback: string): string {
   if (err instanceof AxiosError) {
@@ -94,8 +74,8 @@ export function HypervisorCreateDrawer({
     watch,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<CreateFormValues>({
-    resolver: zodResolver(createSchema),
+  } = useForm<HypervisorCreateValues>({
+    resolver: zodResolver(hypervisorCreateSchema),
     defaultValues: {
       name: "",
       description: "",
@@ -142,7 +122,7 @@ export function HypervisorCreateDrawer({
   });
 
   const createMutation = useMutation({
-    mutationFn: (values: CreateFormValues) =>
+    mutationFn: (values: HypervisorCreateValues) =>
       createHypervisor({
         name: values.name,
         description: values.description || null,
@@ -164,7 +144,7 @@ export function HypervisorCreateDrawer({
     },
   });
 
-  const onSubmit: SubmitHandler<CreateFormValues> = (values) => {
+  const onSubmit: SubmitHandler<HypervisorCreateValues> = (values) => {
     createMutation.mutate(values);
   };
 
@@ -199,6 +179,17 @@ export function HypervisorCreateDrawer({
         noValidate
         className="space-y-7"
       >
+        {/* Persistent inline error — a failed create otherwise surfaces
+            only as an auto-dismissing toast, easy to miss (F12). */}
+        {createMutation.isError && (
+          <Callout tone="err" kicker="Creation failed" role="alert">
+            {extractDetail(
+              createMutation.error,
+              "Could not create the hypervisor. Check the fields and try again.",
+            )}
+          </Callout>
+        )}
+
         <Fieldset legend="Identity">
           <Field label="Name" id="hv-name" error={errors.name?.message}>
             <Input

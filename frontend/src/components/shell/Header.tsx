@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bell, Menu, Search, Settings as SettingsIcon } from "lucide-react";
+import { Menu, Search, Settings as SettingsIcon } from "lucide-react";
 import { Icon } from "@/components/ui/Icon";
 import { Kbd } from "@/components/ui/Kbd";
 import { LiveIndicator } from "@/components/ui/LiveIndicator";
@@ -77,14 +77,6 @@ export function Header({
         )}
 
         <ThemeToggle />
-
-        <button
-          type="button"
-          aria-label="Notifications"
-          className="h-9 w-9 inline-flex items-center justify-center rounded-xl text-[var(--text-secondary)] hover:text-[var(--accent-light)] hover:bg-[var(--surface-soft)] transition-all duration-200"
-        >
-          <Bell size={16} strokeWidth={1.75} />
-        </button>
       </div>
     </header>
   );

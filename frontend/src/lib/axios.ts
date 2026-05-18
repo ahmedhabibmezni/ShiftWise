@@ -2,6 +2,7 @@ import axios from "axios";
 import type { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import toast from "react-hot-toast";
 import { clearSession, getAccessToken, setAccessToken } from "@/store/auth";
+import { forceLogout } from "@/lib/session";
 import type { TokenResponse } from "@/api/types";
 
 const API_BASE = "/api/v1";
@@ -53,7 +54,12 @@ async function runRefresh(): Promise<string> {
 
 function isRefreshExempt(url: string | undefined): boolean {
   if (!url) return false;
-  return Array.from(REFRESH_EXEMPT_PATHS).some((path) => url.includes(path));
+  // Exact path match, not substring. A substring test (`url.includes`)
+  // would also exempt sibling endpoints — e.g. `/auth/login-attempts`
+  // contains `/auth/login` — silently disabling the 401-refresh flow for
+  // a genuinely protected route. Strip any query string, then compare.
+  const path = url.split("?")[0].split("#")[0];
+  return REFRESH_EXEMPT_PATHS.has(path);
 }
 
 // A deactivated account produces a 403 — the same status as an ordinary
@@ -72,10 +78,12 @@ function isAccountDeactivated(error: unknown): boolean {
   return typeof detail === "string" && /inactif|inactive/i.test(detail);
 }
 
-// Tear the session down and tell the user why. The fixed toast id dedupes
-// the burst of parallel 403s a deactivated session fires off at once.
+// Tear the session down and tell the user why. `forceLogout` clears the
+// auth store, purges the query cache, and redirects to /login — so the UI
+// does not linger on a stale authenticated screen. The fixed toast id
+// dedupes the burst of parallel 403s a deactivated session fires off.
 function handleAccountDeactivated(): void {
-  clearSession();
+  forceLogout();
   toast.error(ACCOUNT_DEACTIVATED_MESSAGE, {
     id: "account-deactivated",
     duration: 10_000,
@@ -114,10 +122,11 @@ api.interceptors.response.use(
     } catch (refreshErr) {
       // A refresh rejected because the account was deactivated gets the
       // explicit notice; any other failure is a plain session expiry.
+      // Either way `forceLogout` clears the cache and redirects to /login.
       if (isAccountDeactivated(refreshErr)) {
         handleAccountDeactivated();
       } else {
-        clearSession();
+        forceLogout();
       }
       return Promise.reject(refreshErr);
     }
@@ -132,6 +141,21 @@ api.interceptors.response.use(
 // page reload. Caching the promise turns the second call into a no-op.
 let bootstrapPromise: Promise<boolean> | null = null;
 
+/**
+ * Was the bootstrap failure transient (worth retrying) or definitive?
+ *
+ * A network error or a 5xx means the backend was momentarily unreachable —
+ * caching that as "not authenticated" would freeze the user on /login even
+ * after the backend recovers, until a full browser reload. A 4xx (notably
+ * 401) is a real answer: the refresh cookie is absent or invalid.
+ */
+function isTransientFailure(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return true; // non-Axios throw — treat as transient
+  const status = err.response?.status;
+  if (status === undefined) return true; // no response at all — network error
+  return status >= 500;
+}
+
 export function bootstrapAuth(): Promise<boolean> {
   if (bootstrapPromise === null) {
     bootstrapPromise = (async () => {
@@ -143,9 +167,19 @@ export function bootstrapAuth(): Promise<boolean> {
         // the in-session path shows instead of a silent bounce to /login.
         if (isAccountDeactivated(err)) {
           handleAccountDeactivated();
-        } else {
-          clearSession();
+          return false;
         }
+        // A transient failure (backend briefly down) must NOT be cached:
+        // drop the memoized promise so a later call retries the refresh
+        // once the backend is healthy again. A definitive 4xx stays cached.
+        if (isTransientFailure(err)) {
+          bootstrapPromise = null;
+          return false;
+        }
+        // Definitive unauthenticated (4xx): clear any stale token. No
+        // imperative navigation here — this runs at app boot before the
+        // router mounts; `AuthGate` renders /login once bootstrap settles.
+        clearSession();
         return false;
       }
     })();

@@ -48,6 +48,7 @@ import {
   type VmStatus,
 } from "@/api/vms";
 import { listHypervisors, type Hypervisor } from "@/api/hypervisors";
+import { totalPages as computeTotalPages } from "@/api/types";
 import { formatGB, formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { describeError } from "@/lib/errors";
@@ -100,9 +101,7 @@ export default function Vms() {
     staleTime: 5 * 60_000,
   });
 
-  const totalPages = listQuery.data
-    ? Math.max(1, Math.ceil(listQuery.data.total / PAGE_SIZE))
-    : 1;
+  const totalPages = listQuery.data ? computeTotalPages(listQuery.data) : 1;
   const items = listQuery.data?.items ?? [];
   const filtersActive = !!(search || statusFilter || compatFilter || hypervisorFilter !== "");
 

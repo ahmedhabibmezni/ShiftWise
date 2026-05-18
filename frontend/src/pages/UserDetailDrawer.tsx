@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Controller, useForm, type SubmitHandler } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { Ban, CheckCircle2, Pencil, Save, Trash2 } from "lucide-react";
@@ -30,6 +32,7 @@ import {
   useHasPermission,
 } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
+import { userEditSchema, type UserEditValues } from "./userForm";
 
 function describeError(err: unknown, fallback: string): string {
   if (err instanceof AxiosError) {
@@ -39,29 +42,10 @@ function describeError(err: unknown, fallback: string): string {
   return fallback;
 }
 
-type Draft = {
-  email: string;
-  username: string;
-  first_name: string;
-  last_name: string;
-  password: string;
-  is_active: boolean;
-  role_ids: number[];
-};
+const USER_EDIT_FORM_ID = "user-edit-form";
 
-function emptyDraft(): Draft {
-  return {
-    email: "",
-    username: "",
-    first_name: "",
-    last_name: "",
-    password: "",
-    is_active: true,
-    role_ids: [],
-  };
-}
-
-function draftFrom(u: User): Draft {
+/** Seed react-hook-form's default values from the loaded user. */
+function editValuesFrom(u: User): UserEditValues {
   return {
     email: u.email,
     username: u.username,
@@ -73,25 +57,27 @@ function draftFrom(u: User): Draft {
   };
 }
 
-function diffPayload(u: User, draft: Draft): UpdateUserPayload {
+function diffPayload(u: User, values: UserEditValues): UpdateUserPayload {
   // Ship only what actually changed — same rationale as the hypervisor diff:
   // partial updates avoid clobbering unknown fields, and the password is
   // forbidden as an empty string by the backend's min_length validator.
   const payload: UpdateUserPayload = {};
-  if (draft.email !== u.email) payload.email = draft.email;
-  if (draft.username !== u.username) payload.username = draft.username;
-  if (draft.first_name !== (u.first_name ?? "")) {
-    payload.first_name = draft.first_name || null;
+  if (values.email !== u.email) payload.email = values.email;
+  if (values.username !== u.username) payload.username = values.username;
+  const nextFirst = values.first_name ?? "";
+  if (nextFirst !== (u.first_name ?? "")) {
+    payload.first_name = nextFirst || null;
   }
-  if (draft.last_name !== (u.last_name ?? "")) {
-    payload.last_name = draft.last_name || null;
+  const nextLast = values.last_name ?? "";
+  if (nextLast !== (u.last_name ?? "")) {
+    payload.last_name = nextLast || null;
   }
-  if (draft.password.length > 0) payload.password = draft.password;
-  if (draft.is_active !== u.is_active) payload.is_active = draft.is_active;
+  if (values.password.length > 0) payload.password = values.password;
+  if (values.is_active !== u.is_active) payload.is_active = values.is_active;
   const currentIds = u.roles.map((r) => r.id).sort();
-  const draftIds = [...draft.role_ids].sort();
-  if (JSON.stringify(currentIds) !== JSON.stringify(draftIds)) {
-    payload.role_ids = draft.role_ids;
+  const nextIds = [...values.role_ids].sort();
+  if (JSON.stringify(currentIds) !== JSON.stringify(nextIds)) {
+    payload.role_ids = values.role_ids;
   }
   return payload;
 }
@@ -103,7 +89,6 @@ export function UserDetailDrawer({
   id: number | null;
   onClose: () => void;
 }) {
-  const queryClient = useQueryClient();
   const open = id !== null;
   const canUpdate = useHasPermission("users", "update");
   const canDelete = useHasPermission("users", "delete");
@@ -111,8 +96,11 @@ export function UserDetailDrawer({
   const isSelf = !!me && me.id === id;
   const meIsSuperuser = me?.is_superuser ?? false;
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Mirrors the EditForm child's in-flight update state so the footer
+  // Save button (rendered outside that form) can show its spinner.
+  const [savePending, setSavePending] = useState(false);
+  const queryClient = useQueryClient();
 
   const detailQuery = useQuery({
     queryKey: ["user", id],
@@ -136,43 +124,6 @@ export function UserDetailDrawer({
       ),
     [rolesQuery.data, meIsSuperuser],
   );
-
-  // Seed the draft from the loaded user and enter edit mode. Done in the
-  // click handler (not an effect) so the draft is a fresh snapshot at the
-  // moment editing begins. The parent remounts this drawer via a `key` per
-  // selected id, so `editing`/`confirmDelete` start false on every open.
-  const enterEditMode = () => {
-    if (!detailQuery.data) return;
-    setDraft(draftFrom(detailQuery.data));
-    setEditing(true);
-  };
-
-  const setAuthUser = useAuthStore((s) => s.setUser);
-
-  const updateMutation = useMutation({
-    mutationFn: () => {
-      const payload = diffPayload(detailQuery.data!, draft);
-      if (Object.keys(payload).length === 0) {
-        return Promise.resolve(detailQuery.data!);
-      }
-      return updateUser(id!, payload);
-    },
-    onSuccess: (next) => {
-      toast.success("User updated");
-      queryClient.invalidateQueries({ queryKey: ["user", id] });
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-      // If the operator just edited their own profile, push the new user
-      // object straight into the auth store. /me is read once by AuthGate
-      // at boot — there's no React Query for it — so invalidating a
-      // synthetic "auth/me" key wouldn't actually refresh anything. The
-      // sidebar and route guards all read from the store.
-      if (isSelf) {
-        setAuthUser(next);
-      }
-      setEditing(false);
-    },
-    onError: (err) => toast.error(describeError(err, "Update failed")),
-  });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteUser(id!),
@@ -208,18 +159,16 @@ export function UserDetailDrawer({
             <>
               <Button
                 variant="secondary"
-                onClick={() => {
-                  setDraft(draftFrom(user));
-                  setEditing(false);
-                }}
-                disabled={updateMutation.isPending}
+                onClick={() => setEditing(false)}
+                disabled={savePending}
               >
                 Cancel
               </Button>
               <Button
+                type="submit"
+                form={USER_EDIT_FORM_ID}
                 variant="primary"
-                loading={updateMutation.isPending}
-                onClick={() => updateMutation.mutate()}
+                loading={savePending}
                 leadingIcon={<Icon icon={Save} size={14} />}
               >
                 Save
@@ -243,7 +192,7 @@ export function UserDetailDrawer({
               {canEditUser && (
                 <Button
                   variant="primary"
-                  onClick={enterEditMode}
+                  onClick={() => setEditing(true)}
                   leadingIcon={<Icon icon={Pencil} size={14} />}
                 >
                   Edit
@@ -262,10 +211,12 @@ export function UserDetailDrawer({
         </div>
       ) : editing ? (
         <EditForm
-          draft={draft}
-          onChange={setDraft}
+          user={user}
           allRoles={editableRoles}
           rolesPending={rolesQuery.isPending}
+          isSelf={isSelf}
+          onSavingChange={setSavePending}
+          onSaved={() => setEditing(false)}
         />
       ) : (
         <div className="space-y-6">
@@ -387,64 +338,114 @@ function RolesSection({ user }: { user: User }) {
   );
 }
 
+/**
+ * User edit form — react-hook-form + Zod (`userEditSchema`), the same
+ * validated pipeline as the create drawer. Previously this was a raw
+ * `useState` draft with no inline errors (F9).
+ *
+ * The form owns its update mutation; the Save button lives in the drawer
+ * footer and submits via `form={USER_EDIT_FORM_ID}`. `onSavingChange` keeps
+ * that out-of-form button's spinner in sync.
+ */
 function EditForm({
-  draft,
-  onChange,
+  user,
   allRoles,
   rolesPending,
+  isSelf,
+  onSavingChange,
+  onSaved,
 }: {
-  draft: Draft;
-  onChange: (next: Draft) => void;
+  user: User;
   allRoles: { id: number; name: string; description: string | null }[];
   rolesPending: boolean;
+  isSelf: boolean;
+  onSavingChange: (saving: boolean) => void;
+  onSaved: () => void;
 }) {
-  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    onChange({ ...draft, [key]: value });
+  const queryClient = useQueryClient();
+  const setAuthUser = useAuthStore((s) => s.setUser);
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors },
+  } = useForm<UserEditValues>({
+    resolver: zodResolver(userEditSchema),
+    defaultValues: editValuesFrom(user),
+  });
 
-  const toggleRole = (roleId: number, checked: boolean) => {
-    const next = checked
-      ? Array.from(new Set([...draft.role_ids, roleId]))
-      : draft.role_ids.filter((id) => id !== roleId);
-    set("role_ids", next);
-  };
+  const updateMutation = useMutation({
+    mutationFn: (values: UserEditValues) => {
+      const payload = diffPayload(user, values);
+      if (Object.keys(payload).length === 0) {
+        return Promise.resolve(user);
+      }
+      return updateUser(user.id, payload);
+    },
+    onMutate: () => onSavingChange(true),
+    onSuccess: (next) => {
+      toast.success("User updated");
+      queryClient.invalidateQueries({ queryKey: ["user", user.id] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      // If the operator just edited their own profile, push the new user
+      // object straight into the auth store. /me is read once by AuthGate
+      // at boot — there's no React Query for it — so invalidating a
+      // synthetic "auth/me" key wouldn't actually refresh anything. The
+      // sidebar and route guards all read from the store.
+      if (isSelf) {
+        setAuthUser(next);
+      }
+      onSaved();
+    },
+    onError: (err) => toast.error(describeError(err, "Update failed")),
+    onSettled: () => onSavingChange(false),
+  });
+
+  const onSubmit: SubmitHandler<UserEditValues> = (values) =>
+    updateMutation.mutate(values);
 
   return (
-    <div className="space-y-5">
-      <Field id="ed-email" label="Email">
+    <form
+      id={USER_EDIT_FORM_ID}
+      onSubmit={handleSubmit(onSubmit)}
+      noValidate
+      className="space-y-5"
+    >
+      <Field id="ed-email" label="Email" error={errors.email?.message}>
         <Input
           id="ed-email"
           type="email"
           autoComplete="email"
-          value={draft.email}
-          onChange={(e) => set("email", e.target.value)}
+          invalid={!!errors.email}
+          {...register("email")}
         />
       </Field>
 
-      <Field id="ed-username" label="Username">
+      <Field id="ed-username" label="Username" error={errors.username?.message}>
         <Input
           id="ed-username"
           autoComplete="username"
-          value={draft.username}
-          onChange={(e) => set("username", e.target.value)}
+          invalid={!!errors.username}
+          {...register("username")}
         />
       </Field>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Field id="ed-first" label="First name">
+        <Field id="ed-first" label="First name" error={errors.first_name?.message}>
           <Input
             id="ed-first"
             autoComplete="given-name"
-            value={draft.first_name}
-            onChange={(e) => set("first_name", e.target.value)}
+            invalid={!!errors.first_name}
+            {...register("first_name")}
           />
         </Field>
 
-        <Field id="ed-last" label="Last name">
+        <Field id="ed-last" label="Last name" error={errors.last_name?.message}>
           <Input
             id="ed-last"
             autoComplete="family-name"
-            value={draft.last_name}
-            onChange={(e) => set("last_name", e.target.value)}
+            invalid={!!errors.last_name}
+            {...register("last_name")}
           />
         </Field>
       </div>
@@ -453,62 +454,75 @@ function EditForm({
         id="ed-password"
         label="Password"
         hint="Leave blank to keep the current credential."
+        error={errors.password?.message}
       >
         <Input
           id="ed-password"
           type="password"
           autoComplete="new-password"
-          value={draft.password}
           placeholder="••••••••"
-          onChange={(e) => set("password", e.target.value)}
+          invalid={!!errors.password}
+          {...register("password")}
         />
       </Field>
 
       <label className="flex items-center gap-2.5 cursor-pointer">
-        <Checkbox
-          checked={draft.is_active}
-          onChange={(e) => set("is_active", e.target.checked)}
-        />
+        <Checkbox {...register("is_active")} />
         <span className="text-[13px] text-[var(--text-primary)] font-medium">Active</span>
       </label>
 
-      <div>
-        <div className="kicker mb-2">Roles</div>
-        {rolesPending ? (
-          <Skeleton className="h-24 w-full" />
-        ) : allRoles.length === 0 ? (
-          <div className="text-[12px] text-[var(--text-secondary)]">No roles available</div>
-        ) : (
-          <ul className="space-y-2">
-            {allRoles.map((r) => {
-              const checked = draft.role_ids.includes(r.id);
-              return (
-                <li
-                  key={r.id}
-                  className="flex items-center gap-3 rounded-xl bg-[var(--surface-soft)] px-3.5 py-2.5"
-                >
-                  <Checkbox
-                    aria-label={`role ${r.name}`}
-                    checked={checked}
-                    onChange={(e) => toggleRole(r.id, e.target.checked)}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-bold text-[var(--text-primary)]">
-                      {r.name}
-                    </div>
-                    {r.description && (
-                      <div className="text-[11px] text-[var(--text-muted)] truncate">
-                        {r.description}
+      {/* role_ids is a number[]; a Controller bridges the checkbox list to
+          react-hook-form so it is validated and submitted with the rest. */}
+      <Controller
+        control={control}
+        name="role_ids"
+        render={({ field }) => (
+          <div>
+            <div className="kicker mb-2">Roles</div>
+            {rolesPending ? (
+              <Skeleton className="h-24 w-full" />
+            ) : allRoles.length === 0 ? (
+              <div className="text-[12px] text-[var(--text-secondary)]">
+                No roles available
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {allRoles.map((r) => {
+                  const checked = field.value.includes(r.id);
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex items-center gap-3 rounded-xl bg-[var(--surface-soft)] px-3.5 py-2.5"
+                    >
+                      <Checkbox
+                        aria-label={`role ${r.name}`}
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? Array.from(new Set([...field.value, r.id]))
+                            : field.value.filter((id) => id !== r.id);
+                          field.onChange(next);
+                        }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-bold text-[var(--text-primary)]">
+                          {r.name}
+                        </div>
+                        {r.description && (
+                          <div className="text-[11px] text-[var(--text-muted)] truncate">
+                            {r.description}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         )}
-      </div>
-    </div>
+      />
+    </form>
   );
 }
 
@@ -516,11 +530,13 @@ function Field({
   id,
   label,
   hint,
+  error,
   children,
 }: {
   id: string;
   label: string;
   hint?: string;
+  error?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -532,8 +548,13 @@ function Field({
         {label}
       </label>
       {children}
-      {hint && (
+      {hint && !error && (
         <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">{hint}</div>
+      )}
+      {error && (
+        <div role="alert" className="mt-1.5 text-[12px] text-[var(--alert-critical)]">
+          {error}
+        </div>
       )}
     </div>
   );

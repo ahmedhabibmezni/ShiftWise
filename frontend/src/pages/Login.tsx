@@ -15,6 +15,7 @@ import { Callout } from "@/components/ui/Callout";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
 import { setAccessToken, useAuthStore } from "@/store/auth";
+import { queryClient } from "@/lib/queryClient";
 import type { ApiError } from "@/api/types";
 
 const loginSchema = z.object({
@@ -62,6 +63,11 @@ export default function Login() {
       return { tokens, me };
     },
     onSuccess: ({ tokens, me }) => {
+      // Drop any cached queries before the new session is established. On a
+      // same-tab account switch (sign out, then sign in as a different
+      // user) the prior tenant's VMs/migrations/stats would otherwise
+      // remain in the TanStack cache and flash on the next screen.
+      queryClient.clear();
       setSession(tokens.access_token, me);
       const target = (location.state as LocationState | null)?.from ?? "/";
       navigate(target, { replace: true });

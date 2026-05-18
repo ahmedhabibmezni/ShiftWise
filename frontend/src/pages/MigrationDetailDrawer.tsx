@@ -1,6 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, ListTree, Play, ScrollText } from "lucide-react";
+import {
+  Ban,
+  Check,
+  CircleDashed,
+  ListTree,
+  Loader2,
+  Play,
+  ScrollText,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
@@ -245,6 +255,23 @@ function Pipeline({ migration }: { migration: Migration }) {
   );
 }
 
+type PipelineCellState = "done" | "active" | "failed" | "pending";
+
+/**
+ * Per-state icon. The pipeline cell encodes status with a background colour;
+ * pairing each state with a distinct glyph keeps it legible for colourblind
+ * users (WCAG 1.4.1 — colour is not the only cue).
+ */
+const PIPELINE_CELL_ICON: Record<
+  PipelineCellState,
+  { icon: LucideIcon; spin?: boolean }
+> = {
+  done: { icon: Check },
+  active: { icon: Loader2, spin: true },
+  failed: { icon: X },
+  pending: { icon: CircleDashed },
+};
+
 function PipelineCell({
   index,
   label,
@@ -252,7 +279,7 @@ function PipelineCell({
 }: {
   index: number;
   label: string;
-  state: "done" | "active" | "failed" | "pending";
+  state: PipelineCellState;
 }) {
   const tone =
     state === "done"
@@ -262,6 +289,7 @@ function PipelineCell({
         : state === "failed"
           ? { color: "var(--alert-critical)", bg: "rgba(224, 61, 61, 0.10)" }
           : { color: "var(--text-muted)", bg: "var(--surface-soft)" };
+  const StateIcon = PIPELINE_CELL_ICON[state].icon;
   return (
     <li className="rounded-xl px-3.5 py-2.5" style={{ background: tone.bg }}>
       <div
@@ -271,10 +299,16 @@ function PipelineCell({
         {String(index).padStart(2, "0")} · {label}
       </div>
       <div
-        className="text-[10px] uppercase tracking-[0.04em] font-medium mt-0.5"
+        className="flex items-center gap-1 text-[10px] uppercase tracking-[0.04em] font-medium mt-0.5"
         style={{ color: tone.color, opacity: 0.85 }}
       >
-        {state}
+        <StateIcon
+          size={10}
+          strokeWidth={2.5}
+          className={PIPELINE_CELL_ICON[state].spin ? "sw-spin" : undefined}
+          aria-hidden
+        />
+        <span>{state}</span>
       </div>
     </li>
   );

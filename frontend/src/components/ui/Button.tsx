@@ -41,6 +41,11 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
     children,
     disabled,
     style,
+    // HTML defaults a <button> inside a <form> to type="submit". An
+    // unannotated action button (Cancel, Edit, Test Connection, …) placed
+    // in a form would therefore submit it. Default to "button"; callers
+    // that genuinely submit pass type="submit" explicitly.
+    type = "button",
     ...rest
   },
   ref,
@@ -58,6 +63,7 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
   return (
     <button
       ref={ref}
+      type={type}
       disabled={disabled || loading}
       style={{ ...primaryStyle, ...style }}
       className={cn(

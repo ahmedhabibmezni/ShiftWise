@@ -1,5 +1,5 @@
 import { api } from "@/lib/axios";
-import type { Role, User } from "@/api/types";
+import type { Paginated, Role, User } from "@/api/types";
 
 export type UserListItem = {
   id: number;
@@ -18,13 +18,8 @@ export type UserListItem = {
   updated_at: string;
 };
 
-export type UserListResponse = {
-  items: UserListItem[];
-  total: number;
-  page: number;
-  page_size: number;
-  pages: number;
-};
+/** Unified pagination envelope — `/users` also sends a `pages` count. */
+export type UserListResponse = Paginated<UserListItem>;
 
 export type ListUsersParams = {
   skip?: number;

@@ -5,8 +5,38 @@ export type ResourceAction = "read" | "create" | "update" | "delete";
 
 export const SUPER_ADMIN_ROLE = "super_admin";
 
+/** Wildcard marker — an entry of `"*"` on a resource grants every action. */
+export const WILDCARD_ACTION = "*";
+
 export const ROLE_ORDER = ["super_admin", "admin", "user", "viewer"] as const;
 export type RoleName = (typeof ROLE_ORDER)[number] | (string & {});
+
+/** A `resource -> actions` permission map, as carried by users and roles. */
+export type PermissionMap = Record<string, string[]>;
+
+/**
+ * Single source of truth for "does this permission map grant
+ * `resource:action`?" — the wildcard rule (`"*"` ⇒ all actions) lived in
+ * two hand-rolled copies (`hasPermission` and `api/roles.ts`'
+ * `permissionGranted`); both now delegate here so the rule cannot drift.
+ *
+ * Tolerates a `null`/`undefined` map (F25): the backend should always send
+ * one, but a malformed payload must not throw a `TypeError` that blanks the
+ * UI. A missing map simply grants nothing.
+ *
+ * Frontend permission checks are a UX affordance only — the backend RBAC
+ * layer is the real gate. This keeps the displayed buttons consistent with
+ * what the server will actually allow.
+ */
+export function evaluatePermission(
+  permissions: PermissionMap | null | undefined,
+  resource: string,
+  action: ResourceAction,
+): boolean {
+  const actions = permissions?.[resource];
+  if (!actions) return false;
+  return actions.includes(WILDCARD_ACTION) || actions.includes(action);
+}
 
 export function hasPermission(
   user: User | null,
@@ -15,9 +45,9 @@ export function hasPermission(
 ): boolean {
   if (!user) return false;
   if (user.is_superuser) return true;
-  const perms = user.permissions[resource];
-  if (!perms) return false;
-  return perms.includes("*") || perms.includes(action);
+  // `user.permissions` is typed non-nullable, but evaluatePermission
+  // null-guards it anyway in case the backend returns a malformed payload.
+  return evaluatePermission(user.permissions, resource, action);
 }
 
 /**

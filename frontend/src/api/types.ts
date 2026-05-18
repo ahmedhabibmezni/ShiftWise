@@ -41,3 +41,40 @@ export type TokenResponse = {
 export type ApiError = {
   detail: string;
 };
+
+/**
+ * Unified pagination envelope for every list endpoint.
+ *
+ * The backend list routes (`/users`, `/vms`, `/hypervisors`, `/migrations`)
+ * all return `{ items, total, page, page_size }`. Only `/users` additionally
+ * sends a precomputed `pages` count — so it is optional here. Consumers that
+ * need a page count should call `totalPages()` rather than reading `pages`,
+ * which derives it consistently whether the field is present or not.
+ *
+ * Before this type the four responses were declared independently with
+ * subtly different field orders and an inconsistent `pages` field.
+ */
+export type Paginated<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  /** Precomputed page count — only some endpoints send it. Prefer `totalPages()`. */
+  pages?: number;
+};
+
+/**
+ * Derive the page count from a paginated envelope. Uses the backend-supplied
+ * `pages` when present; otherwise computes it from `total` / `page_size`.
+ * Always returns at least 1 so pagination controls render sanely on an
+ * empty list.
+ */
+export function totalPages(p: {
+  total: number;
+  page_size: number;
+  pages?: number;
+}): number {
+  if (typeof p.pages === "number" && p.pages > 0) return p.pages;
+  if (p.page_size <= 0) return 1;
+  return Math.max(1, Math.ceil(p.total / p.page_size));
+}

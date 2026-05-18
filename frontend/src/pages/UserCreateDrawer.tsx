@@ -4,8 +4,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import toast from "react-hot-toast";
-import { z } from "zod";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -13,41 +13,7 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { createUser, listRoles } from "@/api/users";
 import { SUPER_ADMIN_ROLE } from "@/lib/permissions";
 import { useAuthStore } from "@/store/auth";
-
-// Mirrors the backend UserCreate password validator. Keeping the messages
-// in sync avoids the user seeing a generic 422 from FastAPI when a rule
-// fails — we surface the same constraint locally.
-const passwordRules = z
-  .string()
-  .min(8, "Must be at least 8 characters")
-  .regex(/[A-Z]/, "Must contain an uppercase letter")
-  .regex(/[a-z]/, "Must contain a lowercase letter")
-  .regex(/\d/, "Must contain a digit")
-  .regex(/[!@#$%^&*(),.?":{}|<>]/, "Must contain a special character");
-
-const createSchema = z.object({
-  email: z.string().min(1, "Email is required").email("Invalid email address"),
-  username: z
-    .string()
-    .min(3, "Must be at least 3 characters")
-    .max(100)
-    .regex(
-      /^[a-zA-Z][a-zA-Z0-9._-]*$/,
-      "Must start with a letter (letters, digits, . _ - allowed)",
-    ),
-  first_name: z.string().max(100).optional().or(z.literal("")),
-  last_name: z.string().max(100).optional().or(z.literal("")),
-  tenant_id: z
-    .string()
-    .min(1, "Tenant is required")
-    .max(100)
-    .regex(/^[a-z0-9-]+$/, "Lowercase letters, digits, and hyphens only"),
-  is_active: z.boolean(),
-  password: passwordRules,
-  role_id: z.string().min(1, "Role is required"),
-});
-
-type CreateFormValues = z.infer<typeof createSchema>;
+import { userCreateSchema, type UserCreateValues } from "./userForm";
 
 type FastApiValidationError = { msg?: string };
 
@@ -87,8 +53,8 @@ export function UserCreateDrawer({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<CreateFormValues>({
-    resolver: zodResolver(createSchema),
+  } = useForm<UserCreateValues>({
+    resolver: zodResolver(userCreateSchema),
     defaultValues: {
       email: "",
       username: "",
@@ -105,7 +71,7 @@ export function UserCreateDrawer({
   // open, so the form starts blank each time.
 
   const mutation = useMutation({
-    mutationFn: (values: CreateFormValues) =>
+    mutationFn: (values: UserCreateValues) =>
       createUser({
         email: values.email,
         username: values.username,
@@ -126,7 +92,7 @@ export function UserCreateDrawer({
     },
   });
 
-  const onSubmit: SubmitHandler<CreateFormValues> = (values) => {
+  const onSubmit: SubmitHandler<UserCreateValues> = (values) => {
     mutation.mutate(values);
   };
 
@@ -170,6 +136,17 @@ export function UserCreateDrawer({
         noValidate
         className="space-y-5"
       >
+        {/* Persistent inline error — a failed create otherwise surfaces
+            only as an auto-dismissing toast, easy to miss (F12). */}
+        {mutation.isError && (
+          <Callout tone="err" kicker="Creation failed" role="alert">
+            {extractDetail(
+              mutation.error,
+              "Could not create the user. Check the fields and try again.",
+            )}
+          </Callout>
+        )}
+
         <Field id="u-email" label="Email" error={errors.email?.message}>
           <Input
             id="u-email"

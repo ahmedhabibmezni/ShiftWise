@@ -27,6 +27,7 @@ import { Skeleton, SkeletonRow } from "@/components/ui/Skeleton";
 import { TD, TH, THead, TR } from "@/components/ui/Table";
 import { Table } from "@/components/ui/Table";
 import { listUsers, type UserListItem } from "@/api/users";
+import { totalPages as computeTotalPages } from "@/api/types";
 import { formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { UserCreateDrawer } from "./UserCreateDrawer";
@@ -63,7 +64,9 @@ export default function Users() {
   });
 
   const total = listQuery.data?.total ?? 0;
-  const totalPages = listQuery.data ? Math.max(1, listQuery.data.pages) : 1;
+  const totalPages = listQuery.data
+    ? computeTotalPages(listQuery.data)
+    : 1;
   const items = listQuery.data?.items ?? [];
   const filtersActive = !!(search || activeFilter);
 

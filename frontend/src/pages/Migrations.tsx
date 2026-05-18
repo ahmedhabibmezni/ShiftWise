@@ -47,6 +47,7 @@ import {
 } from "@/api/migrations";
 import { listVms, type Vm } from "@/api/vms";
 import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
+import { totalPages as computeTotalPages } from "@/api/types";
 import { formatDuration, formatNumber, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { MigrationCreateDrawer } from "./MigrationCreateDrawer";
@@ -107,9 +108,7 @@ export default function Migrations() {
     staleTime: 5 * 60_000,
   });
 
-  const totalPages = listQuery.data
-    ? Math.max(1, Math.ceil(listQuery.data.total / PAGE_SIZE))
-    : 1;
+  const totalPages = listQuery.data ? computeTotalPages(listQuery.data) : 1;
   const items = listQuery.data?.items ?? [];
   const filtersActive = !!(statusFilter || strategyFilter);
 

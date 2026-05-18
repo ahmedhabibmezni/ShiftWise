@@ -9,25 +9,10 @@ import Reports from "@/pages/Reports";
 import Roles from "@/pages/Roles";
 import Settings from "@/pages/Settings";
 import Users from "@/pages/Users";
+import NotFound from "@/pages/NotFound";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
 import { AppLayout } from "@/app/AppLayout";
-
-function NotFound() {
-  return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="glass-card max-w-md p-6">
-        <div className="kicker mb-2">404 · Page Not Found</div>
-        <p className="mt-2 text-[13px] text-[var(--text-secondary)]">
-          That page does not exist. It may have moved, or the link is wrong.{" "}
-          <a href="/" className="text-[var(--accent-light)] hover:text-[var(--accent-primary)] font-bold">
-            Go to dashboard →
-          </a>
-        </p>
-      </div>
-    </div>
-  );
-}
 
 export const router = createBrowserRouter([
   {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hasPermission, isSuperAdminUser, primaryRole } from "./permissions";
+import {
+  evaluatePermission,
+  hasPermission,
+  isSuperAdminUser,
+  primaryRole,
+} from "./permissions";
 import type { Role, User } from "@/api/types";
 
 function makeRole(name: string): Role {
@@ -62,6 +67,40 @@ describe("hasPermission", () => {
   it("rejects resources missing from the map", () => {
     const u = makeUser({ permissions: { vms: ["read"] } });
     expect(hasPermission(u, "hypervisors", "read")).toBe(false);
+  });
+
+  // F25 — the backend should always send a permissions object, but a
+  // defensive null-guard keeps a malformed/null payload from throwing a
+  // TypeError that would blank the whole app.
+  it("does not throw when the user's permissions map is null", () => {
+    const u = makeUser({
+      permissions: null as unknown as Record<string, string[]>,
+    });
+    expect(() => hasPermission(u, "vms", "read")).not.toThrow();
+    expect(hasPermission(u, "vms", "read")).toBe(false);
+  });
+});
+
+// F24 — wildcard evaluation lived in two copies (`hasPermission` here and
+// `permissionGranted` in api/roles.ts). Both now delegate to this single
+// evaluator. These tests pin its contract directly.
+describe("evaluatePermission — shared wildcard evaluator", () => {
+  it("returns false for a null or undefined permissions map", () => {
+    expect(evaluatePermission(null, "vms", "read")).toBe(false);
+    expect(evaluatePermission(undefined, "vms", "read")).toBe(false);
+  });
+
+  it("matches the explicit action", () => {
+    expect(evaluatePermission({ vms: ["read"] }, "vms", "read")).toBe(true);
+    expect(evaluatePermission({ vms: ["read"] }, "vms", "delete")).toBe(false);
+  });
+
+  it("honors the '*' wildcard on the resource", () => {
+    expect(evaluatePermission({ vms: ["*"] }, "vms", "delete")).toBe(true);
+  });
+
+  it("returns false for a resource absent from the map", () => {
+    expect(evaluatePermission({ vms: ["read"] }, "roles", "read")).toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
 import { api } from "@/lib/axios";
+import type { Paginated } from "@/api/types";
 
 export const MIGRATION_STATUSES = [
   "pending",
@@ -86,12 +87,7 @@ export type Migration = {
   estimated_time_remaining_seconds: number;
 };
 
-export type MigrationListResponse = {
-  total: number;
-  items: Migration[];
-  page: number;
-  page_size: number;
-};
+export type MigrationListResponse = Paginated<Migration>;
 
 export type ListMigrationsParams = {
   skip?: number;

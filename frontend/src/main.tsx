@@ -5,9 +5,18 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 import { router } from "./routes";
 import { queryClient } from "./lib/queryClient";
+import { registerSessionNavigator } from "./lib/session";
 import { AuthGate } from "./app/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
+
+// Give `forceLogout` (in lib/session, reachable from the axios interceptor)
+// an imperative way to redirect to /login. The router cannot be imported
+// directly by lib/session without forming an init cycle, so it is injected
+// here at startup instead.
+registerSessionNavigator((path) => {
+  void router.navigate(path);
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

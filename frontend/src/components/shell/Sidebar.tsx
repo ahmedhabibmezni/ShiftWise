@@ -21,13 +21,13 @@ import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/store/auth";
 import { hasPermission, primaryRole, type ResourceAction } from "@/lib/permissions";
 import { logout as logoutRequest } from "@/api/auth";
+import { forceLogout } from "@/lib/session";
 
 type NavItem = {
   id: string;
   label: string;
   icon: LucideIcon;
-  to?: string;
-  badge?: number;
+  to: string;
   requires?: { resource: string; action: ResourceAction };
 };
 
@@ -195,7 +195,7 @@ function NavItemLink({
 }) {
   return (
     <NavLink
-      to={item.to ?? "#"}
+      to={item.to}
       end={item.to === "/"}
       onClick={onNavigate}
       className={({ isActive }) =>
@@ -231,17 +231,6 @@ function NavItemLink({
             <Icon icon={item.icon} size={16} strokeWidth={1.75} />
           </span>
           <span className="flex-1 truncate">{item.label}</span>
-          {item.badge !== undefined && (
-            <span
-              className="ml-auto inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full text-[10px] font-bold tabular text-white"
-              style={{
-                background:
-                  "linear-gradient(135deg, var(--accent-primary), var(--accent-light))",
-              }}
-            >
-              {item.badge}
-            </span>
-          )}
         </>
       )}
     </NavLink>
@@ -250,10 +239,12 @@ function NavItemLink({
 
 function ProfileChip() {
   const user = useAuthStore((s) => s.user);
-  const clearSession = useAuthStore((s) => s.clearSession);
+  // `forceLogout` clears the auth store, purges the query cache, and
+  // redirects to /login — whether the server logout request succeeds
+  // or fails (network error, 5xx).
   const logoutMutation = useMutation({
     mutationFn: logoutRequest,
-    onSettled: () => clearSession(),
+    onSettled: () => forceLogout(),
   });
 
   if (!user) return null;
