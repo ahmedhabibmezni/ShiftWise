@@ -71,7 +71,7 @@ def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Ses
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=(
-                            f"Vous ne pouvez pas assigner un rôle accordant "
+                            "Vous ne pouvez pas assigner un rôle accordant "
                             f"'{resource}:{action}' — permission absente de votre compte"
                         ),
                     )

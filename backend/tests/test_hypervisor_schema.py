@@ -58,3 +58,72 @@ def test_ssrf_check_applies_to_update_and_test_connection():
             type=HypervisorType.PROXMOX, host="169.254.169.254",
             username="u", password="p",
         )
+
+
+# ---------------------------------------------------------------------------
+# Audit A5 — validation de connection_config (api_path, ssh_key_path)
+# ---------------------------------------------------------------------------
+
+
+def _create_cfg(cfg: dict) -> HypervisorCreate:
+    return HypervisorCreate(
+        name="hv", type=HypervisorType.OVIRT, host="10.9.21.131",
+        username="u", password="p", connection_config=cfg,
+    )
+
+
+def test_connection_config_valid_accepted():
+    """Un connection_config légitime passe et les valeurs sont normalisées."""
+    hv = _create_cfg({
+        "api_path": "/ovirt-engine/api",
+        "ssh_key_path": "/etc/shiftwise/ssh/kvm_id_rsa",
+        "datacenter": "DC1",
+    })
+    assert hv.connection_config["api_path"] == "/ovirt-engine/api"
+    assert hv.connection_config["ssh_key_path"] == "/etc/shiftwise/ssh/kvm_id_rsa"
+    assert hv.connection_config["datacenter"] == "DC1"
+
+
+def test_connection_config_none_and_empty_ok():
+    """Absence de connection_config, ou dict sans clé sensible, est accepté."""
+    assert _create_cfg({}).connection_config == {}
+    hv = HypervisorCreate(
+        name="hv", type=HypervisorType.KVM, host="10.9.21.131",
+        username="u", password="p",
+    )
+    assert hv.connection_config is None
+
+
+@pytest.mark.parametrize("api_path", [
+    "ovirt-engine/api",                       # pas de '/' initial
+    "//evil.example.com/api",                 # interprété comme hôte réseau
+    "https://evil.example.com/api",           # schéma + hôte
+    "/ovirt-engine/../../etc/passwd",          # traversée '..'
+    "/api\r\nHost: evil.example.com",          # caractère de contrôle / CRLF
+])
+def test_connection_config_api_path_rejected(api_path):
+    with pytest.raises(ValidationError):
+        _create_cfg({"api_path": api_path})
+
+
+@pytest.mark.parametrize("ssh_key_path", [
+    "relative/key",                            # pas absolu
+    "id_rsa",                                  # pas absolu
+    "/etc/shiftwise/ssh/../../root/.ssh/id_rsa",  # traversée '..'
+    "/root/.ssh/id_rsa",                       # absolu mais hors racine autorisée
+    "/etc/shiftwise/ssh/key\x00",              # caractère de contrôle (NUL)
+])
+def test_connection_config_ssh_key_path_rejected(ssh_key_path):
+    with pytest.raises(ValidationError):
+        _create_cfg({"ssh_key_path": ssh_key_path})
+
+
+def test_connection_config_validation_applies_to_update():
+    """Audit A5 — la validation s'applique aussi à HypervisorUpdate."""
+    with pytest.raises(ValidationError):
+        HypervisorUpdate(connection_config={"ssh_key_path": "/root/.ssh/id_rsa"})
+    with pytest.raises(ValidationError):
+        HypervisorUpdate(connection_config={"api_path": "https://evil.example.com"})
+    # Une mise à jour valide passe.
+    ok = HypervisorUpdate(connection_config={"api_path": "/ovirt-engine/api"})
+    assert ok.connection_config["api_path"] == "/ovirt-engine/api"

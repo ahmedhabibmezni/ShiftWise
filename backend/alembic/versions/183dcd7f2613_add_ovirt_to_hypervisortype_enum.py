@@ -7,6 +7,17 @@ before this revision is missing `OVIRT`, which crashed any INSERT on a
 new oVirt hypervisor and any per-value COUNT (the hypervisor stats
 endpoint hit this with `InvalidTextRepresentation`).
 
+DUPLICATE NOTICE (audit H4): an earlier revision `f1a2b3c4d5e6`
+("add ovirt value to hypervisortype enum", down_revision a9d8d838996f)
+already adds the same `OVIRT` enum value, but on a different branch of
+the revision graph and WITHOUT an `autocommit_block()` — which fails on
+PostgreSQL < 12 because `ALTER TYPE ... ADD VALUE` cannot run inside a
+transaction there. This revision supersedes `f1a2b3c4d5e6`: it is the
+canonical, portable form. Both statements use `ADD VALUE IF NOT EXISTS`,
+so applying both is harmless and idempotent. Neither migration is
+deleted because at least one is already applied on existing databases.
+Future readers: prefer this revision's pattern for additive enum changes.
+
 Revision ID: 183dcd7f2613
 Revises: c7d2e8f4a1b3
 Create Date: 2026-05-11 02:49:23.570008

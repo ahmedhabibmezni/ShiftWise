@@ -184,7 +184,7 @@ class AnalyzerService:
                 override_reason = (
                     f"model predicted {model_grade} (conf={confidence:.2f}) but "
                     f"rules report {len(rules_agg['blockers'])} blocker(s) — "
-                    f"deferring to rules"
+                    "deferring to rules"
                 )
                 logger.info(f"VM {vm_id}: {override_reason}")
                 engine = "rules"

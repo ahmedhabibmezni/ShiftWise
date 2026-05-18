@@ -1715,7 +1715,7 @@ class DiscoveryService:
                                 continue
                     except Exception as exc:
                         logger.debug(
-                            f"oVirt: disk attachments indisponibles pour "
+                            "oVirt: disk attachments indisponibles pour "
                             f"'{getattr(vm, 'name', '?')}': {exc}"
                         )
                     disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0

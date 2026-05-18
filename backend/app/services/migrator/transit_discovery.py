@@ -136,7 +136,7 @@ def _lookup_from_cluster(kv_client: "KubeVirtClient") -> tuple[str, str]:
             action="read",
             resource=f"transit PVC {pvc_namespace}/{pvc_name}",
             rbac_hint=(
-                f"set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH or grant "
+                "set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH or grant "
                 f"the worker SA pvc/get on {pvc_namespace!r}."
             ),
         )
@@ -149,8 +149,8 @@ def _lookup_from_cluster(kv_client: "KubeVirtClient") -> tuple[str, str]:
         raise MigratorError(
             "ERR_MIG_INTERNAL",
             f"Transit PVC {pvc_namespace}/{pvc_name} is not bound "
-            f"(no spec.volumeName). Ensure the PVC is Bound before "
-            f"launching migrations.",
+            "(no spec.volumeName). Ensure the PVC is Bound before "
+            "launching migrations.",
         )
 
     # Step 2: read the PV to get spec.nfs.
@@ -171,8 +171,8 @@ def _lookup_from_cluster(kv_client: "KubeVirtClient") -> tuple[str, str]:
             f"PV {pv_name!r} has no spec.nfs section "
             f"(server={getattr(nfs, 'server', None)!r}, "
             f"path={getattr(nfs, 'path', None)!r}). Only NFS-backed transit "
-            f"PVCs are supported. Set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH "
-            f"to override.",
+            "PVCs are supported. Set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH "
+            "to override.",
         )
 
     server: str = nfs.server

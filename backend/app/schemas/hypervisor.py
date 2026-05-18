@@ -5,12 +5,14 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 """
 
 import ipaddress
+import posixpath
 import re
 from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.config import settings
 from app.models.hypervisor import HypervisorType as HypervisorTypeEnum
 from app.models.hypervisor import HypervisorStatus as HypervisorStatusEnum
 
@@ -47,9 +49,122 @@ def _check_host_not_ssrf(host: str) -> str:
         if ip in net:
             raise ValueError(
                 f"hôte interdit : {host!r} cible la plage link-local {net} "
-                f"(risque de SSRF vers les métadonnées cloud)"
+                "(risque de SSRF vers les métadonnées cloud)"
             )
     return host
+
+
+# Audit A5 — caractères de contrôle interdits dans les valeurs de chemin
+# de `connection_config` (CR/LF/NUL permettraient injection d'en-tête ou
+# de commande selon le consommateur en aval).
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _validate_api_path(value: object) -> str:
+    """
+    Valide ``connection_config["api_path"]`` (audit A5 — SSRF).
+
+    `api_path` est concaténé tel quel dans une URL ``https://{host}{port}
+    {api_path}`` (connecteur oVirt). Il doit donc rester un chemin d'URL
+    relatif : commence par ``/``, ne porte ni schéma ni hôte, ne contient
+    ni segment de traversée ``..`` ni caractère de contrôle. Sinon un
+    `api_path` du type ``@evil.example.com/`` ou ``//evil.example.com``
+    détournerait la requête vers un hôte arbitraire.
+    """
+    if not isinstance(value, str):
+        raise ValueError("connection_config.api_path doit être une chaîne")
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("connection_config.api_path ne doit pas être vide")
+    if _CONTROL_CHARS.search(candidate):
+        raise ValueError(
+            "connection_config.api_path contient un caractère de contrôle interdit"
+        )
+    if not candidate.startswith("/"):
+        raise ValueError(
+            "connection_config.api_path doit être un chemin relatif "
+            "(commençant par '/')"
+        )
+    if candidate.startswith("//"):
+        raise ValueError(
+            "connection_config.api_path ne doit pas commencer par '//' "
+            "(serait interprété comme un hôte réseau)"
+        )
+    if "://" in candidate or "\\" in candidate:
+        raise ValueError(
+            "connection_config.api_path ne doit pas contenir de schéma "
+            "ni d'hôte — uniquement un chemin"
+        )
+    if ".." in candidate.split("/"):
+        raise ValueError(
+            "connection_config.api_path ne doit pas contenir de segment "
+            "de traversée '..'"
+        )
+    return candidate
+
+
+def _validate_ssh_key_path(value: object) -> str:
+    """
+    Valide ``connection_config["ssh_key_path"]`` (audit A5 — path traversal).
+
+    Le chemin est passé en `key_filename` à paramiko (connecteur KVM). Il
+    doit être un chemin **absolu**, sans segment de traversée ``..``, sans
+    caractère de contrôle, et — si ``settings.SSH_KEY_ALLOWED_ROOT`` est
+    défini — résolu à l'intérieur de cette racine. Cela empêche un
+    utilisateur d'API de faire lire au backend une clé privée arbitraire
+    du système de fichiers (ex. ``/root/.ssh/id_rsa``).
+    """
+    if not isinstance(value, str):
+        raise ValueError("connection_config.ssh_key_path doit être une chaîne")
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("connection_config.ssh_key_path ne doit pas être vide")
+    if _CONTROL_CHARS.search(candidate):
+        raise ValueError(
+            "connection_config.ssh_key_path contient un caractère de contrôle interdit"
+        )
+    # Normalise en chemin POSIX — l'hôte cible (worker Linux) est POSIX.
+    normalised = candidate.replace("\\", "/")
+    if not posixpath.isabs(normalised):
+        raise ValueError(
+            "connection_config.ssh_key_path doit être un chemin absolu"
+        )
+    if ".." in normalised.split("/"):
+        raise ValueError(
+            "connection_config.ssh_key_path ne doit pas contenir de segment "
+            "de traversée '..'"
+        )
+    resolved = posixpath.normpath(normalised)
+    allowed_root = (settings.SSH_KEY_ALLOWED_ROOT or "").strip()
+    if allowed_root:
+        root = posixpath.normpath(allowed_root.replace("\\", "/"))
+        # Le chemin résolu doit être la racine elle-même ou un descendant.
+        if resolved != root and not resolved.startswith(root.rstrip("/") + "/"):
+            raise ValueError(
+                "connection_config.ssh_key_path doit être situé sous "
+                f"{root!r} (clé hors racine autorisée)"
+            )
+    return resolved
+
+
+def _validate_connection_config(cfg: Optional[dict]) -> Optional[dict]:
+    """
+    Valide les clés sensibles de ``connection_config`` (audit A5 — SSRF).
+
+    Ne touche que ``api_path`` et ``ssh_key_path`` ; les autres clés
+    (datacenter, cluster, vm_folder, ...) sont laissées telles quelles.
+    Réécrit le dict avec les valeurs normalisées des clés validées.
+    """
+    if cfg is None:
+        return None
+    if not isinstance(cfg, dict):
+        raise ValueError("connection_config doit être un objet")
+    validated = dict(cfg)
+    if "api_path" in validated and validated["api_path"] is not None:
+        validated["api_path"] = _validate_api_path(validated["api_path"])
+    if "ssh_key_path" in validated and validated["ssh_key_path"] is not None:
+        validated["ssh_key_path"] = _validate_ssh_key_path(validated["ssh_key_path"])
+    return validated
 
 
 # Schéma de base
@@ -78,6 +193,12 @@ class HypervisorCreate(HypervisorBase):
     connection_config: Optional[dict] = Field(None, description="Configuration avancée")
     tags: Optional[dict] = Field(None, description="Tags personnalisés")
 
+    @field_validator("connection_config")
+    @classmethod
+    def _validate_connection_config(cls, v: Optional[dict]) -> Optional[dict]:
+        """Audit A5 — valide api_path / ssh_key_path (SSRF, path traversal)."""
+        return _validate_connection_config(v)
+
 
 # Schéma pour la mise à jour
 class HypervisorUpdate(BaseModel):
@@ -99,6 +220,12 @@ class HypervisorUpdate(BaseModel):
     def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
         """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
         return v if v is None else _check_host_not_ssrf(v)
+
+    @field_validator("connection_config")
+    @classmethod
+    def _validate_connection_config(cls, v: Optional[dict]) -> Optional[dict]:
+        """Audit A5 — valide api_path / ssh_key_path (SSRF, path traversal)."""
+        return _validate_connection_config(v)
 
 
 # Schéma pour la réponse (SANS password par défaut)

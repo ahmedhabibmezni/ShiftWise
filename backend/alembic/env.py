@@ -11,28 +11,18 @@ from pathlib import Path
 # Ajouter le dossier parent au path pour importer app
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Importer la configuration et les modèles
-from app.core.config import settings
-from app.models.base import Base
-
-# Importer la configuration et les modèles
+# Importer la configuration et la Base SQLAlchemy.
 from app.core.config import settings
 from app.core.database import Base
 
-# Importer TOUS les modèles dans le bon ordre
-from app.models import (
+# Importer TOUS les modèles pour que SQLAlchemy les enregistre dans
+# `Base.metadata` (nécessaire au support `autogenerate` d'Alembic).
+from app.models import (  # noqa: F401
     User, Role, user_roles,
     Hypervisor, HypervisorType, HypervisorStatus,
     VirtualMachine, VMStatus, CompatibilityStatus, OSType,
-    Migration, MigrationStatus, MigrationStrategy
+    Migration, MigrationStatus, MigrationStrategy,
 )
-
-# Importer TOUS les modèles pour que SQLAlchemy les connaisse
-from app.models.user import User
-from app.models.role import Role
-from app.models.virtual_machine import VirtualMachine
-from app.models.hypervisor import Hypervisor
-from app.models.migration import Migration
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

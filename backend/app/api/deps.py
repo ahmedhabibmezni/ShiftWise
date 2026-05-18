@@ -234,8 +234,8 @@ def get_current_user_tenant(
     Usage:
         @router.get("/my-vms")
         def get_my_vms(
-            tenant_id: str = Depends(get_current_user_tenant),
-            db: Session = Depends(get_db)
+            tenant_id: Annotated[str, Depends(get_current_user_tenant)],
+            db: Annotated[Session, Depends(get_db)],
         ):
             # Récupère automatiquement les VMs du tenant de l'utilisateur
             return crud_vm.get_vms_by_tenant(db, tenant_id)

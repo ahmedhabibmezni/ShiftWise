@@ -130,12 +130,18 @@ class Settings(BaseSettings):
     # COOKIE_DOMAIN reste vide en dev (host == "localhost" suffit). En prod,
     # remplir avec le registrable domain partagé entre frontend et backend,
     # ex. ".migration.nextstep-it.com" pour autoriser le cookie sur les deux
-    # sous-domaines. COOKIE_SECURE doit etre True en prod (cookie envoyé
-    # uniquement sur HTTPS) ; mis à False en dev pour autoriser http://localhost.
+    # sous-domaines.
+    #
+    # Audit A10 — REFRESH_COOKIE_SECURE vaut True par défaut : le cookie de
+    # refresh n'est émis que sur HTTPS, ce qui empêche sa fuite sur une
+    # connexion en clair. La valeur reste surchargeable par variable
+    # d'environnement : un développeur sur http://localhost (sans TLS) peut
+    # poser REFRESH_COOKIE_SECURE=False dans son .env local — et uniquement
+    # là. Ne jamais le passer à False en production.
     REFRESH_COOKIE_NAME: str = "shiftwise_refresh"
     REFRESH_COOKIE_PATH: str = "/api/v1/auth"
     REFRESH_COOKIE_SAMESITE: str = "strict"
-    REFRESH_COOKIE_SECURE: bool = False
+    REFRESH_COOKIE_SECURE: bool = True
     REFRESH_COOKIE_DOMAIN: str | None = None
 
     @field_validator("REFRESH_COOKIE_SAMESITE")
@@ -213,6 +219,15 @@ class Settings(BaseSettings):
     # KVM peut aussi surcharger ce chemin via
     # connection_config["ssh_key_path"].
     KVM_SSH_KEY_PATH: str = ""
+
+    # Audit A5 (SSRF / path traversal) — racine autorisée pour tout chemin
+    # de clé privée SSH fourni dans `connection_config["ssh_key_path"]`.
+    # La validation du schéma Hypervisor refuse un chemin relatif, un
+    # chemin contenant `..`, ou un chemin résolu hors de cette racine.
+    # Par défaut `/etc/shiftwise/ssh` : les clés SSH d'hyperviseur sont
+    # provisionnées là par l'opérateur. Vide => aucune restriction de
+    # racine (le chemin doit tout de même être absolu et sans `..`).
+    SSH_KEY_ALLOWED_ROOT: str = "/etc/shiftwise/ssh"
 
     # ============================================
     # ANALYZER CONFIGURATION

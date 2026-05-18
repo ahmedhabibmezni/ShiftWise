@@ -56,3 +56,25 @@ def test_secret_key_is_required(monkeypatch):
     monkeypatch.delenv("SECRET_KEY", raising=False)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **_REQUIRED)
+
+
+def test_refresh_cookie_secure_defaults_to_true(monkeypatch):
+    """Audit A10 — REFRESH_COOKIE_SECURE doit valoir True par défaut.
+
+    Un cookie de refresh sans l'attribut `Secure` peut fuiter sur une
+    connexion HTTP en clair. Le défaut sûr (production) est True.
+    """
+    monkeypatch.delenv("REFRESH_COOKIE_SECURE", raising=False)
+    s = _settings(SECRET_KEY=_STRONG_KEY)
+    assert s.REFRESH_COOKIE_SECURE is True
+
+
+def test_refresh_cookie_secure_dev_override(monkeypatch):
+    """Audit A10 — un développeur sur HTTP local peut forcer False.
+
+    La valeur reste configurable par variable d'environnement pour ne pas
+    bloquer le dev local non-HTTPS.
+    """
+    monkeypatch.delenv("REFRESH_COOKIE_SECURE", raising=False)
+    s = _settings(SECRET_KEY=_STRONG_KEY, REFRESH_COOKIE_SECURE=False)
+    assert s.REFRESH_COOKIE_SECURE is False
