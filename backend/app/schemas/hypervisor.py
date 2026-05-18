@@ -45,6 +45,12 @@ def _check_host_not_ssrf(host: str) -> str:
         return host  # pas un littéral IP — laissé tel quel
     if ip.is_unspecified:
         raise ValueError(f"hôte interdit : {host!r} (adresse non spécifiée)")
+    # Audit A5 — la loopback (127.0.0.0/8, ::1) est interdite : aucun
+    # hyperviseur légitime ne réside sur la boucle locale du backend ;
+    # l'autoriser ouvrirait un vecteur SSRF vers les services
+    # co-localisés (Redis, Postgres, Flower, métadonnées...).
+    if ip.is_loopback:
+        raise ValueError(f"hôte interdit : {host!r} (adresse de bouclage)")
     for net in _SSRF_BLOCKED_NETWORKS:
         if ip in net:
             raise ValueError(

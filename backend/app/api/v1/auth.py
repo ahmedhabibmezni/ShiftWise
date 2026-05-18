@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.login_throttle import (
     check_lockout,
+    client_ip_from_request,
     record_failure,
     reset as reset_throttle,
 )
@@ -160,14 +161,15 @@ def _revoke_all_refresh_families(user_id: int) -> int:
 
 
 def _client_ip(request: Request) -> str | None:
-    """Return the client IP for audit-trail purposes.
+    """Return the client IP for the throttle counters + audit trail.
 
-    Uses `request.client.host` as the single source. In production behind
-    a reverse proxy this is set correctly when uvicorn is launched with
-    `--proxy-headers --forwarded-allow-ips=<proxy CIDR>` — that's where
-    the trust decision belongs, not in this handler.
+    Audit A11 — delegates to ``client_ip_from_request``: ``X-Forwarded-For``
+    is honoured only when the TCP peer is a configured trusted proxy
+    (``settings.TRUSTED_PROXY_IPS``). Behind the OpenShift Route this
+    yields the real client IP rather than the router's — so the per-IP
+    login throttle keys per attacker and ``last_login_ip`` stays accurate.
     """
-    return request.client.host if request.client else None
+    return client_ip_from_request(request)
 
 
 @router.post("/login", response_model=TokenResponse)

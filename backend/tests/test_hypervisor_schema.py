@@ -50,6 +50,22 @@ def test_link_local_and_unspecified_hosts_rejected(host):
         _create(host)
 
 
+@pytest.mark.parametrize("host", [
+    "127.0.0.1",
+    "127.0.0.53",
+    "::1",
+    "qemu+ssh://root@127.0.0.1/system",
+])
+def test_loopback_hosts_rejected(host):
+    """Audit A5 — la loopback (127.0.0.0/8, ::1) est interdite : un
+    hyperviseur ne réside jamais sur la boucle locale du backend ;
+    l'autoriser ouvrirait un SSRF vers les services co-localisés."""
+    with pytest.raises(ValueError):
+        _check_host_not_ssrf(host)
+    with pytest.raises(ValidationError):
+        _create(host)
+
+
 def test_ssrf_check_applies_to_update_and_test_connection():
     with pytest.raises(ValidationError):
         HypervisorUpdate(host="169.254.169.254")
