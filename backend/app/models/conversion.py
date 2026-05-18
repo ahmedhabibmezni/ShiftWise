@@ -11,7 +11,7 @@ Hand-off : status = READY -> Migrator peut consommer output_path.
 
 from sqlalchemy import (
     Column, String, Integer, BigInteger, DateTime, Text,
-    Enum as SQLEnum, ForeignKey, JSON, UniqueConstraint, Index,
+    Enum as SQLEnum, ForeignKey, JSON, UniqueConstraint, Index, text,
 )
 from sqlalchemy.orm import relationship
 import enum
@@ -97,15 +97,18 @@ class ConversionGroup(BaseModel):
     # UUID exposé en API (les IDs internes restent intégers)
     group_uuid = Column(String(36), nullable=False, unique=True, index=True)
 
+    # Audit D16 — `server_default` en plus du `default` Python.
     status = Column(
         SQLEnum(ConversionGroupStatus),
         nullable=False,
         default=ConversionGroupStatus.PENDING,
+        server_default="PENDING",
         index=True,
     )
 
     target_format = Column(
         SQLEnum(TargetFormat), nullable=False, default=TargetFormat.QCOW2,
+        server_default="QCOW2",
     )
 
     # Config de pull (cold/warm, options par hyperviseur)
@@ -177,6 +180,7 @@ class ConversionJob(BaseModel):
     source_format = Column(SQLEnum(SourceFormat), nullable=False)
     target_format = Column(
         SQLEnum(TargetFormat), nullable=False, default=TargetFormat.QCOW2,
+        server_default="QCOW2",
     )
     tool = Column(SQLEnum(ConversionTool), nullable=False)
 
@@ -192,12 +196,13 @@ class ConversionJob(BaseModel):
         SQLEnum(ConversionStatus),
         nullable=False,
         default=ConversionStatus.PENDING,
+        server_default="PENDING",
         index=True,
     )
-    progress_pct = Column(Integer, nullable=False, default=0)
+    progress_pct = Column(Integer, nullable=False, default=0, server_default=text("0"))
 
-    attempts = Column(Integer, nullable=False, default=0)
-    max_attempts = Column(Integer, nullable=False, default=3)
+    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    max_attempts = Column(Integer, nullable=False, default=3, server_default=text("3"))
 
     error_code = Column(String(64), nullable=True, index=True)
     error_message = Column(Text, nullable=True)

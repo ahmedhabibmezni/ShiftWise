@@ -7,7 +7,7 @@ depuis lequel les VMs seront découvertes et migrées.
 
 from sqlalchemy import (
     Column, String, Integer, Boolean, DateTime, Text,
-    Enum as SQLEnum, JSON, UniqueConstraint,
+    Enum as SQLEnum, JSON, UniqueConstraint, text, false, true,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -77,12 +77,16 @@ class Hypervisor(BaseModel):
     password = Column(Text, nullable=False)  # ATTENTION: Stocker chiffré en production
 
     # Configuration SSL/TLS
-    verify_ssl = Column(Boolean, default=False)  # Vérifier certificats SSL
+    verify_ssl = Column(Boolean, default=False, server_default=false())  # Vérifier certificats SSL
     ssl_cert_path = Column(String(512), nullable=True)  # Chemin vers certificat custom
 
     # Statut et monitoring
-    status = Column(SQLEnum(HypervisorStatus), nullable=False, default=HypervisorStatus.UNKNOWN, index=True)
-    is_active = Column(Boolean, default=True)  # Activer/Désactiver l'hyperviseur
+    # Audit D16 — `server_default` en plus du `default` Python.
+    status = Column(
+        SQLEnum(HypervisorStatus), nullable=False,
+        default=HypervisorStatus.UNKNOWN, server_default="UNKNOWN", index=True,
+    )
+    is_active = Column(Boolean, default=True, server_default=true())  # Activer/Désactiver
 
     # Métadonnées de synchronisation
     last_sync_at = Column(DateTime(timezone=True), nullable=True)  # Dernière sync VMs
@@ -90,8 +94,8 @@ class Hypervisor(BaseModel):
     last_error = Column(Text, nullable=True)  # Dernier message d'erreur
 
     # Statistiques
-    total_vms_discovered = Column(Integer, default=0)
-    total_vms_migrated = Column(Integer, default=0)
+    total_vms_discovered = Column(Integer, default=0, server_default=text("0"))
+    total_vms_migrated = Column(Integer, default=0, server_default=text("0"))
 
     # Configuration avancée (JSON)
     connection_config = Column(JSON, nullable=True)  # Config spécifique (datacenter, cluster, etc.)

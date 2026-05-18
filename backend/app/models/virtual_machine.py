@@ -75,7 +75,12 @@ class VirtualMachine(BaseModel):
     disk_gb = Column(Integer, nullable=False)
 
     # Système d'exploitation
-    os_type = Column(SQLEnum(OSType), nullable=False, default=OSType.UNKNOWN)
+    # Audit D16 — `server_default` (NOM du membre d'enum) en plus du `default`
+    # Python, pour qu'un INSERT brut hors ORM ne viole pas `nullable=False`.
+    os_type = Column(
+        SQLEnum(OSType), nullable=False,
+        default=OSType.UNKNOWN, server_default="UNKNOWN",
+    )
     os_version = Column(String(255), nullable=True)
     os_name = Column(String(255), nullable=True)  # Ex: "Ubuntu 22.04 LTS", "Windows Server 2022"
 
@@ -85,11 +90,15 @@ class VirtualMachine(BaseModel):
     hostname = Column(String(255), nullable=True)
 
     # Statut et compatibilité
-    status = Column(SQLEnum(VMStatus), nullable=False, default=VMStatus.DISCOVERED, index=True)
+    status = Column(
+        SQLEnum(VMStatus), nullable=False,
+        default=VMStatus.DISCOVERED, server_default="DISCOVERED", index=True,
+    )
     compatibility_status = Column(
         SQLEnum(CompatibilityStatus),
         nullable=False,
         default=CompatibilityStatus.UNKNOWN,
+        server_default="UNKNOWN",
         index=True
     )
     compatibility_details = Column(JSON, nullable=True)  # Détails de l'analyse de compatibilité

@@ -5,7 +5,7 @@ Représente une opération de migration d'une VM depuis un hyperviseur source
 vers OpenShift Virtualization.
 """
 
-from sqlalchemy import Column, String, Integer, DateTime, Text, Enum as SQLEnum, ForeignKey, JSON, Float, Boolean
+from sqlalchemy import Column, String, Integer, DateTime, Text, Enum as SQLEnum, ForeignKey, JSON, Float, Boolean, text, false, true
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import enum
@@ -61,8 +61,17 @@ class Migration(BaseModel):
     )
 
     # Statut et progression
-    status = Column(SQLEnum(MigrationStatus), nullable=False, default=MigrationStatus.PENDING, index=True)
-    strategy = Column(SQLEnum(MigrationStrategy), nullable=False, default=MigrationStrategy.AUTO)
+    # Audit D16 — `server_default` en plus du `default` Python : un INSERT
+    # brut (hors ORM) reçoit une valeur valide au lieu d'un NULL qui
+    # violerait `nullable=False`. La valeur de l'enum est le NOM du membre.
+    status = Column(
+        SQLEnum(MigrationStatus), nullable=False,
+        default=MigrationStatus.PENDING, server_default="PENDING", index=True,
+    )
+    strategy = Column(
+        SQLEnum(MigrationStrategy), nullable=False,
+        default=MigrationStrategy.AUTO, server_default="AUTO",
+    )
 
     # Celery — id de la tâche run_migration, pour pouvoir la révoquer si la
     # migration est annulée (POST /migrations/{id}/cancel).
@@ -74,10 +83,10 @@ class Migration(BaseModel):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Progression
-    progress_percentage = Column(Float, default=0.0)  # 0-100
+    progress_percentage = Column(Float, default=0.0, server_default=text("0"))  # 0-100
     current_step = Column(String(255), nullable=True)  # Étape actuelle
-    total_steps = Column(Integer, default=7)  # Nombre total d'étapes
-    current_step_number = Column(Integer, default=0)  # Numéro étape actuelle
+    total_steps = Column(Integer, default=7, server_default=text("7"))  # Nombre total d'étapes
+    current_step_number = Column(Integer, default=0, server_default=text("0"))  # Numéro étape
 
     # Résultat
     success = Column(Boolean, nullable=True)  # True=succès, False=échec, None=en cours
@@ -89,17 +98,17 @@ class Migration(BaseModel):
 
     # Données de transfert
     source_size_gb = Column(Float, nullable=True)  # Taille source
-    transferred_gb = Column(Float, default=0.0)    # Données transférées
+    transferred_gb = Column(Float, default=0.0, server_default=text("0"))  # Données transférées
     transfer_rate_mbps = Column(Float, nullable=True)  # Vitesse de transfert
 
     # OpenShift destination
-    target_namespace = Column(String(255), nullable=False, default="default")
+    target_namespace = Column(String(255), nullable=False, default="default", server_default="default")
     target_vm_name = Column(String(255), nullable=True)
-    target_storage_class = Column(String(255), nullable=True, default="nfs-client")
+    target_storage_class = Column(String(255), nullable=True, default="nfs-client", server_default="nfs-client")
     target_node = Column(String(255), nullable=True)  # Node OpenShift cible
 
     # Conversion (si nécessaire)
-    requires_conversion = Column(Boolean, default=False)
+    requires_conversion = Column(Boolean, default=False, server_default=false())
     conversion_format = Column(String(50), nullable=True)  # Ex: "vmdk_to_qcow2"
     conversion_started_at = Column(DateTime(timezone=True), nullable=True)
     conversion_completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -112,7 +121,7 @@ class Migration(BaseModel):
     log_file_path = Column(String(512), nullable=True)  # Chemin vers fichier de logs
 
     # Rollback
-    can_rollback = Column(Boolean, default=True)
+    can_rollback = Column(Boolean, default=True, server_default=true())
     rollback_snapshot_id = Column(String(255), nullable=True)  # ID snapshot pour rollback
 
     # Métadonnées
