@@ -177,14 +177,14 @@ class MigratorService:
                     namespace=target_namespace,
                     job_name=populator_job_name(migration_id, idx),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # NOSONAR — best-effort cleanup, never raise
                 logger.warning("cleanup: delete populator %d failed: %s", idx, e)
             try:
                 delete_pvc(
                     namespace=target_namespace,
                     name=target_pvc_name(migration_id, idx),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # NOSONAR — best-effort cleanup, never raise
                 logger.warning("cleanup: delete PVC %d failed: %s", idx, e)
 
     # ----------------------------------------------------------------------

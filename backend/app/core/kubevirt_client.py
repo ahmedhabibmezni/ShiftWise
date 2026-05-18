@@ -755,3 +755,36 @@ def get_kubevirt_client() -> KubeVirtClient:
     if _kubevirt_client_instance is None:
         _kubevirt_client_instance = KubeVirtClient()
     return _kubevirt_client_instance
+
+
+def invalidate_kubevirt_client() -> None:
+    """Drop the cached KubeVirt client so the next call rebuilds it.
+
+    Audit E20 — in ``custom`` mode the client holds a static bearer token
+    (``KUBERNETES_TOKEN``). When that token expires the API answers 401 and
+    the singleton would keep failing forever. Callers that catch a 401 from
+    the cluster invoke this so the subsequent ``get_kubevirt_client()``
+    constructs a fresh client (and re-reads the — presumably rotated —
+    token). Safe to call in any mode; in kubeconfig / incluster modes it
+    simply forces a cheap reload.
+    """
+    global _kubevirt_client_instance
+    _kubevirt_client_instance = None
+
+
+def reauth_on_401(exc: ApiException) -> bool:
+    """Invalidate the cached client when ``exc`` is an auth failure (Audit E20).
+
+    Returns True when the client was dropped (HTTP 401/403) so the caller
+    can decide to retry once with a freshly-built client. No-op for any
+    other status.
+    """
+    if getattr(exc, "status", None) in (401, 403):
+        logger.warning(
+            "KubeVirt API returned HTTP %s — invalidating cached client so "
+            "the next call rebuilds it (custom-mode token may have expired).",
+            exc.status,
+        )
+        invalidate_kubevirt_client()
+        return True
+    return False

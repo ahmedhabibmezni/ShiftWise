@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 _PVC_SIZE_HEADROOM_PCT = 15
 _PVC_MIN_SIZE_BYTES = 1 * 1024 * 1024 * 1024   # never request < 1 GiB
 
+# Audit E9 — client-side HTTP timeout for the poll-loop PVC read, so a hung
+# API server cannot wedge the worker thread forever inside one read call.
+_K8S_READ_TIMEOUT_SECONDS = 30
+
 
 def target_pvc_name(migration_id: int, disk_index: int) -> str:
     """Stable PVC name. Idempotent — re-running the migrator returns same name."""
@@ -119,6 +123,7 @@ def wait_for_pvc_bound(
         try:
             pvc = kv.core_api.read_namespaced_persistent_volume_claim(
                 name=name, namespace=namespace,
+                _request_timeout=_K8S_READ_TIMEOUT_SECONDS,  # Audit E9
             )
         except ApiException as e:
             raise MigratorError(

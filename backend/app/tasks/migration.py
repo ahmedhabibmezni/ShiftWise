@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
-from app.core.celery_app import celery_app  # noqa: F401
+from app.core.celery_app import celery_app  # NOSONAR — import registers the app
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.crud import conversion as crud_conversion
 from app.crud import migration as crud_migration
@@ -42,6 +43,17 @@ _FAILED_GROUP_STATES = {
     ConversionGroupStatus.CANCELLED,
 }
 
+# Audit E4 — terminal migration states. A re-delivered Celery task (broker
+# at-least-once delivery, manual requeue) must NOT re-run the pipeline on a
+# migration that already finished — that would duplicate ConversionGroups
+# and re-create / overwrite KubeVirt resources.
+_TERMINAL_MIGRATION_STATES = {
+    MigrationStatus.COMPLETED,
+    MigrationStatus.FAILED,
+    MigrationStatus.CANCELLED,
+    MigrationStatus.ROLLED_BACK,
+}
+
 
 @shared_task(
     name="app.tasks.migration.run_migration",
@@ -56,6 +68,19 @@ def run_migration(self, migration_id: int) -> str:
         if migration is None:
             logger.error("Migration %s not found", migration_id)
             return MigrationStatus.FAILED.value
+
+        # Audit E4 — terminal-state guard. If this task was re-delivered
+        # (broker at-least-once semantics, an operator requeue, a duplicate
+        # dispatch) after the migration already reached a terminal state,
+        # short-circuit: re-running the pipeline would create duplicate
+        # ConversionGroups and re-touch KubeVirt resources. Return the
+        # existing terminal status unchanged.
+        if migration.status in _TERMINAL_MIGRATION_STATES:
+            logger.info(
+                "Migration %s already terminal (%s) — skipping re-run",
+                migration_id, migration.status.value,
+            )
+            return migration.status.value
 
         try:
             _validate(db, migration)
@@ -94,7 +119,7 @@ def run_migration(self, migration_id: int) -> str:
         except MigratorError as e:
             _fail(db, migration_id, e.code, e.message)
             return MigrationStatus.FAILED.value
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # NOSONAR — catch-all maps any crash to FAILED
             logger.exception("Migration %s crashed", migration_id)
             _fail(db, migration_id, "ERR_INTERNAL", str(e))
             return MigrationStatus.FAILED.value
@@ -116,22 +141,54 @@ def _validate(db, migration) -> None:
         )
 
 
-def _prepare_conversions(db, migration) -> int:
-    """Create the ConversionGroup + jobs and enqueue each job."""
-    _set_status(db, migration.id, MigrationStatus.PREPARING)
+def _find_existing_group(db, migration):
+    """Return a ConversionGroup already created for this migration, or None.
 
-    service = ConverterService()
-    group_id = service.create_group_for_vm(
+    Audit E4 — when ``run_migration`` is re-delivered on a still-running
+    (non-terminal) migration, ``_prepare_conversions`` must NOT create a
+    second ConversionGroup. We look up any group tied to this migration's
+    VM + tenant and reuse the one whose ``migration_id`` matches.
+    """
+    candidates = crud_conversion.list_groups(
         db,
         tenant_id=migration.tenant_id,
         vm_id=migration.vm_id,
-        migration_id=migration.id,
+        limit=50,
     )
-    group = crud_conversion.get_group(db, group_id)
-    assert group is not None
+    for group in candidates:
+        if getattr(group, "migration_id", None) == migration.id:
+            return group
+    return None
+
+
+def _prepare_conversions(db, migration) -> int:
+    """Create (or reuse) the ConversionGroup + jobs and enqueue each job."""
+    _set_status(db, migration.id, MigrationStatus.PREPARING)
+
+    # Audit E4 — reuse an existing group on a re-delivered task instead of
+    # creating a duplicate.
+    group = _find_existing_group(db, migration)
+    if group is not None:
+        logger.info(
+            "Migration %s — reusing existing ConversionGroup %s (re-delivered task)",
+            migration.id, group.id,
+        )
+        group_id = group.id
+    else:
+        service = ConverterService()
+        group_id = service.create_group_for_vm(
+            db,
+            tenant_id=migration.tenant_id,
+            vm_id=migration.vm_id,
+            migration_id=migration.id,
+        )
+        group = crud_conversion.get_group(db, group_id)
+        assert group is not None
 
     _set_status(db, migration.id, MigrationStatus.TRANSFERRING)
     for job in group.jobs:
+        # run_conversion_job is itself idempotent (checks terminal status),
+        # so re-enqueueing the jobs of a reused group is safe.
         run_conversion_job.delay(job.id)
 
     return group_id
@@ -146,10 +203,18 @@ def _wait_for_conversions(db, migration, group_id: int) -> None:
     ``self.retry`` is not used here because the orchestrator should remain a
     single task for traceability — instead we rely on ``run_conversion_job``
     finishing within the migration time limit.
+
+    Audit E11 — the loop is bounded by an independent wall-clock deadline
+    (``settings.MIGRATION_CONVERSION_WAIT_TIMEOUT``). A bare ``while True``
+    would spin forever if a conversion Job silently stalled (e.g. a wedged
+    K8s Job that never updates its group status), pinning the orchestrator
+    until the Celery hard time limit. On deadline the loop raises
+    ConversionError so the migration fails cleanly with a diagnosable code.
     """
     import time
 
     poll_interval = 5  # seconds
+    deadline = time.monotonic() + max(0, settings.MIGRATION_CONVERSION_WAIT_TIMEOUT)
     while True:
         db.expire_all()
         group = crud_conversion.get_group(db, group_id)
@@ -162,6 +227,17 @@ def _wait_for_conversions(db, migration, group_id: int) -> None:
             raise ConversionError(
                 "ERR_INTERNAL",
                 f"conversion group ended in {group.status.value}",
+            )
+
+        # Audit E11 — independent wall-clock deadline. Checked AFTER the
+        # terminal-state tests so a group that finished exactly at the
+        # deadline is still reported as success/failure, not timeout.
+        if time.monotonic() >= deadline:
+            raise ConversionError(
+                "ERR_NETWORK_TIMEOUT",
+                f"conversion group {group_id} did not finish within "
+                f"{settings.MIGRATION_CONVERSION_WAIT_TIMEOUT}s "
+                f"(last status={getattr(group.status, 'value', group.status)})",
             )
 
         # Surface progress of the slowest job onto the migration row.

@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
+    # Audit M-26 — `init_db()` exécute `Base.metadata.create_all()`. C'est
+    # acceptable en dev / test (base vierge) mais DANGEREUX en production :
+    # `create_all` est lancé à chaque démarrage et masque toute dérive de
+    # schéma qui devrait passer par une migration Alembic. Ce drapeau gate
+    # l'appel. Défaut False = production sûre (le schéma est géré par
+    # `alembic upgrade head`). Mettre True uniquement en dev / CI.
+    DB_AUTO_CREATE_ALL: bool = False
+
     # ============================================
     # KUBERNETES / OPENSHIFT CONFIGURATION
     # ============================================
@@ -198,6 +206,14 @@ class Settings(BaseSettings):
     # dev / POC, à NE PAS utiliser en production.
     SSH_AUTO_ADD_HOST_KEYS: bool = False
 
+    # Chemin de la clé privée SSH utilisée par le connecteur KVM/libvirt
+    # (qemu+ssh://). Audit S8392 — ne pas coder en dur un chemin de poste
+    # de dev dans le code source. Vide => paramiko utilise les clés
+    # standard de l'agent / ~/.ssh (look_for_keys=True). Une connexion
+    # KVM peut aussi surcharger ce chemin via
+    # connection_config["ssh_key_path"].
+    KVM_SSH_KEY_PATH: str = ""
+
     # ============================================
     # ANALYZER CONFIGURATION
     # ============================================
@@ -345,6 +361,27 @@ class Settings(BaseSettings):
     LOGIN_THROTTLE_MAX_ATTEMPTS: int = 5
     LOGIN_THROTTLE_WINDOW_SECONDS: int = 15 * 60
 
+    # ============================================
+    # TRUSTED REVERSE PROXIES (A11)
+    # ============================================
+    #
+    # Audit A11 — la résolution de l'IP cliente (throttle login + audit
+    # trail) ne doit faire confiance à l'en-tête `X-Forwarded-For` que si
+    # la connexion TCP provient effectivement d'un proxy de confiance.
+    # Sinon n'importe quel client peut usurper son IP (et contourner le
+    # throttle / fausser l'audit) en envoyant un faux XFF.
+    #
+    # Liste des IP des reverse proxies / load-balancers placés devant le
+    # backend (ex. le HAProxy du bastion 10.9.21.150). Vide = on ne fait
+    # JAMAIS confiance au XFF, on utilise toujours l'IP du peer TCP.
+    #
+    # NOTE déploiement : lancer uvicorn avec
+    #   --proxy-headers --forwarded-allow-ips=<CIDR du proxy>
+    # est complémentaire (cela fait confiance au proxy pour réécrire
+    # request.client.host) ; ce réglage couvre le parsing applicatif du
+    # XFF quand on lit l'en-tête directement.
+    TRUSTED_PROXY_IPS: List[str] = []
+
     # URL du broker Redis. Format : redis://[:password@]host:port/db
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
 
@@ -364,6 +401,14 @@ class Settings(BaseSettings):
     # longue : on prend large. Le SOFT signale, le HARD kill.
     CELERY_TASK_SOFT_TIME_LIMIT: int = 3 * 60 * 60   # 3h
     CELERY_TASK_TIME_LIMIT: int = 4 * 60 * 60        # 4h
+
+    # Audit E11 — délai mur (wall-clock) maximum pendant lequel
+    # l'orchestrateur de migration attend que le groupe de conversion
+    # atteigne un état terminal. Sans cette borne, un Job de conversion
+    # silencieusement bloqué fige la migration indéfiniment dans la
+    # boucle de polling `_wait_for_conversions`. Au-delà du délai la
+    # boucle lève ConversionError. Doit rester < CELERY_TASK_TIME_LIMIT.
+    MIGRATION_CONVERSION_WAIT_TIMEOUT: int = 3 * 60 * 60   # 3h
 
     # ============================================
     # LOGGING

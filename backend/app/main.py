@@ -134,7 +134,7 @@ def _probe_database(db: Session) -> dict:
     try:
         db.execute(text("SELECT 1"))
         return {"ok": True, "latency_ms": int((time.perf_counter() - started) * 1000), "error": None}
-    except Exception as exc:  # noqa: BLE001 — surface any driver failure
+    except Exception as exc:  # NOSONAR — surface any driver failure
         return {
             "ok": False,
             "latency_ms": int((time.perf_counter() - started) * 1000),
@@ -155,10 +155,37 @@ def _probe_redis_auth() -> dict:
         if not pong:
             return {"ok": False, "latency_ms": latency_ms, "error": "PING returned falsy"}
         return {"ok": True, "latency_ms": latency_ms, "error": None}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # NOSONAR — surface any redis/transport failure
         return {
             "ok": False,
             "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _probe_analyzer_ml() -> dict:
+    """Report the Analyzer ML engine state (Audit E15).
+
+    The compatibility analyzer falls back to its rule engine when the ML
+    model artifact fails to load. That degradation was previously silent;
+    surfacing it here lets ops notice the analyzer is running without ML.
+    A degraded analyzer does NOT make the service unhealthy — the rules
+    fallback is fully functional — so this never flips the HTTP status.
+    """
+    try:
+        from app.services.analyzer import AnalyzerService  # lazy: heavy import
+        status = AnalyzerService().ml_status()
+        return {
+            "ok": True,
+            "degraded": bool(status.get("degraded", True)),
+            "engine": status.get("engine", "rules"),
+            "error": None,
+        }
+    except Exception as exc:  # NOSONAR — analyzer probe must never 500 /health
+        return {
+            "ok": False,
+            "degraded": True,
+            "engine": "unknown",
             "error": f"{type(exc).__name__}: {exc}",
         }
 
@@ -196,11 +223,14 @@ def health_check(db: Annotated[Session, Depends(get_db)]):
     """
     db_check = _probe_database(db)
     redis_check = _probe_redis_auth()
+    analyzer_check = _probe_analyzer_ml()
 
     if not db_check["ok"]:
         overall = "unhealthy"
         http_status = status.HTTP_503_SERVICE_UNAVAILABLE
-    elif not redis_check["ok"]:
+    elif not redis_check["ok"] or analyzer_check["degraded"]:
+        # Redis down OR analyzer running on the rules fallback — the service
+        # still answers, but an operator should be paged. Audit E15.
         overall = "degraded"
         http_status = status.HTTP_200_OK
     else:
@@ -214,6 +244,7 @@ def health_check(db: Annotated[Session, Depends(get_db)]):
         "checks": {
             "database": db_check,
             "redis_auth": redis_check,
+            "analyzer_ml": analyzer_check,
         },
     }
     return JSONResponse(status_code=http_status, content=payload)

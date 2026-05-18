@@ -72,6 +72,10 @@ class _FakeRunner:
     def wait_for_completion(self, job_name, **_):
         return JobOutcome(succeeded=True, failure_reason=None, container_exit_code=0)
 
+    def delete(self, job_name, *, propagate=True):
+        # Audit E12 — _run_in_cluster deletes the K8s Job in a finally block.
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _eager_mode():

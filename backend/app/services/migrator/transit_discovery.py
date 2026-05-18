@@ -6,8 +6,11 @@ so that MIGRATOR_NFS_SERVER / MIGRATOR_NFS_PATH env vars don't have to be
 set manually per deployment.
 
 Cache: result is stored in a module-level tuple so each worker process only
-hits the API once.  The cached value is valid for the lifetime of the worker
-pod — the PV / NFS server never changes without a redeployment.
+hits the API once per TTL window. The PV / NFS server normally only changes
+on a redeployment, but a long-lived worker should still pick up such a
+change without a full restart — hence a bounded TTL (Audit E13). Callers
+that know the PV changed can also force an immediate refresh via
+``clear_cache()``.
 
 Thread-safety: the cache write is guarded by a lock with a double-check
 pattern. Necessary because Celery workers can run with --pool=threads or
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, NoReturn
 
 from kubernetes.client.rest import ApiException
@@ -33,7 +37,14 @@ logger = logging.getLogger(__name__)
 
 # Module-level cache — (server, path) or None when not yet discovered.
 _CACHE: tuple[str, str] | None = None
+# Monotonic deadline after which _CACHE is considered stale. 0 = no value.
+_CACHE_EXPIRES: float = 0.0
 _CACHE_LOCK = threading.Lock()
+
+# Audit E13 — how long a discovered (server, path) stays valid before the
+# next lookup re-reads the PV. 30 min is short enough that a PV redeploy is
+# picked up the same shift, long enough that the API is not hit per job.
+_CACHE_TTL_SECONDS = 30 * 60
 
 
 def _raise_classified(
@@ -96,17 +107,19 @@ def discover_transit_nfs(kv_client: "KubeVirtClient") -> tuple[str, str]:
             server, path,
         )
 
-    if _CACHE is not None:
+    # Cache hit only when the value is present AND still inside its TTL.
+    if _CACHE is not None and time.monotonic() < _CACHE_EXPIRES:
         return _CACHE
 
     with _CACHE_LOCK:
         # Double-check: another thread may have populated the cache while
         # we waited on the lock.
-        if _CACHE is not None:
+        if _CACHE is not None and time.monotonic() < _CACHE_EXPIRES:
             return _CACHE
         result = _lookup_from_cluster(kv_client)
-        # Module-level rebind under the lock.
+        # Module-level rebind under the lock, arming a fresh TTL window.
         globals()["_CACHE"] = result
+        globals()["_CACHE_EXPIRES"] = time.monotonic() + _CACHE_TTL_SECONDS
         return result
 
 
@@ -172,7 +185,12 @@ def _lookup_from_cluster(kv_client: "KubeVirtClient") -> tuple[str, str]:
 
 
 def clear_cache() -> None:
-    """Reset the in-process cache. Used by tests."""
-    global _CACHE
+    """Reset the in-process cache (Audit E13 — documented invalidation path).
+
+    Forces the next ``discover_transit_nfs`` call to re-read the PV. Used by
+    tests and callable by an operator after a transit-PVC redeployment.
+    """
+    global _CACHE, _CACHE_EXPIRES
     with _CACHE_LOCK:
         _CACHE = None
+        _CACHE_EXPIRES = 0.0

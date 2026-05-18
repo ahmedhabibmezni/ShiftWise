@@ -48,6 +48,10 @@ _LABEL_APP_VAL = "migrator-populator"
 _LABEL_MIGRATION = "app.shiftwise.io/migration-id"
 _LABEL_DISK = "app.shiftwise.io/disk-index"
 
+# Audit E9 — client-side HTTP timeout for the poll-loop Job read, so a hung
+# API server cannot wedge the worker thread forever inside one read call.
+_K8S_READ_TIMEOUT_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class PopulatorOutcome:
@@ -126,6 +130,7 @@ def wait_for_populator(
         try:
             job = kv.batch_api.read_namespaced_job_status(
                 name=job_name, namespace=namespace,
+                _request_timeout=_K8S_READ_TIMEOUT_SECONDS,  # Audit E9
             )
         except ApiException as e:
             raise MigratorError(
@@ -290,9 +295,12 @@ def _build_manifest(
 
 
 def _extract_failure_reason(job) -> Optional[str]:
+    # Audit E18 — return the condition's `reason` field ONLY. The free-text
+    # `message` field would poison any exact-match classification keyed on
+    # the short reason code (e.g. "BackoffLimitExceeded", "DeadlineExceeded").
     for cond in (job.status.conditions or []):
         if cond.type == "Failed" and cond.status == "True":
-            return cond.reason or cond.message
+            return cond.reason
     return None
 
 

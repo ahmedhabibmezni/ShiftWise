@@ -24,7 +24,7 @@ hostage by their own typos.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.core.redis_client import get_redis
@@ -32,6 +32,42 @@ from app.core.redis_client import get_redis
 
 _EMAIL_PREFIX = "lt:email:"
 _IP_PREFIX = "lt:ip:"
+
+
+def client_ip_from_request(request: Any) -> Optional[str]:
+    """Resolve the real client IP, trusting ``X-Forwarded-For`` only when safe.
+
+    Audit A11 — ``X-Forwarded-For`` is attacker-controlled: any client can
+    send a forged header to spoof its IP and so defeat the per-IP login
+    throttle or poison the login audit trail. The header is therefore only
+    honoured when the TCP peer (``request.client.host``) is itself one of
+    the configured ``settings.TRUSTED_PROXY_IPS`` — i.e. the request really
+    did arrive through our own reverse proxy / load balancer.
+
+    Resolution:
+      - No peer at all  → ``None``.
+      - Peer is NOT a trusted proxy → the peer IP (XFF ignored, spoofable).
+      - Peer IS a trusted proxy → the left-most XFF entry (the original
+        client as seen by the first proxy), falling back to the peer IP
+        when the header is absent or empty.
+    """
+    client = getattr(request, "client", None)
+    peer_ip: Optional[str] = getattr(client, "host", None) if client else None
+    if peer_ip is None:
+        return None
+
+    trusted = set(getattr(settings, "TRUSTED_PROXY_IPS", []) or [])
+    if peer_ip not in trusted:
+        # Untrusted peer — its XFF is unverifiable, never trust it.
+        return peer_ip
+
+    xff = request.headers.get("x-forwarded-for") if getattr(request, "headers", None) else None
+    if not xff:
+        return peer_ip
+
+    # The left-most entry is the client as seen by the first hop.
+    first = xff.split(",")[0].strip()
+    return first or peer_ip
 
 
 @dataclass(frozen=True)

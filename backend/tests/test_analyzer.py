@@ -422,7 +422,9 @@ class TestAnalyzerIntegration:
 
     def test_rules_fallback_when_model_missing(self, db_session, test_vm_compatible):
         """When model file is missing, use rules engine fallback."""
-        with patch.object(AnalyzerService, '_load_model', return_value=None):
+        # Audit E14 — model loading moved to a process-level cache; force
+        # degraded mode by stubbing the cache loader.
+        with patch("app.services.analyzer._get_cached_model", return_value=None):
             analyzer = AnalyzerService()
             assert analyzer.model is None
 

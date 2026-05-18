@@ -549,6 +549,105 @@ def _discover_single_vmx(
     }
 
 
+def _norm_path(p: str) -> str:
+    """Normalise a filesystem path for case-insensitive comparison."""
+    return p.replace("\\", "/").lower()
+
+
+def _collect_extra_vmx_paths(hypervisor: Hypervisor) -> List[str]:
+    """Read explicitly-registered extra VMX paths from the hypervisor record.
+
+    Priority: ``additional_vmx_paths`` attribute → a JSON array in ``notes``
+    → ``connection_config["extra_vmx_paths"]``. Returns an empty list on any
+    parse error (a malformed override must never abort discovery).
+    """
+    extra_vmx: List[str] = []
+    try:
+        raw = getattr(hypervisor, "additional_vmx_paths", None) or ""
+        if not raw:
+            notes = getattr(hypervisor, "notes", None) or ""
+            if notes.startswith("["):
+                raw = notes
+        if not raw:
+            cfg = getattr(hypervisor, "connection_config", None) or {}
+            paths = cfg.get("extra_vmx_paths", []) if isinstance(cfg, dict) else []
+            extra_vmx = [str(p) for p in paths]
+            raw = None
+        if raw:
+            extra_vmx = json.loads(raw)
+    except Exception:  # NOSONAR — a bad override must not abort discovery
+        return []
+    return extra_vmx
+
+
+def _resolve_vm_folder(cfg: Dict[str, Any]) -> Optional[str]:
+    """Resolve the VMware Workstation VM folder to walk for .vmx files.
+
+    Uses ``connection_config["vm_folder"]`` when present, otherwise probes
+    the standard default locations. Returns ``None`` when none exist.
+    """
+    if isinstance(cfg, dict) and cfg.get("vm_folder"):
+        return cfg["vm_folder"]
+
+    default_vm_folders = [
+        os.path.join(os.path.expanduser("~"), "OneDrive", "Documents", "Virtual Machines"),
+        os.path.join(os.path.expanduser("~"), "Documents", "Virtual Machines"),
+        os.path.join(os.path.expanduser("~"), "Virtual Machines"),
+        "/var/lib/vmware/Virtual Machines",
+    ]
+    for candidate in default_vm_folders:
+        if os.path.isdir(candidate):
+            logger.info(f"vm_folder auto-détecté: {candidate}")
+            return candidate
+    return None
+
+
+def _append_unique_vmx(target: List[str], candidate: str) -> None:
+    """Append ``candidate`` to ``target`` unless an equivalent path is present."""
+    norm = _norm_path(candidate)
+    if not any(_norm_path(p) == norm for p in target):
+        target.append(candidate)
+
+
+def _collect_workstation_vmx_paths(
+    hypervisor: Hypervisor, running_paths: List[str],
+) -> List[str]:
+    """Build the complete, de-duplicated set of VMX paths to inspect.
+
+    Sources, in order: currently-running VMX paths, explicitly-registered
+    extra paths, and a recursive walk of the configured VM folder. Extracted
+    from ``_discover_vmware_workstation`` to keep its cognitive complexity
+    below the SonarQube S3776 threshold — behaviour is unchanged.
+    """
+    vmx_paths_to_scan: List[str] = list(running_paths)
+
+    for vmx in _collect_extra_vmx_paths(hypervisor):
+        _append_unique_vmx(vmx_paths_to_scan, vmx)
+
+    cfg = hypervisor.connection_config or {}
+    vm_folder = _resolve_vm_folder(cfg)
+
+    if vm_folder and os.path.isdir(vm_folder):
+        logger.info(f"Scan du dossier VM: {vm_folder}")
+        for root, _dirs, files in os.walk(vm_folder):
+            for fname in files:
+                if fname.lower().endswith(".vmx"):
+                    full_path = os.path.join(root, fname)
+                    if not any(
+                        _norm_path(p) == _norm_path(full_path)
+                        for p in vmx_paths_to_scan
+                    ):
+                        vmx_paths_to_scan.append(full_path)
+                        logger.info(f"  VMX trouvé par scan dossier: {full_path}")
+    elif not vmx_paths_to_scan:
+        logger.warning(
+            "Aucun VMX trouvé. Configurez 'vm_folder' dans connection_config "
+            'ex: {"vm_folder": "C:\\\\Users\\\\PC\\\\Documents\\\\Virtual Machines"}'
+        )
+
+    return vmx_paths_to_scan
+
+
 # ============================================================================
 # KVM helpers
 # ============================================================================
@@ -630,6 +729,33 @@ def _parse_kvm_domain_xml(
 # Hyper-V helpers
 # ============================================================================
 
+# Audit A17 — un nom d'hôte/IP valide pour Invoke-Command : lettres,
+# chiffres, points et tirets uniquement. Cela exclut tout métacaractère
+# shell/PowerShell (`;` `|` `&` `` ` `` `$` espace, retour-ligne…) qui
+# pourrait sortir du contexte `Invoke-Command -ComputerName $env:HV_HOST`.
+_HYPERV_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_hyperv_host(host: str) -> str:
+    """Valide le nom d'hôte Hyper-V distant (Audit A17).
+
+    Le host est injecté dans `Invoke-Command -ComputerName`. Bien qu'il
+    transite par une variable d'environnement (HV_HOST) et non par un
+    argument de ligne de commande, on rejette tout caractère hors du jeu
+    hostname/IP afin d'éliminer toute ambiguïté d'interprétation.
+
+    Raises:
+        DiscoveryError: Si le host est vide ou contient un caractère invalide.
+    """
+    h = (host or "").strip()
+    if not h or not _HYPERV_HOSTNAME_RE.match(h):
+        raise DiscoveryError(
+            f"Nom d'hôte Hyper-V invalide: {host!r} — "
+            "seuls les caractères [A-Za-z0-9._-] sont autorisés"
+        )
+    return h
+
+
 def _build_hyperv_command(
     host: str,
     auth_mode: str,
@@ -650,10 +776,12 @@ def _build_hyperv_command(
         raise DiscoveryError(
             f"La découverte Hyper-V distante requiert username et password (host={host})"
         )
+    # Audit A17 — valider le host avant de l'exposer à Invoke-Command.
+    validated_host = _validate_hyperv_host(host)
     extra_env = {
         "HV_PASS":   password,
         "HV_USER":   username,
-        "HV_HOST":   host,
+        "HV_HOST":   validated_host,
         "HV_SCRIPT": _HYPERV_PS_SCRIPT,
     }
     return ["powershell", "-NonInteractive", "-Command", _HYPERV_REMOTE_PS_WRAPPER], extra_env
@@ -1010,6 +1138,29 @@ class DiscoveryService:
             self.db.commit()
             raise DiscoveryError(f"Échec de la découverte: {str(e)}")
 
+        except Exception as e:  # NOSONAR — voir Audit E5 ci-dessous
+            # Audit E5 — toute exception non classifiée (driver tiers, bug,
+            # erreur inattendue) doit AUSSI sortir l'hyperviseur de l'état
+            # DISCOVERING. DISCOVERING signifie « sync en cours » : laisser
+            # cet état figé bloquerait toute synchronisation ultérieure.
+            # On marque ERROR puis on relaie l'exception d'origine.
+            logger.error(
+                f"Erreur inattendue découverte hypervisor {hypervisor.name}: {e}",
+                exc_info=True,
+            )
+            try:
+                hypervisor.update_status(
+                    HypervisorStatus.ERROR, error_message=str(e),
+                )
+                hypervisor.mark_sync_completed(success=False)
+                self.db.commit()
+            except Exception as reset_err:  # NOSONAR — best-effort reset
+                logger.error(
+                    "Échec de la remise à zéro du statut hypervisor "
+                    f"{hypervisor.name}: {reset_err}"
+                )
+            raise
+
     def test_connection(self, hypervisor: Hypervisor) -> Dict[str, Any]:
         """Probe a hypervisor's reachability and credentials without persisting.
 
@@ -1152,121 +1303,10 @@ class DiscoveryService:
             logger.info(f"  - {p}")
 
         # ------------------------------------------------------------------ #
-        # 3. Build complete set of VMX paths to inspect
+        # 3. Build complete set of VMX paths to inspect (running + extra +
+        #    directory scan). Delegated to a helper — Audit S3776.
         # ------------------------------------------------------------------ #
-        # vmx_paths_to_scan: List[str] = list(running_paths)
-
-        # # Extra VMX paths from connection_config["extra_vmx_paths"] (covers
-        # # powered-off VMs explicitly registered by the user).
-        # extra_vmx: List[str] = []
-        # try:
-        #     import json
-        #     # Priority 1: dedicated attribute (future column)
-        #     raw = getattr(hypervisor, "additional_vmx_paths", None) or ""
-        #     # Priority 2: JSON array in notes field
-        #     if not raw:
-        #         notes = getattr(hypervisor, "notes", None) or ""
-        #         if notes.startswith("["):
-        #             raw = notes
-        #     # Priority 3: connection_config["extra_vmx_paths"]
-        #     if not raw:
-        #         cfg = getattr(hypervisor, "connection_config", None) or {}
-        #         paths = cfg.get("extra_vmx_paths", []) if isinstance(cfg, dict) else []
-        #         extra_vmx = [str(p) for p in paths]
-        #         raw = None
-        #     if raw:
-        #         extra_vmx = json.loads(raw)
-        # except Exception:
-        #     pass
-
-        # for vmx in extra_vmx:
-        #     norm = vmx.replace("\\", "/").lower()
-        #     already = any(p.replace("\\", "/").lower() == norm for p in vmx_paths_to_scan)
-        #     if not already:
-        #         vmx_paths_to_scan.append(vmx)
-
-        # if not vmx_paths_to_scan:
-        #     logger.warning(
-        #         "Aucun VMX trouvé (aucune VM active et aucun chemin supplémentaire "
-        #         "enregistré). Enregistrez les chemins VMX dans "
-        #         "hypervisor.connection_config[\"extra_vmx_paths\"] sous forme de liste, "
-        #         'ex: ["C:\\\\VMs\\\\MyVM\\\\MyVM.vmx"]'
-        #     )
-        #     return []
-
-        # logger.info(f"Total VMX à scanner: {len(vmx_paths_to_scan)}")
-
-        # ------------------------------------------------------------------ #
-        # 3. Build complete set of VMX paths to inspect
-        # ------------------------------------------------------------------ #
-        vmx_paths_to_scan: List[str] = list(running_paths)
-
-        # Extra VMX paths from connection_config["extra_vmx_paths"]
-        extra_vmx: List[str] = []
-        try:
-            import json
-            raw = getattr(hypervisor, "additional_vmx_paths", None) or ""
-            if not raw:
-                notes = getattr(hypervisor, "notes", None) or ""
-                if notes.startswith("["):
-                    raw = notes
-            if not raw:
-                cfg = getattr(hypervisor, "connection_config", None) or {}
-                paths = cfg.get("extra_vmx_paths", []) if isinstance(cfg, dict) else []
-                extra_vmx = [str(p) for p in paths]
-                raw = None
-            if raw:
-                extra_vmx = json.loads(raw)
-        except Exception:
-            pass
-
-        for vmx in extra_vmx:
-            norm = vmx.replace("\\", "/").lower()
-            already = any(p.replace("\\", "/").lower() == norm for p in vmx_paths_to_scan)
-            if not already:
-                vmx_paths_to_scan.append(vmx)
-
-        # ------------------------------------------------------------------ #
-        # 3c. NEW — Directory scan: walk vm_folder to discover ALL .vmx files
-        #     (covers powered-off VMs that are neither running nor explicitly
-        #     listed in extra_vmx_paths).
-        # ------------------------------------------------------------------ #
-        cfg = hypervisor.connection_config or {}
-        vm_folder: Optional[str] = None
-        if isinstance(cfg, dict):
-            vm_folder = cfg.get("vm_folder")
-
-        if not vm_folder:
-            # Fallback: standard VMware Workstation default locations
-            _DEFAULT_VM_FOLDERS = [
-                os.path.join(os.path.expanduser("~"), "OneDrive", "Documents", "Virtual Machines"),
-                os.path.join(os.path.expanduser("~"), "Documents", "Virtual Machines"),
-                os.path.join(os.path.expanduser("~"), "Virtual Machines"),
-                "/var/lib/vmware/Virtual Machines",
-            ]
-            for candidate in _DEFAULT_VM_FOLDERS:
-                if os.path.isdir(candidate):
-                    vm_folder = candidate
-                    logger.info(f"vm_folder auto-détecté: {vm_folder}")
-                    break
-
-        if vm_folder and os.path.isdir(vm_folder):
-            logger.info(f"Scan du dossier VM: {vm_folder}")
-            for root, _dirs, files in os.walk(vm_folder):
-                for fname in files:
-                    if fname.lower().endswith(".vmx"):
-                        full_path = os.path.join(root, fname)
-                        norm = full_path.replace("\\", "/").lower()
-                        already = any(p.replace("\\", "/").lower() == norm for p in vmx_paths_to_scan)
-                        if not already:
-                            vmx_paths_to_scan.append(full_path)
-                            logger.info(f"  VMX trouvé par scan dossier: {full_path}")
-        else:
-            if not vmx_paths_to_scan:
-                logger.warning(
-                    "Aucun VMX trouvé. Configurez 'vm_folder' dans connection_config "
-                    'ex: {"vm_folder": "C:\\\\Users\\\\PC\\\\Documents\\\\Virtual Machines"}'
-                )
+        vmx_paths_to_scan = _collect_workstation_vmx_paths(hypervisor, running_paths)
 
         # ------------------------------------------------------------------ #
         # 4. Extract optional guest credentials for runScriptInGuest
@@ -1358,10 +1398,15 @@ class DiscoveryService:
 
         connection_config keys:
           auth_mode     — "ssh_key" (default) | "local" (qemu:///system, no SSH)
-          ssh_key_path  — path to private key (default: C:/Users/PC/.ssh/id_rsa_kvm)
+          ssh_key_path  — path to the private key. Falls back to
+                          settings.KVM_SSH_KEY_PATH, then to the SSH agent /
+                          ~/.ssh (look_for_keys). Audit S8392 — no hardcoded
+                          developer key path in source.
         """
+        import shlex as _shlex
         import warnings as _warnings
         import paramiko
+        from app.core.config import settings
         from app.core.ssh import apply_host_key_policy
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
@@ -1375,9 +1420,14 @@ class DiscoveryService:
 
         ssh_user: str = ssh_match.group(1) or "root"
         ssh_host: str = ssh_match.group(2)
-        ssh_key_path: str = cfg.get("ssh_key_path") or "C:/Users/PC/.ssh/id_rsa_kvm"
+        # Audit S8392 — le chemin de clé SSH vient de connection_config puis
+        # de settings.KVM_SSH_KEY_PATH ; jamais codé en dur. Vide => paramiko
+        # tombe sur l'agent / ~/.ssh via look_for_keys=True.
+        ssh_key_path: Optional[str] = (
+            cfg.get("ssh_key_path") or settings.KVM_SSH_KEY_PATH or None
+        )
 
-        logger.info(f"KVM SSH: {ssh_user}@{ssh_host}, key={ssh_key_path}")
+        logger.info(f"KVM SSH: {ssh_user}@{ssh_host}, key={ssh_key_path or '<agent/default>'}")
 
         def _run(client: paramiko.SSHClient, cmd: str):
             _, stdout, stderr = client.exec_command(cmd)
@@ -1399,6 +1449,9 @@ class DiscoveryService:
                     look_for_keys=True,
                 )
             except Exception as exc:
+                # Audit E8 — fermer le client si connect() échoue, sinon le
+                # transport paramiko (et son thread) fuit jusqu'au GC.
+                client.close()
                 raise DiscoveryError(f"SSH KVM connection failed ({ssh_user}@{ssh_host}): {exc}")
 
         VIRSH = "virsh --connect qemu:///system"
@@ -1417,12 +1470,16 @@ class DiscoveryService:
 
             for name in domain_names:
                 try:
-                    xml_out, xml_err, xml_rc = _run(client, f"{VIRSH} dumpxml '{name}'")
+                    # Audit A19 — le nom de domaine vient du serveur distant ;
+                    # il est shell-quoté avant d'être interpolé dans la
+                    # commande virsh exécutée par le shell SSH distant.
+                    safe_name = _shlex.quote(name)
+                    xml_out, xml_err, xml_rc = _run(client, f"{VIRSH} dumpxml {safe_name}")
                     if xml_rc != 0:
                         logger.error(f"KVM dumpxml failed for '{name}': {xml_err}")
                         continue
 
-                    state_out, _, _ = _run(client, f"{VIRSH} domstate '{name}'")
+                    state_out, _, _ = _run(client, f"{VIRSH} domstate {safe_name}")
                     state_str = state_out.strip()
 
                     root_el = ET.fromstring(xml_out)
@@ -1697,6 +1754,62 @@ class DiscoveryService:
     # SAUVEGARDE ET SYNCHRONISATION DES VMs DÉCOUVERTES
     # ========================================================================
 
+    def _reattach_by_uuid(
+        self,
+        hypervisor: Hypervisor,
+        uuid: str,
+    ) -> Optional[VirtualMachine]:
+        """Pass-2 lookup: find a tenant VM by UUID and re-attach it.
+
+        Extracted from ``_save_discovered_vms`` — Audit S3776. Locates a VM
+        that was orphaned (hypervisor deleted with SET NULL) or imported from
+        another hypervisor and re-attaches it to the current hypervisor so a
+        duplicate row is not created. Returns the row, or ``None``.
+        """
+        existing_vm = (
+            self.db.query(VirtualMachine)
+            .filter(
+                VirtualMachine.tenant_id == hypervisor.tenant_id,
+                VirtualMachine.source_uuid == uuid,
+            )
+            .first()
+        )
+        if existing_vm:
+            old_hyp_id = existing_vm.source_hypervisor_id
+            existing_vm.source_hypervisor_id = hypervisor.id
+            logger.info(
+                f"🔗 VM ré-attachée à l'hyperviseur {hypervisor.id}: "
+                f"{existing_vm.name} (anciennement hyp={old_hyp_id})"
+            )
+        return existing_vm
+
+    def _sync_one_discovered_vm(
+        self,
+        hypervisor: Hypervisor,
+        vm_data: Dict[str, Any],
+        existing_vm: Optional[VirtualMachine],
+        stats: Dict[str, int],
+    ) -> None:
+        """Apply one discovered VM to the DB (INSERT or UPDATE), updating stats.
+
+        Extracted from ``_save_discovered_vms`` — Audit S3776. Behaviour is
+        unchanged.
+        """
+        if existing_vm:
+            changed = self._update_vm_from_discovery(existing_vm, vm_data)
+            if changed:
+                stats["updated_vms"] += 1
+                logger.info(f"✏️  VM mise à jour: {vm_data['name']}")
+            else:
+                stats["unchanged_vms"] += 1
+                logger.debug(f"✔  VM inchangée: {vm_data['name']}")
+        else:
+            new_vm = self._create_vm_from_discovery(hypervisor, vm_data)
+            self.db.add(new_vm)
+            self.db.flush()   # obtain new_vm.id before logging
+            stats["new_vms"] += 1
+            logger.info(f"➕ Nouvelle VM créée: {vm_data['name']} (ID: {new_vm.id})")
+
     def _save_discovered_vms(
         self,
         hypervisor: Hypervisor,
@@ -1742,10 +1855,10 @@ class DiscoveryService:
                 discovered_uuids.add(uuid)
 
                 # ----------------------------------------------------------
-                # Lookup: find existing DB record for this VM
+                # Lookup: find existing DB record for this VM (3-pass).
                 # ----------------------------------------------------------
 
-                # Pass 1 — exact match: same hypervisor + same UUID (fast path)
+                # Pass 1 — exact match: same hypervisor + same UUID.
                 existing_vm: Optional[VirtualMachine] = (
                     self.db.query(VirtualMachine)
                     .filter(
@@ -1755,56 +1868,32 @@ class DiscoveryService:
                     .first()
                 )
 
-                # Pass 2 — UUID global fallback: VM was orphaned (hypervisor
-                # deleted with SET NULL) or imported from another hypervisor.
-                # Re-attach to current hypervisor to avoid duplicates.
+                # Pass 2 — UUID global fallback within the tenant: re-attach
+                # an orphaned / cross-hypervisor VM to this hypervisor.
                 if not existing_vm:
-                    existing_vm = (
-                        self.db.query(VirtualMachine)
-                        .filter(
-                            VirtualMachine.tenant_id == hypervisor.tenant_id,
-                            VirtualMachine.source_uuid == uuid,
-                        )
-                        .first()
-                    )
-                    if existing_vm:
-                        old_hyp_id = existing_vm.source_hypervisor_id
-                        existing_vm.source_hypervisor_id = hypervisor.id
-                        logger.info(
-                            f"🔗 VM ré-attachée à l'hyperviseur {hypervisor.id}: "
-                            f"{existing_vm.name} (anciennement hyp={old_hyp_id})"
-                        )
+                    existing_vm = self._reattach_by_uuid(hypervisor, uuid)
 
-                # Pass 3 — name fallback within this hypervisor (legacy rows
-                # that predate UUID tracking).
+                # Pass 3 — name fallback within this hypervisor.
+                #
+                # Audit E16 — restreint aux lignes dont source_uuid IS NULL.
+                # Sans ce garde-fou, une VM dont l'UUID a simplement changé
+                # (recréation, clone, changement de SMBIOS) verrait sa ligne
+                # détournée par une VM homonyme — corruption d'identité. Une
+                # ligne qui a déjà un source_uuid ne doit JAMAIS être
+                # ré-appariée par le nom.
                 if not existing_vm:
                     existing_vm = (
                         self.db.query(VirtualMachine)
                         .filter(
                             VirtualMachine.source_hypervisor_id == hypervisor.id,
                             VirtualMachine.name == vm_data["name"],
+                            VirtualMachine.source_uuid.is_(None),
                         )
                         .first()
                     )
 
-                # ----------------------------------------------------------
-                # INSERT or UPDATE
-                # ----------------------------------------------------------
-                if existing_vm:
-                    changed = self._update_vm_from_discovery(existing_vm, vm_data)
-                    if changed:
-                        stats["updated_vms"] += 1
-                        logger.info(f"✏️  VM mise à jour: {vm_data['name']}")
-                    else:
-                        stats["unchanged_vms"] += 1
-                        logger.debug(f"✔  VM inchangée: {vm_data['name']}")
-                else:
-                    new_vm = self._create_vm_from_discovery(hypervisor, vm_data)
-                    self.db.add(new_vm)
-                    self.db.flush()   # obtain new_vm.id before logging
-                    stats["new_vms"] += 1
-                    logger.info(f"➕ Nouvelle VM créée: {vm_data['name']} (ID: {new_vm.id})")
-
+                # INSERT or UPDATE — extracted to a helper (Audit S3776).
+                self._sync_one_discovered_vm(hypervisor, vm_data, existing_vm, stats)
             except (ValueError, KeyError, AttributeError, TypeError) as e:
                 logger.error(
                     f"❌ Erreur sauvegarde VM {vm_data.get('name', 'unknown')}: {str(e)}"

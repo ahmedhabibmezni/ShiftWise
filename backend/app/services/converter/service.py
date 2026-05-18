@@ -168,7 +168,7 @@ class ConverterService:
         except ConversionError as e:
             self._record_failure(db, job, attempt.id, e)
             return ConversionStatus.FAILED
-        except Exception as e:  # noqa: BLE001 — convert to permanent
+        except Exception as e:  # NOSONAR — convert any failure to a permanent ConversionError
             wrapped = ConversionError("ERR_INTERNAL", str(e), cause=e)
             self._record_failure(db, job, attempt.id, wrapped)
             return ConversionStatus.FAILED
@@ -263,19 +263,54 @@ class ConverterService:
         )
 
     def _passthrough(self, in_path: Path, out_path: Path) -> None:
-        """No-conversion case: rename or copy the staged file into outputs/."""
+        """No-conversion case: copy the staged file into outputs/.
+
+        Audit E17 — verify-before-move. The previous implementation renamed
+        the staged file first (``in_path.replace(out_path)``); a rename
+        consumes the source, so if a later pipeline step failed the job
+        could not be retried (the staged input was gone). We now COPY, then
+        verify the copy is byte-complete, and only then remove the source.
+        On any failure the staged source is left intact for a retry.
+        """
         try:
-            # Try rename first (cheap); fall back to copy for cross-fs.
-            try:
-                in_path.replace(out_path)
-            except OSError:
-                shutil.copyfile(in_path, out_path)
+            shutil.copyfile(in_path, out_path)
         except OSError as e:
+            # Copy failed — clean a possible partial output, keep the source.
+            try:
+                if out_path.exists():
+                    out_path.unlink()
+            except OSError:
+                pass
             raise ConversionError(
                 "ERR_INTERNAL",
                 f"passthrough copy failed: {e}",
                 cause=e,
             ) from e
+
+        # Verify the copy before destroying the source.
+        try:
+            src_size = in_path.stat().st_size
+            dst_size = out_path.stat().st_size
+        except OSError as e:
+            raise ConversionError(
+                "ERR_OUTPUT_INVALID",
+                f"passthrough verify failed: {e}",
+                cause=e,
+            ) from e
+        if dst_size != src_size:
+            raise ConversionError(
+                "ERR_OUTPUT_INVALID",
+                f"passthrough size mismatch: source={src_size} output={dst_size}",
+            )
+
+        # Copy verified — now it is safe to drop the staged source.
+        try:
+            in_path.unlink()
+        except OSError as e:
+            # Non-fatal: the output is correct; a stale staged file is just
+            # transit-zone clutter the cleanup sweep will reclaim.
+            logger.warning("passthrough: could not remove staged source %s: %s",
+                            in_path, e)
 
     def _run_in_cluster(
         self,
@@ -310,17 +345,26 @@ class ConverterService:
                 f"unexpected tool {job.tool}",
             )
 
-        outcome = runner.wait_for_completion(job_name)
-        # Persist the k8s name for traceability (used by audit / cleanup).
-        # Use raw db session via runner's runtime — but here we only have job;
-        # caller will re-query. We update via crud below in run_job.
-        if not outcome.succeeded:
-            reason = outcome.failure_reason or "unknown"
-            code = self._classify_k8s_failure(reason, outcome.container_exit_code)
-            raise ConversionError(
-                code,
-                f"converter Job {job_name} failed: reason={reason} exit={outcome.container_exit_code}",
-            )
+        # Audit E12 — the K8s Job must be deleted whatever the outcome. The
+        # manifest sets ttlSecondsAfterFinished, but that is a best-effort
+        # cleanup that only fires if the TTL controller is healthy; without
+        # an explicit delete a cluster with the controller disabled (or a
+        # job that never reaches a finished state cleanly) accumulates
+        # orphaned Jobs + their pods. try/finally guarantees the delete on
+        # both the success and the failure path.
+        try:
+            outcome = runner.wait_for_completion(job_name)
+            if not outcome.succeeded:
+                reason = outcome.failure_reason or "unknown"
+                code = self._classify_k8s_failure(reason, outcome.container_exit_code)
+                raise ConversionError(
+                    code,
+                    f"converter Job {job_name} failed: "
+                    f"reason={reason} exit={outcome.container_exit_code}",
+                )
+        finally:
+            # delete() is best-effort and swallows 404 internally.
+            runner.delete(job_name)
 
     def _verify(self, db: Session, job: ConversionJob) -> None:
         """Verify the output is structurally sound + record sha256."""

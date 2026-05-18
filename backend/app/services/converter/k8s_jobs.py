@@ -40,6 +40,12 @@ _LABEL_APP_VAL = "converter"
 _LABEL_GROUP = "app.shiftwise.io/group"
 _LABEL_DISK = "app.shiftwise.io/disk-index"
 
+# Audit E9 — client-side HTTP timeout for poll-loop K8s reads. Without it a
+# hung API server (no FIN, no RST) wedges the worker thread inside a single
+# read forever, defeating the loop-level deadline. 30 s is well under the
+# 5 s poll interval's intent yet generous for a healthy apiserver.
+_K8S_READ_TIMEOUT_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class JobOutcome:
@@ -143,6 +149,7 @@ class ConversionJobRunner:
             try:
                 job = self._kv.batch_api.read_namespaced_job_status(
                     name=job_name, namespace=self._namespace,
+                    _request_timeout=_K8S_READ_TIMEOUT_SECONDS,  # Audit E9
                 )
             except ApiException as e:
                 raise ConversionError(
@@ -297,13 +304,19 @@ class ConversionJobRunner:
         }
 
     def _extract_failure_reason(self, job_name: str) -> Optional[str]:
+        # Audit E18 — return the condition's `reason` field ONLY. The
+        # free-text `message` field ("Job has reached the specified backoff
+        # limit") would poison the exact-match classifier in
+        # _classify_k8s_failure, which keys on short reason codes like
+        # "BackoffLimitExceeded" / "DeadlineExceeded".
         try:
             job = self._kv.batch_api.read_namespaced_job_status(
                 name=job_name, namespace=self._namespace,
+                _request_timeout=_K8S_READ_TIMEOUT_SECONDS,  # Audit E9
             )
             for cond in (job.status.conditions or []):
                 if cond.type == "Failed" and cond.status == "True":
-                    return cond.reason or cond.message
+                    return cond.reason
         except ApiException:
             return None
         return None

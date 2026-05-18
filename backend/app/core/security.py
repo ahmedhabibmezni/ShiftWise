@@ -22,24 +22,26 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 MAX_PASSWORD_LENGTH = 72
 
 
-def _truncate_password(password: str) -> str:
+def _reject_over_length(password: str) -> None:
     """
-    Tronque le mot de passe à 72 bytes pour bcrypt.
+    Rejette un mot de passe dépassant la limite bcrypt de 72 bytes.
 
-    Bcrypt a une limite de 72 bytes. Si le mot de passe est plus long,
-    on le tronque de manière sécurisée.
+    Audit A16 — bcrypt ignore silencieusement tout octet au-delà du 72e.
+    Tronquer (l'ancien comportement) faisait que deux mots de passe
+    distincts partageant un préfixe de 72 octets produisaient le même
+    hash : un mot de passe long est alors équivalent à son préfixe, ce
+    qui affaiblit l'entropie effective. On refuse explicitement la valeur
+    plutôt que de la tronquer. La longueur est mesurée en OCTETS UTF-8,
+    pas en caractères (les caractères multi-octets comptent pour plus).
 
-    Args:
-        password: Mot de passe en clair
-
-    Returns:
-        str: Mot de passe tronqué si nécessaire
+    Raises:
+        ValueError: Si le mot de passe encodé en UTF-8 dépasse 72 octets.
     """
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > MAX_PASSWORD_LENGTH:
-        # Tronquer à 72 bytes de manière sécurisée
-        return password_bytes[:MAX_PASSWORD_LENGTH].decode('utf-8', errors='ignore')
-    return password
+    if len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Le mot de passe ne peut pas dépasser {MAX_PASSWORD_LENGTH} octets "
+            "(limite bcrypt)"
+        )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -53,12 +55,16 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         bool: True si le mot de passe est correct, False sinon
 
+    Raises:
+        ValueError: Si le mot de passe dépasse 72 octets (Audit A16).
+
     Example:
         >>> verify_password("MonMotDePasse123", "$2b$12$...")
         True
     """
-    # Tronquer le mot de passe si nécessaire avant vérification
-    plain_password = _truncate_password(plain_password)
+    # Audit A16 — un mot de passe trop long ne peut pas correspondre : il
+    # n'aurait jamais pu être haché. On rejette au lieu de tronquer.
+    _reject_over_length(plain_password)
     return pwd_context.verify(plain_password, hashed_password)
 
 
@@ -77,13 +83,14 @@ def get_password_hash(password: str) -> str:
         '$2b$12$KIXqF7...'
 
     Raises:
-        ValueError: Si le mot de passe est vide
+        ValueError: Si le mot de passe est vide ou dépasse 72 octets (A16).
     """
     if not password:
         raise ValueError("Le mot de passe ne peut pas être vide")
 
-    # Tronquer le mot de passe si nécessaire avant hashing
-    password = _truncate_password(password)
+    # Audit A16 — refuser un mot de passe au-delà de la limite bcrypt
+    # plutôt que de le tronquer silencieusement.
+    _reject_over_length(password)
     return pwd_context.hash(password)
 
 

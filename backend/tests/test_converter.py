@@ -272,6 +272,11 @@ class _FakeRunner:
             container_exit_code=0 if self.succeed else 1,
         )
 
+    def delete(self, job_name, *, propagate=True):
+        # Audit E12 — _run_in_cluster deletes the K8s Job in a finally block;
+        # this mirrors the real ConversionJobRunner.delete() signature.
+        self.submitted.append(("delete", job_name))
+
 
 class TestServiceOrchestration:
     def test_create_group_and_run_job_to_ready(

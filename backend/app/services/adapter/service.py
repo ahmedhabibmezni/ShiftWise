@@ -84,7 +84,7 @@ class AdapterService:
                     namespace=target_namespace,
                     job_name=adapter_job_name(migration_id, idx),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # NOSONAR — best-effort cleanup, never raise
                 logger.warning("cleanup: delete adapter %d failed: %s", idx, e)
 
     # --- internals -----------------------------------------------------
