@@ -9,7 +9,13 @@
 # Audit A14 — FastAPI >= 0.115 pulls Starlette >= 0.40, closing the
 # multipart DoS CVE-2024-47874 in older Starlette releases.
 fastapi==0.115.6
-uvicorn[standard]==0.27.0
+# Audit G30 — uvicorn bumped 0.27.0 -> 0.47.0 (ASGI server only; no app
+# API surface change). paramiko (3.4 -> 5.x) and the kubernetes client
+# (28 -> 35) are intentionally NOT bumped here: both are major-version
+# jumps that change APIs the SSH connectors and the KubeVirt/migrator
+# code depend on, and must be validated against a real KVM host and the
+# OpenShift cluster before shipping. Tracked as a planned upgrade.
+uvicorn[standard]==0.47.0
 # Audit A13 — python-multipart 0.0.18 fixes the ReDoS/DoS chain
 # (CVE-2024-24762 / CVE-2024-53981).
 python-multipart==0.0.18
