@@ -10,6 +10,7 @@ Filtrage multi-tenancy via tenant_id optionnel.
 
 from typing import Optional, List
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
 
@@ -224,12 +225,30 @@ def update_hypervisor(
     if not hypervisor:
         return None
 
+    # Audit C15 — un renommage vers un nom déjà pris par le même tenant doit
+    # échouer proprement (ValueError → 409 côté routeur), pas en IntegrityError
+    # opaque → 500. Pré-vérification scopée au tenant propriétaire de la ligne.
+    new_name = update_data.get("name")
+    if new_name and new_name != hypervisor.name:
+        clash = get_hypervisor_by_name(db, new_name, tenant_id=hypervisor.tenant_id)
+        if clash and clash.id != hypervisor.id:
+            raise ValueError(f"Un hypervisor avec le nom '{new_name}' existe déjà")
+
     for field, value in update_data.items():
         if field in _HYPERVISOR_PROTECTED_FIELDS:
             continue  # Audit D6 — champ protégé, ignoré silencieusement
         setattr(hypervisor, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # Filet anti-course (TOCTOU) : deux renommages concurrents passent tous
+        # deux la pré-vérification puis heurtent la contrainte composite
+        # (tenant_id, name). On le rattrape en ValueError → 409.
+        db.rollback()
+        raise ValueError(
+            f"Un hypervisor avec le nom '{new_name}' existe déjà"
+        ) from exc
     db.refresh(hypervisor)
 
     return hypervisor

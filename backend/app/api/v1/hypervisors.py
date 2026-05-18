@@ -301,7 +301,16 @@ def update_hypervisor(
     """
     tenant_id = None if current_user.is_superuser else current_user.tenant_id
     update_data = hypervisor_update.model_dump(exclude_unset=True)
-    hypervisor = crud_hypervisor.update_hypervisor(db, hypervisor_id, update_data, tenant_id=tenant_id)
+    try:
+        hypervisor = crud_hypervisor.update_hypervisor(
+            db, hypervisor_id, update_data, tenant_id=tenant_id
+        )
+    except ValueError as exc:
+        # Audit C15 — renommage en collision de nom → 409, pas 500.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     if not hypervisor:
         raise HTTPException(
