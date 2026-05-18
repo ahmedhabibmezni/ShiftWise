@@ -32,6 +32,12 @@ from app.core.config import settings
 # Configuration du logger
 logger = logging.getLogger(__name__)
 
+# Audit E9 — timeout HTTP client-side pour les lectures K8s en boucle de
+# polling. Sans lui, un apiserver muet (ni FIN ni RST) bloque le thread du
+# worker dans une seule lecture indéfiniment, court-circuitant la deadline
+# mur de la boucle (wait_vmi_running).
+_K8S_READ_TIMEOUT_SECONDS = 30
+
 
 class KubeVirtClientError(Exception):
     """Exception de base pour les erreurs du KubeVirt Client"""
@@ -499,7 +505,8 @@ class KubeVirtClient:
                 version=self.VERSION,
                 namespace=namespace,
                 plural=self.VMI_PLURAL,
-                name=name
+                name=name,
+                _request_timeout=_K8S_READ_TIMEOUT_SECONDS,  # Audit E9
             )
             return vmi
 

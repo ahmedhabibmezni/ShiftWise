@@ -20,6 +20,7 @@ from app.core.celery_app import celery_app
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.virtual_machine import VirtualMachine
+from app.models.conversion import ConversionGroup
 from app.schemas.migration import (
     MigrationCancel,
     MigrationCreate,
@@ -32,6 +33,7 @@ from app.schemas.migration import (
 from app.crud import migration as crud_migration
 from app.crud import vm as crud_vm
 from app.tasks.migration import run_migration
+from app.services.migrator.service import MigratorService
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +393,40 @@ def start_migration(
     return MigrationResponse.model_validate(migration)
 
 
+def _cleanup_migration_resources(db: Session, migration: Migration) -> None:
+    """Démonte, au mieux, les ressources K8s d'une migration annulée (Audit E6).
+
+    La tâche Celery a été révoquée, mais le migrator a pu déjà créer des Jobs
+    populator, des PVC cibles et la VirtualMachine. On les supprime pour qu'une
+    annulation ne laisse pas fuir de ressources cluster. Toute erreur est
+    avalée : la migration est déjà CANCELLED et un échec de nettoyage ne doit
+    jamais faire échouer l'annulation.
+    """
+    if not migration.target_namespace:
+        return
+    try:
+        groups = (
+            db.query(ConversionGroup)
+            .filter(ConversionGroup.migration_id == migration.id)
+            .all()
+        )
+        disk_indices = sorted({
+            job.disk_index for group in groups for job in group.jobs
+        })
+        MigratorService().cleanup(
+            target_namespace=migration.target_namespace,
+            migration_id=migration.id,
+            disk_indices=disk_indices,
+            target_vm_name=migration.target_vm_name,
+        )
+    except Exception:  # NOSONAR — nettoyage best-effort, ne bloque jamais l'annulation
+        logger.warning(
+            "Audit E6 — nettoyage K8s incomplet pour la migration %s "
+            "(annulation tout de même effective)",
+            migration.id,
+        )
+
+
 @router.post("/{migration_id}/cancel", response_model=MigrationResponse)
 def cancel_migration(
         migration_id: int,
@@ -441,6 +477,10 @@ def cancel_migration(
 
     db.commit()
     db.refresh(migration)
+
+    # Audit E6 — la tâche est révoquée ; on démonte maintenant, au mieux, les
+    # ressources K8s que le migrator a pu créer avant que la révocation prenne.
+    _cleanup_migration_resources(db, migration)
 
     return MigrationResponse.model_validate(migration)
 

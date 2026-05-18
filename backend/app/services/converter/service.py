@@ -68,6 +68,7 @@ class ConverterService:
         vm_id: int,
         target_format: TargetFormat = TargetFormat.QCOW2,
         cold: bool = True,
+        pull_options: Optional[dict] = None,
         max_attempts: int = 3,
         migration_id: Optional[int] = None,
     ) -> int:
@@ -96,12 +97,15 @@ class ConverterService:
             )
 
         # 2) Persist the group + jobs (all PENDING).
+        # Audit C14 — connector-specific `pull_options` are merged into
+        # `pull_config`; the explicit `cold` argument wins over any `cold`
+        # key carried in the extras.
         group = crud_conversion.create_group(
             db,
             tenant_id=tenant_id,
             vm_id=vm_id,
             target_format=target_format,
-            pull_config={"cold": cold},
+            pull_config={**(pull_options or {}), "cold": cold},
             migration_id=migration_id,
         )
 
@@ -352,8 +356,15 @@ class ConverterService:
         # job that never reaches a finished state cleanly) accumulates
         # orphaned Jobs + their pods. try/finally guarantees the delete on
         # both the success and the failure path.
+        # Audit E9 — cap mur client légèrement au-delà de l'activeDeadlineSeconds
+        # du Job (6 h qemu-img / 12 h virt-v2v) : si le Job se bloque sans
+        # jamais atteindre d'état terminal, la boucle de poll se termine
+        # proprement (TimeoutInClient) au lieu de tourner indéfiniment.
+        client_deadline = (12 if job.tool == ConversionTool.VIRT_V2V else 6) * 3600 + 600
         try:
-            outcome = runner.wait_for_completion(job_name)
+            outcome = runner.wait_for_completion(
+                job_name, timeout_seconds=client_deadline,
+            )
             if not outcome.succeeded:
                 reason = outcome.failure_reason or "unknown"
                 code = self._classify_k8s_failure(reason, outcome.container_exit_code)

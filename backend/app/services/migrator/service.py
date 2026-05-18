@@ -29,10 +29,15 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from kubernetes.client.rest import ApiException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.kubevirt_client import KubeVirtClientError, get_kubevirt_client
+from app.core.kubevirt_client import (
+    KubeVirtClientError,
+    get_kubevirt_client,
+    reauth_on_401,
+)
 from app.crud import conversion as crud_conversion
 from app.crud import migration as crud_migration
 from app.crud import vm as crud_vm
@@ -61,6 +66,31 @@ from app.services.migrator.vm_manifest import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _wait_vmi_running_with_reauth(
+    *, namespace: str, name: str, timeout_seconds: int,
+) -> None:
+    """``wait_vmi_running`` avec une relance unique sur 401/403 (Audit E20).
+
+    En mode ``custom`` le jeton porteur KubeVirt peut expirer pendant le
+    (long) poll de la VMI. Sur un échec d'authentification, ``reauth_on_401``
+    invalide le client singleton mis en cache ; on relance alors une fois
+    avec un client fraîchement reconstruit. Le poll est idempotent — un
+    redémarrage est sans danger.
+    """
+    try:
+        get_kubevirt_client().wait_vmi_running(
+            name=name, namespace=namespace, timeout_seconds=timeout_seconds,
+        )
+    except KubeVirtClientError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, ApiException) and reauth_on_401(cause):
+            get_kubevirt_client().wait_vmi_running(
+                name=name, namespace=namespace, timeout_seconds=timeout_seconds,
+            )
+        else:
+            raise
 
 
 class MigratorService:
@@ -380,11 +410,10 @@ class MigratorService:
             ) from e
 
     def _verify_running(self, *, namespace: str, name: str) -> None:
-        kv = get_kubevirt_client()
         try:
-            kv.wait_vmi_running(
-                name=name,
+            _wait_vmi_running_with_reauth(
                 namespace=namespace,
+                name=name,
                 timeout_seconds=settings.MIGRATOR_VMI_RUNNING_TIMEOUT,
             )
         except KubeVirtClientError as e:

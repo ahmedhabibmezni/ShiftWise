@@ -393,6 +393,7 @@ def convert_vm(
             vm_id=vm_id,
             target_format=payload.target_format,
             cold=payload.cold,
+            pull_options=payload.pull_options,  # Audit C14 — n'est plus ignoré
             max_attempts=payload.max_attempts,
             migration_id=payload.migration_id,
         )
