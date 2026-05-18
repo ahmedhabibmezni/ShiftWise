@@ -53,7 +53,7 @@ def _ssh_connect(hv: Hypervisor):
             allow_agent=False,
             look_for_keys=False,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # NOSONAR
         raise ConversionError(
             "ERR_HV_AUTH_FAILED",
             f"SSH to KVM host {hv.host} failed: {e}",
@@ -173,10 +173,10 @@ class KvmPuller:
                         if progress_cb is not None:
                             try:
                                 progress_cb(bytes_done, descriptor.size_bytes or bytes_done)
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # NOSONAR
                                 logger.debug("progress_cb raised", exc_info=True)
                 partial.replace(dest_path)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # NOSONAR
                 if partial.exists():
                     partial.unlink(missing_ok=True)
                 raise ConversionError(

@@ -35,13 +35,14 @@ router = APIRouter()
 # S1192 — Constantes pour éviter la duplication des littéraux
 ROLE_NOT_FOUND = "Rôle non trouvé"
 SYSTEM_ROLE_IMMUTABLE = "Les rôles système ne peuvent pas être modifiés ou supprimés"
+RESOURCE_ROLES = "roles"
 
 
 @router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
 def create_role(
         role_data: RoleCreate,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "create"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "create"))]
 ):
     """
     Crée un nouveau rôle personnalisé.
@@ -88,7 +89,7 @@ def create_role(
 @router.get("", response_model=list[RoleRead])
 def list_roles(
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))],
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))],
         skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à sauter")] = 0,
         limit: Annotated[int, Query(ge=1, le=1000, description="Nombre d'éléments à retourner")] = 100,
         is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
@@ -150,7 +151,7 @@ def list_roles(
 @router.get("/count")
 def count_roles(
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))],
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))],
         is_active: Annotated[Optional[bool], Query(description="Filtrer par statut actif")] = None,
         search: Annotated[Optional[str], Query(description="Rechercher")] = None,
 ):
@@ -191,7 +192,7 @@ def count_roles(
 def get_role_by_name(
         role_name: str,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
 ):
     """
     Récupère un rôle par son nom.
@@ -217,7 +218,7 @@ def get_role_by_name(
 @router.post("/init-system-roles", response_model=MessageResponse)
 def initialize_system_roles(
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "create"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "create"))]
 ):
     """
     Initialise les rôles système prédéfinis.
@@ -257,7 +258,7 @@ def initialize_system_roles(
 
 @router.get("/permissions/resources")
 def list_available_resources(
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
 ):
     """
     Liste les ressources disponibles pour les permissions.
@@ -316,7 +317,7 @@ def list_available_resources(
 def get_role(
         role_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
 ):
     """
     Récupère un rôle par son ID avec le nombre d'utilisateurs.
@@ -366,7 +367,7 @@ def update_role(
         role_id: int,
         role_update: RoleUpdate,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "update"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "update"))]
 ):
     """
     Met à jour un rôle personnalisé.
@@ -431,7 +432,7 @@ def update_role(
 def delete_role(
         role_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "delete"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "delete"))]
 ):
     """
     Supprime un rôle personnalisé.
@@ -497,7 +498,7 @@ def delete_role(
 def get_role_user_count(
         role_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("roles", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
 ):
     """
     Compte le nombre d'utilisateurs ayant un rôle donné.

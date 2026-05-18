@@ -32,6 +32,9 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 
+# S1192 — resource literal reused across the router.
+RESOURCE_VMS = "vms"
+
 
 class VMAnalyzeBatchRequest(BaseModel):
     """Corps de POST /vms/analyze/batch (Audit C9 / C17).
@@ -61,7 +64,7 @@ def list_vms(
     hypervisor_id: Annotated[Optional[int], Query(description="Filtrer par hyperviseur source")] = None,
     search: Annotated[Optional[str], Query(description="Rechercher par nom, IP ou hostname")] = None,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None
 ):
     """
     Liste toutes les VirtualMachines avec pagination et filtres.
@@ -94,7 +97,7 @@ def list_vms(
 def create_vm(
     vm_data: VMCreate,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "create"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "create"))] = None
 ):
     """
     Crée une nouvelle VirtualMachine.
@@ -123,7 +126,7 @@ def create_vm(
 @router.get("/stats/summary")
 def get_vms_stats(
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None
 ):
     """
     Statistiques globales des VMs.
@@ -170,7 +173,7 @@ def get_vms_stats(
 @router.get("/analyze/stats")
 def get_compatibility_stats(
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None
 ):
     """
     Compatibility analysis statistics.
@@ -187,7 +190,7 @@ def analyze_vms_batch(
     payload: VMAnalyzeBatchRequest,
     force: Annotated[bool, Query(description="Re-analyze already-classified VMs")] = False,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "update"))] = None
 ):
     """
     Analyze multiple VMs (batch, synchronous, capped at 20).
@@ -225,7 +228,7 @@ def analyze_vms_batch(
 def get_vm(
     vm_id: int,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None
 ):
     """
     Récupère les détails d'une VirtualMachine.
@@ -249,7 +252,7 @@ def update_vm(
     vm_id: int,
     vm_update: VMUpdate,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "update"))] = None
 ):
     """
     Met à jour une VirtualMachine.
@@ -273,7 +276,7 @@ def update_vm(
 def delete_vm(
     vm_id: int,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "delete"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "delete"))] = None
 ):
     """
     Supprime une VirtualMachine.
@@ -299,7 +302,7 @@ def analyze_single_vm(
     vm_id: int,
     force: Annotated[bool, Query(description="Re-analyze already-classified VMs")] = False,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "update"))] = None
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "update"))] = None
 ):
     """
     Analyze a single VM's compatibility.
@@ -437,7 +440,7 @@ def get_vm_migrations(
     skip: Annotated[int, Query(ge=0, description="Nombre d'éléments à ignorer")] = 0,
     limit: Annotated[int, Query(ge=1, le=100, description="Nombre d'éléments à retourner")] = 50,
     db: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[User, Depends(check_permission("vms", "read"))] = None,
+    current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None,
     _migrations_read: Annotated[User, Depends(check_permission("migrations", "read"))] = None,
 ):
     """

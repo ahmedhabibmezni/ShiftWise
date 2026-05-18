@@ -110,7 +110,7 @@ class ProxmoxPuller:
                 verify_ssl=bool(hv.verify_ssl),
                 port=hv.port or 8006,
             )
-        except Exception as e:  # noqa: BLE001 — proxmoxer raises various types
+        except Exception as e:  # NOSONAR — proxmoxer raises various types
             raise ConversionError(
                 "ERR_HV_AUTH_FAILED",
                 f"Proxmox auth failed: {e}",
@@ -120,7 +120,7 @@ class ProxmoxPuller:
         node, vmid = self._resolve_vm(client, vm)
         try:
             config = client.nodes(node).qemu(vmid).config.get()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # NOSONAR
             raise ConversionError(
                 "ERR_VM_NOT_FOUND",
                 f"Could not read config for vmid={vmid} on node={node}: {e}",
@@ -205,7 +205,7 @@ class ProxmoxPuller:
         """Return (node, vmid) from the cluster resources index."""
         try:
             resources = client.cluster.resources.get(type="vm")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # NOSONAR
             raise ConversionError(
                 "ERR_HV_UNREACHABLE",
                 f"Could not list cluster resources: {e}",
@@ -251,7 +251,7 @@ class ProxmoxPuller:
                 allow_agent=False,
                 look_for_keys=False,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # NOSONAR
             raise ConversionError(
                 "ERR_HV_AUTH_FAILED",
                 f"SSH to Proxmox node {hv.host} failed: {e}",
@@ -328,11 +328,11 @@ class ProxmoxPuller:
                         if progress_cb is not None:
                             try:
                                 progress_cb(bytes_done, expected_size or bytes_done)
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # NOSONAR
                                 logger.debug("progress_cb raised", exc_info=True)
             finally:
                 sftp.close()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # NOSONAR
             if partial.exists():
                 partial.unlink(missing_ok=True)
             raise ConversionError(

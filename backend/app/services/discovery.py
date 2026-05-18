@@ -881,6 +881,33 @@ def _proxmox_extract_uuid(smbios1: str) -> Optional[str]:
     return None
 
 
+def _proxmox_iface_ipv4(iface: Dict[str, Any]) -> Optional[str]:
+    """Return the first routable IPv4 of a guest-agent interface, or None."""
+    for ipinfo in iface.get("ip-addresses") or []:
+        if ipinfo.get("ip-address-type") != "ipv4":
+            continue
+        addr = ipinfo.get("ip-address") or ""
+        if addr and not addr.startswith("127."):
+            return addr
+    return None
+
+
+def _proxmox_agent_ipv4(
+    agent_net: Optional[List[Dict[str, Any]]],
+) -> Optional[str]:
+    """Pick the first routable IPv4 from qemu-guest-agent interface data."""
+    if not agent_net:
+        return None
+    for iface in agent_net:
+        iface_name = (iface.get("name") or "").lower()
+        if iface_name in ("lo", "loopback") or iface_name.startswith(("docker", "veth", "br-")):
+            continue
+        addr = _proxmox_iface_ipv4(iface)
+        if addr:
+            return addr
+    return None
+
+
 def _parse_proxmox_vm(
     resource: Dict[str, Any],
     config: Dict[str, Any],
@@ -932,20 +959,7 @@ def _parse_proxmox_vm(
             mac_address = mac_match.group(1).upper()
 
     # IP from qemu-guest-agent (only available on running VMs with agent installed).
-    ip_address: Optional[str] = None
-    if agent_net:
-        for iface in agent_net:
-            iface_name = (iface.get("name") or "").lower()
-            if iface_name in ("lo", "loopback") or iface_name.startswith(("docker", "veth", "br-")):
-                continue
-            for ipinfo in iface.get("ip-addresses") or []:
-                if ipinfo.get("ip-address-type") == "ipv4":
-                    addr = ipinfo.get("ip-address") or ""
-                    if addr and not addr.startswith("127."):
-                        ip_address = addr
-                        break
-            if ip_address:
-                break
+    ip_address = _proxmox_agent_ipv4(agent_net)
 
     return {
         "source_uuid":          uuid,
@@ -1393,6 +1407,63 @@ class DiscoveryService:
             )
         return vms
 
+    @staticmethod
+    def _kvm_disk_sizes(run, disk_paths: List[str]) -> Dict[str, int]:
+        """Return {disk_path: virtual-size GiB} via qemu-img on the SSH host."""
+        disk_sizes: Dict[str, int] = {}
+        for path in disk_paths:
+            img_out, _, img_rc = run(
+                f"qemu-img info --output=json '{path}' 2>/dev/null",
+            )
+            if img_rc != 0 or not img_out:
+                continue
+            try:
+                vsize = json.loads(img_out).get("virtual-size", 0)
+                disk_sizes[path] = max(1, round(vsize / 1_073_741_824))
+            except (ValueError, KeyError):
+                disk_sizes[path] = 0
+        return disk_sizes
+
+    @staticmethod
+    def _kvm_disk_paths(root_el: "ET.Element") -> List[str]:
+        """Extract disk source paths from a parsed libvirt domain XML tree."""
+        disk_paths: List[str] = []
+        for disk_el in root_el.findall(".//disk[@device='disk']"):
+            src = disk_el.find("source")
+            if src is None:
+                continue
+            path = src.get("file") or src.get("dev") or ""
+            if path:
+                disk_paths.append(path)
+        return disk_paths
+
+    def _kvm_collect_domain(self, run, name: str, safe_name: str) -> Optional[Dict[str, Any]]:
+        """Discover a single KVM domain. Returns the VM dict or None on error.
+
+        ``safe_name`` is the shell-quoted form of ``name`` (see ``_discover_kvm``)
+        — it is the only value interpolated into a remote virsh command.
+        """
+        virsh = "virsh --connect qemu:///system"
+        xml_out, xml_err, xml_rc = run(f"{virsh} dumpxml {safe_name}")
+        if xml_rc != 0:
+            logger.error(f"KVM dumpxml failed for '{name}': {xml_err}")
+            return None
+
+        state_out, _, _ = run(f"{virsh} domstate {safe_name}")
+        state_str = state_out.strip()
+
+        root_el = ET.fromstring(xml_out)
+        disk_paths = self._kvm_disk_paths(root_el)
+        disk_sizes = self._kvm_disk_sizes(run, disk_paths)
+
+        vm_dict = _parse_kvm_domain_xml(xml_out, state_str, disk_sizes)
+        logger.info(
+            f"  KVM '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
+            f"mem={vm_dict['memory_mb']}MB, power={vm_dict['power_state']}, "
+            f"disk={vm_dict['disk_gb']}GB, uuid={vm_dict['source_uuid']}"
+        )
+        return vm_dict
+
     def _discover_kvm(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """Discover KVM/QEMU VMs via SSH + virsh using paramiko.
 
@@ -1403,7 +1474,7 @@ class DiscoveryService:
                           ~/.ssh (look_for_keys). Audit S8392 — no hardcoded
                           developer key path in source.
         """
-        import shlex as _shlex
+        import shlex
         import warnings as _warnings
         import paramiko
         from app.core.config import settings
@@ -1429,7 +1500,7 @@ class DiscoveryService:
 
         logger.info(f"KVM SSH: {ssh_user}@{ssh_host}, key={ssh_key_path or '<agent/default>'}")
 
-        def _run(client: paramiko.SSHClient, cmd: str):
+        def _run(cmd: str):
             _, stdout, stderr = client.exec_command(cmd)
             rc = stdout.channel.recv_exit_status()
             out = stdout.read().decode("utf-8", errors="replace").strip()
@@ -1454,10 +1525,8 @@ class DiscoveryService:
                 client.close()
                 raise DiscoveryError(f"SSH KVM connection failed ({ssh_user}@{ssh_host}): {exc}")
 
-        VIRSH = "virsh --connect qemu:///system"
-
         try:
-            names_out, names_err, names_rc = _run(client, f"{VIRSH} list --all --name")
+            names_out, names_err, names_rc = _run("virsh --connect qemu:///system list --all --name")
             if names_rc != 0:
                 raise DiscoveryError(f"virsh list failed: {names_err}")
 
@@ -1467,50 +1536,15 @@ class DiscoveryService:
                 return []
 
             vms: List[Dict[str, Any]] = []
-
             for name in domain_names:
                 try:
                     # Audit A19 — le nom de domaine vient du serveur distant ;
-                    # il est shell-quoté avant d'être interpolé dans la
+                    # il est shell-quoté avant toute interpolation dans une
                     # commande virsh exécutée par le shell SSH distant.
-                    safe_name = _shlex.quote(name)
-                    xml_out, xml_err, xml_rc = _run(client, f"{VIRSH} dumpxml {safe_name}")
-                    if xml_rc != 0:
-                        logger.error(f"KVM dumpxml failed for '{name}': {xml_err}")
-                        continue
-
-                    state_out, _, _ = _run(client, f"{VIRSH} domstate {safe_name}")
-                    state_str = state_out.strip()
-
-                    root_el = ET.fromstring(xml_out)
-                    disk_paths = []
-                    for disk_el in root_el.findall(".//disk[@device='disk']"):
-                        src = disk_el.find("source")
-                        if src is not None:
-                            path = src.get("file") or src.get("dev") or ""
-                            if path:
-                                disk_paths.append(path)
-
-                    disk_sizes: Dict[str, int] = {}
-                    for path in disk_paths:
-                        img_out, _, img_rc = _run(
-                            client,
-                            f"qemu-img info --output=json '{path}' 2>/dev/null",
-                        )
-                        if img_rc == 0 and img_out:
-                            try:
-                                vsize = json.loads(img_out).get("virtual-size", 0)
-                                disk_sizes[path] = max(1, round(vsize / 1_073_741_824))
-                            except (ValueError, KeyError):
-                                disk_sizes[path] = 0
-
-                    vm_dict = _parse_kvm_domain_xml(xml_out, state_str, disk_sizes)
-                    vms.append(vm_dict)
-                    logger.info(
-                        f"  KVM '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
-                        f"mem={vm_dict['memory_mb']}MB, power={vm_dict['power_state']}, "
-                        f"disk={vm_dict['disk_gb']}GB, uuid={vm_dict['source_uuid']}"
-                    )
+                    safe_name = shlex.quote(name)
+                    vm_dict = self._kvm_collect_domain(_run, name, safe_name)
+                    if vm_dict is not None:
+                        vms.append(vm_dict)
                 except ET.ParseError as exc:
                     logger.error(f"KVM XML parse error for '{name}': {exc}")
                 except Exception as exc:
@@ -1605,39 +1639,48 @@ class DiscoveryService:
             vmid = resource.get("vmid")
             if not node or vmid is None:
                 continue
-
-            try:
-                config = proxmox.nodes(node).qemu(vmid).config.get() or {}
-            except Exception as exc:
-                logger.warning(f"Proxmox: config indisponible pour {node}/{vmid}: {exc}")
-                config = {}
-
-            # Guest agent IP — only useful on running VMs that have qemu-guest-agent.
-            agent_net: Optional[List[Dict[str, Any]]] = None
-            if (resource.get("status") or "").lower() == "running":
-                try:
-                    agent_resp = proxmox.nodes(node).qemu(vmid).agent(
-                        "network-get-interfaces"
-                    ).get() or {}
-                    agent_net = agent_resp.get("result") or []
-                except Exception:
-                    # Guest agent not installed / not running — perfectly normal.
-                    agent_net = None
-
-            try:
-                vm_dict = _parse_proxmox_vm(resource, config, agent_net)
-            except Exception as exc:
-                logger.error(f"Proxmox: parse échoué {node}/{vmid}: {exc}")
-                continue
-
-            vms.append(vm_dict)
-            logger.info(
-                f"  Proxmox '{vm_dict['name']}' (vmid={vmid}@{node}): "
-                f"cpus={vm_dict['cpu_cores']}, mem={vm_dict['memory_mb']}MB, "
-                f"disk={vm_dict['disk_gb']}GB, power={vm_dict['power_state']}, "
-                f"ip={vm_dict['ip_address']}"
-            )
+            vm_dict = self._proxmox_collect_vm(proxmox, resource, node, vmid)
+            if vm_dict is not None:
+                vms.append(vm_dict)
         return vms
+
+    @staticmethod
+    def _proxmox_agent_net(proxmox, resource, node, vmid) -> Optional[List[Dict[str, Any]]]:
+        """Return guest-agent network interfaces, or None when unavailable."""
+        if (resource.get("status") or "").lower() != "running":
+            return None
+        try:
+            agent_resp = proxmox.nodes(node).qemu(vmid).agent(
+                "network-get-interfaces"
+            ).get() or {}
+            return agent_resp.get("result") or []
+        except Exception:
+            # Guest agent not installed / not running — perfectly normal.
+            return None
+
+    def _proxmox_collect_vm(self, proxmox, resource, node, vmid) -> Optional[Dict[str, Any]]:
+        """Discover a single Proxmox QEMU VM. Returns the VM dict or None."""
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get() or {}
+        except Exception as exc:
+            logger.warning(f"Proxmox: config indisponible pour {node}/{vmid}: {exc}")
+            config = {}
+
+        agent_net = self._proxmox_agent_net(proxmox, resource, node, vmid)
+
+        try:
+            vm_dict = _parse_proxmox_vm(resource, config, agent_net)
+        except Exception as exc:
+            logger.error(f"Proxmox: parse échoué {node}/{vmid}: {exc}")
+            return None
+
+        logger.info(
+            f"  Proxmox '{vm_dict['name']}' (vmid={vmid}@{node}): "
+            f"cpus={vm_dict['cpu_cores']}, mem={vm_dict['memory_mb']}MB, "
+            f"disk={vm_dict['disk_gb']}GB, power={vm_dict['power_state']}, "
+            f"ip={vm_dict['ip_address']}"
+        )
+        return vm_dict
 
     def _discover_ovirt(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """Discover VMs from oVirt / RHV via ``ovirt-engine-sdk-python``.
@@ -1697,46 +1740,9 @@ class DiscoveryService:
 
             vms: List[Dict[str, Any]] = []
             for vm in ovirt_vms:
-                try:
-                    vm_svc = vms_service.vm_service(vm.id)
-
-                    # Disks — sum all attached disks (provisioned size).
-                    disk_bytes = 0
-                    try:
-                        for att in vm_svc.disk_attachments_service().list() or []:
-                            if not att.disk or not att.disk.id:
-                                continue
-                            try:
-                                d = disks_service.disk_service(att.disk.id).get()
-                                disk_bytes += int(
-                                    (d.provisioned_size or d.total_size or 0)
-                                )
-                            except Exception:
-                                continue
-                    except Exception as exc:
-                        logger.debug(
-                            "oVirt: disk attachments indisponibles pour "
-                            f"'{getattr(vm, 'name', '?')}': {exc}"
-                        )
-                    disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0
-                    if disk_bytes and disk_gb == 0:
-                        disk_gb = 1
-
-                    # Reported devices — typically only populated on running VMs
-                    # with ovirt-guest-agent / qemu-guest-agent.
-                    devices: List[Any] = []
-                    try:
-                        devices = vm_svc.reported_devices_service().list() or []
-                    except Exception:
-                        devices = []
-
-                    vm_dict = _parse_ovirt_vm(vm, disk_gb, devices)
-                except Exception as exc:
-                    logger.error(
-                        f"oVirt: parse échoué pour '{getattr(vm, 'name', '?')}': {exc}"
-                    )
+                vm_dict = self._ovirt_collect_vm(vms_service, disks_service, vm)
+                if vm_dict is None:
                     continue
-
                 vms.append(vm_dict)
                 logger.info(
                     f"  oVirt '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
@@ -1749,6 +1755,49 @@ class DiscoveryService:
                 connection.close()
             except Exception:
                 pass
+
+    @staticmethod
+    def _ovirt_disk_gb(vm_svc, disks_service, vm) -> int:
+        """Sum the provisioned size of every disk attached to an oVirt VM."""
+        disk_bytes = 0
+        try:
+            for att in vm_svc.disk_attachments_service().list() or []:
+                if not att.disk or not att.disk.id:
+                    continue
+                try:
+                    d = disks_service.disk_service(att.disk.id).get()
+                    disk_bytes += int((d.provisioned_size or d.total_size or 0))
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.debug(
+                "oVirt: disk attachments indisponibles pour "
+                f"'{getattr(vm, 'name', '?')}': {exc}"
+            )
+        disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0
+        if disk_bytes and disk_gb == 0:
+            disk_gb = 1
+        return disk_gb
+
+    def _ovirt_collect_vm(self, vms_service, disks_service, vm) -> Optional[Dict[str, Any]]:
+        """Discover a single oVirt VM. Returns the VM dict or None on error."""
+        try:
+            vm_svc = vms_service.vm_service(vm.id)
+            disk_gb = self._ovirt_disk_gb(vm_svc, disks_service, vm)
+
+            # Reported devices — typically only populated on running VMs
+            # with ovirt-guest-agent / qemu-guest-agent.
+            try:
+                devices: List[Any] = vm_svc.reported_devices_service().list() or []
+            except Exception:
+                devices = []
+
+            return _parse_ovirt_vm(vm, disk_gb, devices)
+        except Exception as exc:
+            logger.error(
+                f"oVirt: parse échoué pour '{getattr(vm, 'name', '?')}': {exc}"
+            )
+            return None
 
     # ========================================================================
     # SAUVEGARDE ET SYNCHRONISATION DES VMs DÉCOUVERTES
@@ -1937,19 +1986,6 @@ class DiscoveryService:
         # We count every active (non-archived) VM attached to this hypervisor
         # after the sync so the number is always accurate.
         # ------------------------------------------------------------------
-        # live_count: int = (
-        #     self.db.query(VirtualMachine)
-        #     .filter(
-        #         VirtualMachine.source_hypervisor_id == hypervisor.id,
-        #         VirtualMachine.status != VMStatus.ARCHIVED,
-        #     )
-        #     .count()
-        # )
-        
-        # hypervisor.total_vms_discovered = live_count
-        # hypervisor.last_sync_at = datetime.now(timezone.utc)
-        # logger.info(f"🔢 total_vms_discovered mis à jour → {live_count}")
-
         # Commit first so the live count query sees all flushed changes
         self.db.commit()
 
@@ -2056,12 +2092,8 @@ class DiscoveryService:
                 setattr(vm, attr, new_val)
                 changed = True
 
-        # Always ensure the FK is correct (covers re-attach path)
-        if vm.source_hypervisor_id != vm_data.get("_hypervisor_id"):
-            # _hypervisor_id is injected by _save_discovered_vms below when needed;
-            # the re-attach path already sets it directly on the object before
-            # calling this method, so we only need to handle the explicit key.
-            pass  # handled in _save_discovered_vms (direct assignment)
+        # FK re-attach: source_hypervisor_id is set directly on the object by
+        # _save_discovered_vms before calling this method — nothing to do here.
 
         # Back-fill source_uuid on legacy rows that predate UUID tracking
         if not vm.source_uuid and vm_data.get("source_uuid"):

@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# S1192 — resource literal reused across the router.
+RESOURCE_MIGRATIONS = "migrations"
+
 
 def require_internal_token(
         x_internal_token: Annotated[Optional[str], Header()] = None,
@@ -70,7 +73,7 @@ def list_migrations(
         strategy: Annotated[Optional[MigrationStrategy], Query(description="Filtrer par stratégie")] = None,
         vm_id: Annotated[Optional[int], Query(description="Filtrer par VM")] = None,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "read"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "read"))] = None
 ):
     """
     Liste toutes les Migrations avec pagination et filtres.
@@ -102,7 +105,7 @@ def list_migrations(
 def create_migration(
         migration_data: MigrationCreate,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "create"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "create"))] = None
 ):
     """
     Crée une nouvelle Migration.
@@ -172,7 +175,7 @@ def create_migration(
 @router.get("/stats/summary", response_model=MigrationStats)
 def get_migrations_stats(
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "read"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "read"))] = None
 ):
     """
     Statistiques globales des migrations.
@@ -249,7 +252,7 @@ def get_migrations_stats(
 def get_migration(
         migration_id: int,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "read"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "read"))] = None
 ):
     """
     Récupère les détails d'une Migration.
@@ -273,7 +276,7 @@ def update_migration(
         migration_id: int,
         migration_update: MigrationUpdate,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "update"))] = None
 ):
     """
     Met à jour une Migration.
@@ -297,7 +300,7 @@ def update_migration(
 def delete_migration(
         migration_id: int,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "delete"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "delete"))] = None
 ):
     """
     Supprime une Migration.
@@ -327,7 +330,7 @@ def delete_migration(
 def start_migration(
         migration_id: int,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "update"))] = None
 ):
     """
     Démarre une migration.
@@ -393,7 +396,7 @@ def cancel_migration(
         migration_id: int,
         cancel_data: Optional[MigrationCancel] = None,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("migrations", "update"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "update"))] = None
 ):
     """
     Annule une migration en cours.

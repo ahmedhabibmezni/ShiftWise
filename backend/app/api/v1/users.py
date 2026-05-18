@@ -43,6 +43,7 @@ router = APIRouter()
 USER_NOT_FOUND = "Utilisateur non trouvé"
 USER_ACCESS_DENIED = "Accès non autorisé à cet utilisateur"
 SUPER_ADMIN_ROLE = "super_admin"
+RESOURCE_USERS = "users"
 
 
 def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Session) -> None:
@@ -92,7 +93,7 @@ def _is_super_admin(user: User) -> bool:
 def create_user(
         user_data: UserCreate,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "create"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "create"))]
 ):
     # Vérification multi-tenancy
     if not current_user.is_superuser and user_data.tenant_id != current_user.tenant_id:
@@ -119,7 +120,7 @@ def list_users(
         is_superuser: Annotated[Optional[bool], Query(description="Filtrer par superuser")] = None,
         tenant_id: Annotated[Optional[str], Query(description="Filtrer par tenant (superuser uniquement)")] = None,
         db: Annotated[Session, Depends(get_db)] = None,
-        current_user: Annotated[User, Depends(check_permission("users", "read"))] = None
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "read"))] = None
 ):
     """
     Liste les utilisateurs avec pagination et filtres.
@@ -198,7 +199,7 @@ def list_users(
 def count_users_by_tenant(
         tenant_id: str,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "read"))]
 ):
     """
     Compte le nombre d'utilisateurs dans un tenant.
@@ -252,7 +253,7 @@ def count_users_by_tenant(
 def get_user(
         user_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "read"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "read"))]
 ):
     """
     Récupère un utilisateur par son ID.
@@ -292,7 +293,7 @@ def update_user(
         user_id: int,
         user_update: UserUpdate,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "update"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "update"))]
 ):
     """
     Met à jour un utilisateur.
@@ -393,7 +394,7 @@ def update_user(
 def delete_user(
         user_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "delete"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "delete"))]
 ):
     """
     Supprime un utilisateur.
@@ -458,7 +459,7 @@ def add_role_to_user(
         user_id: int,
         role_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "update"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "update"))]
 ):
     """
     Ajoute un rôle à un utilisateur.
@@ -521,7 +522,7 @@ def remove_role_from_user(
         user_id: int,
         role_id: int,
         db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission("users", "update"))]
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_USERS, "update"))]
 ):
     """
     Retire un rôle d'un utilisateur.

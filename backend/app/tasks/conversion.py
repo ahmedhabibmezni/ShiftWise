@@ -21,7 +21,7 @@ import logging
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
-from app.core.celery_app import celery_app  # noqa: F401  (registers app)
+from app.core.celery_app import celery_app  # noqa: F401  # NOSONAR (registers app)
 from app.core.database import SessionLocal
 from app.crud import conversion as crud_conversion
 from app.models.conversion import ConversionStatus

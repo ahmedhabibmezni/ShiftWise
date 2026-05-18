@@ -62,7 +62,7 @@ def stream_copy(
                 if progress_cb is not None:
                     try:
                         progress_cb(bytes_done, expected_size)
-                    except Exception:  # noqa: BLE001 — never let a callback kill the copy
+                    except Exception:  # NOSONAR — never let a callback kill the copy
                         logger.debug("progress_cb raised", exc_info=True)
             fout.flush()
         partial.replace(dest)
