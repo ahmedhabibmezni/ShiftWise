@@ -45,13 +45,14 @@ concurrency:
 # (all returned object.type=commit — no annotated-tag dereference needed).
 #
 # Pinned SHAs:
-#   actions/checkout@v4.2.2              11bd71901bbe5b1630ceea73d27597364c9af683
-#   actions/setup-node@v4.1.0            39370e3970a6d050c480ffad4ff0ed4d3fdee5af
-#   actions/setup-python@v5.3.0          0b93645e9fea7318ecaed2b359559ac225c90a2b
-#   docker/build-push-action@v6.10.0     48aba3b46d1b1fec4febb7c5d0c644b249a11355
-#   aquasecurity/trivy-action@v0.28.0    915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
-#   anchore/sbom-action@v0.17.8          55dc4ee22412511ee8c3142cbea40418e6cec693
-#   docker/login-action@v3.3.0           9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   actions/checkout@v4.2.2                       11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0                     39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0                   0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/build-push-action@v6.10.0              48aba3b46d1b1fec4febb7c5d0c644b249a11355
+#   aquasecurity/trivy-action@v0.28.0             915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   anchore/sbom-action@v0.17.8                   55dc4ee22412511ee8c3142cbea40418e6cec693
+#   docker/login-action@v3.3.0                    9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   SonarSource/sonarqube-scan-action@v4.2.1      bfd4e558cda28cda6b5defafb9232d191be8c203
 #
 # When bumping an action: resolve the new tag's SHA with the gh command above,
 # replace BOTH the SHA and the `# vX.Y.Z` comment.
@@ -225,6 +226,33 @@ jobs:
                 f"{len(stored)} features, kind={payload.get('model_kind', 'unknown')}, "
                 f"sklearn={payload.get('sklearn_version', 'unknown')}")
           PY
+
+  sonar:
+    name: sonar · static analysis
+    # Gated on the SonarQube secrets being present, mirroring the registry
+    # push job below. A fork or pre-config repo skips this job entirely;
+    # operators activate it by creating SONAR_TOKEN + SONAR_HOST_URL.
+    #
+    # REQUIRED REPOSITORY SECRETS (Settings → Secrets and variables →
+    # Actions → repository secrets):
+    #   SONAR_HOST_URL   SonarQube server URL (https://sonar.example.com)
+    #   SONAR_TOKEN      scoped project-level scan token (NOT a personal
+    #                    access token — use a project token from SonarQube
+    #                    Administration → Security → Tokens)
+    if: ${{ secrets.SONAR_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # SonarQube uses git blame to attribute issues to authors; shallow
+          # clones produce "no blame" warnings and hurt new-code detection.
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@bfd4e558cda28cda6b5defafb9232d191be8c203  # v4.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
   backend-audit:
     name: backend · pip-audit
