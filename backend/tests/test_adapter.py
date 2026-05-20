@@ -39,6 +39,9 @@ from app.services.adapter.errors import AdapterError
 from app.services.adapter.guestfish_job import (
     AdapterOutcome,
     _build_manifest,
+    _fixup_script_for_os,
+    _LINUX_FIXUP_SCRIPT,
+    _WINDOWS_FIXUP_SCRIPT,
     adapter_job_name,
 )
 
@@ -142,6 +145,61 @@ class TestAdapterJobManifest:
         assert "serial-getty@ttyS0" in cmd[2]
         assert "99-shiftwise" in cmd[2]
 
+    def test_windows_manifest_uses_virt_v2v_in_place(self):
+        m = _build_manifest(
+            namespace="shiftwise-tnt1",
+            job_name="shiftwise-adapt-1-d0",
+            migration_id=1,
+            disk_index=0,
+            src_relative_path="tnt1/outputs/uuid/0.qcow2",
+            nfs_server="10.0.0.9",
+            nfs_path="/exports/transit",
+            backoff_limit=0,
+            active_deadline_seconds=1800,
+            os_type=OSType.WINDOWS,
+        )
+        script = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
+        # Windows path uses virt-v2v-in-place — virt-customize cannot
+        # configure DHCP / serial on Windows partitions.
+        assert "virt-v2v-in-place" in script
+        # The Linux multi-stack DHCP markers must NOT bleed into the
+        # Windows path.
+        assert "virt-customize" not in script
+        assert "serial-getty@ttyS0" not in script
+
+    def test_linux_manifest_does_not_invoke_virt_v2v_in_place(self):
+        m = _build_manifest(
+            namespace="shiftwise-tnt1",
+            job_name="shiftwise-adapt-1-d0",
+            migration_id=1,
+            disk_index=0,
+            src_relative_path="tnt1/outputs/uuid/0.qcow2",
+            nfs_server="10.0.0.9",
+            nfs_path="/exports/transit",
+            backoff_limit=0,
+            active_deadline_seconds=1800,
+            os_type=OSType.LINUX,
+        )
+        script = m["spec"]["template"]["spec"]["containers"][0]["command"][2]
+        assert "virt-v2v-in-place" not in script
+        assert "virt-customize" in script
+
+
+class TestFixupScriptSelector:
+    """Guest-OS family selects the in-pod adapter strategy."""
+
+    def test_windows_picks_virt_v2v_in_place(self):
+        assert _fixup_script_for_os(OSType.WINDOWS) is _WINDOWS_FIXUP_SCRIPT
+
+    def test_linux_picks_virt_customize(self):
+        assert _fixup_script_for_os(OSType.LINUX) is _LINUX_FIXUP_SCRIPT
+
+    def test_other_and_unknown_default_to_linux(self):
+        # Best-effort fallback — the Linux multi-stack script is safe to
+        # run on any guest (it only mutates files that exist).
+        assert _fixup_script_for_os(OSType.OTHER) is _LINUX_FIXUP_SCRIPT
+        assert _fixup_script_for_os(OSType.UNKNOWN) is _LINUX_FIXUP_SCRIPT
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator
@@ -242,6 +300,35 @@ class TestAdapterServiceRun:
         # Migration progress was bumped.
         db_session.refresh(seeded["migration"])
         assert seeded["migration"].progress_percentage > 55.0
+
+    def test_windows_vm_threads_os_type_to_submit(
+        self, db_session, seeded, monkeypatch,
+    ):
+        # Flip the seeded VM to Windows — the AdapterService must read
+        # that and forward it so the Job runs virt-v2v-in-place instead
+        # of virt-customize.
+        seeded["vm"].os_type = OSType.WINDOWS
+        db_session.commit()
+        captured = _patch_k8s(monkeypatch)
+
+        from app.services.adapter.service import AdapterService
+        AdapterService().run(db_session, seeded["migration"].id)
+
+        kwargs = captured["submit"].call_args.kwargs
+        assert kwargs["os_type"] == OSType.WINDOWS
+
+    def test_linux_vm_threads_os_type_to_submit(
+        self, db_session, seeded, monkeypatch,
+    ):
+        # The seeded VM is already LINUX — verify the kwarg is set
+        # (not just defaulted).
+        captured = _patch_k8s(monkeypatch)
+
+        from app.services.adapter.service import AdapterService
+        AdapterService().run(db_session, seeded["migration"].id)
+
+        kwargs = captured["submit"].call_args.kwargs
+        assert kwargs["os_type"] == OSType.LINUX
 
     def test_two_disks_means_two_jobs(self, db_session, seeded, monkeypatch):
         # Add a second disk in the same group.

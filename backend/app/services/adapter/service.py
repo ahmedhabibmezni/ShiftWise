@@ -24,11 +24,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.crud import conversion as crud_conversion
 from app.crud import migration as crud_migration
+from app.crud import vm as crud_vm
 from app.models.conversion import (
     ConversionGroupStatus,
     ConversionJob,
     ConversionStatus,
 )
+from app.models.virtual_machine import OSType
 from app.services.adapter.errors import AdapterError
 from app.services.adapter.guestfish_job import (
     AdapterOutcome,
@@ -50,6 +52,9 @@ class AdapterService:
 
         Returns when all disks have been adapted. Raises ``AdapterError``
         on the first failure — the orchestrator is fail-fast.
+
+        The guest-OS family of the source VM selects the in-pod fixup tool
+        (`virt-v2v-in-place` for Windows, `virt-customize` for Linux).
         """
         migration, group = self._load_context(db, migration_id)
         target_namespace = migration.target_namespace
@@ -60,6 +65,13 @@ class AdapterService:
                 f"No completed conversion jobs on group {group.id}",
             )
 
+        # Load the source VM once to pick the OS-specific fixup strategy.
+        # Falls back to LINUX if the VM row vanished mid-pipeline — the
+        # Linux script is the safer default (it is best-effort and won't
+        # corrupt a non-Linux guest, just leaves it un-adapted).
+        vm = crud_vm.get_vm(db, migration.vm_id)
+        os_type = vm.os_type if vm is not None else OSType.LINUX
+
         for i, job in enumerate(jobs, start=1):
             self._adapt_one(
                 migration_id=migration_id,
@@ -67,6 +79,7 @@ class AdapterService:
                 target_namespace=target_namespace,
                 job=job,
                 group_uuid=group.group_uuid,
+                os_type=os_type,
             )
             crud_migration.update_migration_progress(
                 db, migration_id,
@@ -135,6 +148,7 @@ class AdapterService:
         target_namespace: str,
         job: ConversionJob,
         group_uuid: str,
+        os_type: OSType,
     ) -> None:
         job_name = adapter_job_name(migration_id, job.disk_index)
         # Path on transit, relative to the NFS mount root.
@@ -147,6 +161,7 @@ class AdapterService:
             migration_id=migration_id,
             disk_index=job.disk_index,
             src_relative_path=rel,
+            os_type=os_type,
             active_deadline_seconds=settings.ADAPTER_TIMEOUT,
         )
 
