@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import case, func
 from typing import Annotated, Optional
 
 from app.core.config import settings
@@ -20,6 +20,7 @@ from app.core.celery_app import celery_app
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.virtual_machine import VirtualMachine
+from app.models.hypervisor import Hypervisor
 from app.models.conversion import ConversionGroup
 from app.schemas.migration import (
     MigrationCancel,
@@ -30,7 +31,8 @@ from app.schemas.migration import (
     MigrationListResponse,
     MigrationEventResponse,
     MigrationEventListResponse,
-    MigrationStats
+    MigrationStats,
+    MigrationStatsByGroup,
 )
 from app.crud import migration as crud_migration
 from app.crud import migration_event as crud_migration_event
@@ -237,6 +239,73 @@ def get_migrations_stats(
         )
     total_transferred = total_transferred_query.scalar() or 0.0
 
+    # Breakdown par tenant — visible uniquement par un superuser (visibilité
+    # multi-tenant). Un utilisateur normal voit son propre tenant déjà via
+    # les compteurs globaux ci-dessus, donc by_tenant reste vide pour lui.
+    by_tenant: list[MigrationStatsByGroup] = []
+    if current_user.is_superuser:
+        tenant_rows = (
+            db.query(
+                Migration.tenant_id,
+                func.count(Migration.id).label("total"),
+                func.sum(
+                    case((Migration.status == MigrationStatus.COMPLETED, 1), else_=0)
+                ).label("completed"),
+                func.sum(
+                    case((Migration.status == MigrationStatus.FAILED, 1), else_=0)
+                ).label("failed"),
+            )
+            .group_by(Migration.tenant_id)
+            .order_by(Migration.tenant_id)
+            .all()
+        )
+        by_tenant = [
+            MigrationStatsByGroup(
+                key=row.tenant_id,
+                label=row.tenant_id,
+                total=int(row.total or 0),
+                completed=int(row.completed or 0),
+                failed=int(row.failed or 0),
+            )
+            for row in tenant_rows
+        ]
+
+    # Breakdown par hyperviseur source — filtré par tenant pour les
+    # non-superusers (l'isolement multi-tenant s'applique avant l'agrégation).
+    hyp_query = (
+        db.query(
+            Hypervisor.id,
+            Hypervisor.name,
+            func.count(Migration.id).label("total"),
+            func.sum(
+                case((Migration.status == MigrationStatus.COMPLETED, 1), else_=0)
+            ).label("completed"),
+            func.sum(
+                case((Migration.status == MigrationStatus.FAILED, 1), else_=0)
+            ).label("failed"),
+        )
+        .join(VirtualMachine, Migration.vm_id == VirtualMachine.id)
+        .join(Hypervisor, VirtualMachine.source_hypervisor_id == Hypervisor.id)
+    )
+    if tenant_id is not None:
+        hyp_query = hyp_query.filter(Migration.tenant_id == tenant_id)
+    hyp_rows = (
+        hyp_query
+        .group_by(Hypervisor.id, Hypervisor.name)
+        .order_by(Hypervisor.name)
+        .all()
+    )
+    by_hypervisor = [
+        MigrationStatsByGroup(
+            key=str(row.id),
+            label=row.name,
+            total=int(row.total or 0),
+            completed=int(row.completed or 0),
+            failed=int(row.failed or 0),
+        )
+        for row in hyp_rows
+    ]
+
     return MigrationStats(
         total_migrations=total,
         completed=completed,
@@ -245,7 +314,9 @@ def get_migrations_stats(
         pending=pending,
         success_rate=success_rate,
         average_duration_seconds=avg_duration,
-        total_data_transferred_gb=float(total_transferred)
+        total_data_transferred_gb=float(total_transferred),
+        by_tenant=by_tenant,
+        by_hypervisor=by_hypervisor,
     )
 
 

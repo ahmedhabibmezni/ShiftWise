@@ -190,6 +190,22 @@ class MigrationEventListResponse(BaseModel):
 
 
 # Schéma de statistiques
+class MigrationStatsByGroup(BaseModel):
+    """Une ligne d'agrégation par tenant ou par hyperviseur.
+
+    `key` est l'identifiant brut (tenant_id ou hypervisor_id) pour les
+    consommateurs machine ; `label` est le libellé humain affiché côté UI
+    (le nom de l'hyperviseur, le tenant_id lui-même).
+    """
+    key: str
+    label: str
+    total: int
+    completed: int
+    failed: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MigrationStats(BaseModel):
     """Statistiques globales des migrations"""
     total_migrations: int
@@ -200,5 +216,10 @@ class MigrationStats(BaseModel):
     success_rate: float = Field(..., ge=0.0, le=100.0, description="Taux de succès en %")
     average_duration_seconds: Optional[int] = None
     total_data_transferred_gb: float
+    # Breakdowns — vides par défaut pour rétro-compat. by_tenant n'est
+    # renseigné que pour un superuser (visibilité multi-tenant) ; par
+    # défaut, un utilisateur ne voit que son propre tenant.
+    by_tenant: list[MigrationStatsByGroup] = []
+    by_hypervisor: list[MigrationStatsByGroup] = []
 
     model_config = ConfigDict(from_attributes=True)  # Audit D18

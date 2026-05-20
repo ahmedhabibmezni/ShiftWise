@@ -14,6 +14,14 @@ export type VmStats = {
   by_compatibility: Record<string, number>;
 };
 
+export type MigrationStatsByGroup = {
+  key: string;
+  label: string;
+  total: number;
+  completed: number;
+  failed: number;
+};
+
 export type MigrationStats = {
   total_migrations: number;
   completed: number;
@@ -23,6 +31,11 @@ export type MigrationStats = {
   success_rate: number;
   average_duration_seconds: number | null;
   total_data_transferred_gb: number;
+  // by_tenant is populated only when the requester is a superuser.
+  by_tenant: MigrationStatsByGroup[];
+  // by_hypervisor groups migrations by their source hypervisor;
+  // filtered by tenant for non-superusers.
+  by_hypervisor: MigrationStatsByGroup[];
 };
 
 export async function fetchHypervisorStats(): Promise<HypervisorStats> {
