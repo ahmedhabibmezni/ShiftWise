@@ -121,6 +121,12 @@ jobs:
           # the audit G23 dev/runtime split.
           pip install -r requirements.txt -r requirements-dev.txt
 
+      # Ruff lint — conservative rule set (real bugs only, see pyproject.toml).
+      # Gates the build; promote rules incrementally after the F401 / B904
+      # follow-ups land.
+      - name: Ruff lint
+        run: ruff check app/ tests/
+
       # CI-safe suite (G22 / J2). Every suite below runs WITHOUT live
       # infrastructure: the RBAC / API suites use Starlette's TestClient with
       # an in-memory SQLite engine and FastAPI dependency overrides — no
@@ -151,13 +157,6 @@ jobs:
       #                                 pytest (functions `return` objects,
       #                                 reference an undefined `client`
       #                                 fixture) — tracked as J1.
-      #   - test_migrations_api.py    → CI-safe in principle (TestClient +
-      #                                 SQLite) but currently coupled to the
-      #                                 in-flight migrations-endpoint refactor
-      #                                 (row-lock re-assert + Celery-task
-      #                                 import path). Add it once that work
-      #                                 lands so a transient mid-refactor
-      #                                 state doesn't red the gate.
       - name: pytest (CI-safe suites)
         run: |
           python -m pytest \
@@ -173,6 +172,9 @@ jobs:
             tests/test_converter_security.py \
             tests/test_migrator.py \
             tests/test_migrator_p1.py \
+            tests/test_migrations_api.py \
+            tests/test_migration_events.py \
+            tests/test_migrations_stats.py \
             tests/test_namespace_quota.py \
             tests/test_login_audit.py \
             tests/test_login_throttle.py \

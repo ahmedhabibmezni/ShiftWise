@@ -1140,7 +1140,7 @@ class DiscoveryService:
             stats = self._save_discovered_vms(hypervisor, vms_data)
 
             hypervisor.update_status(HypervisorStatus.ACTIVE)
-            self.db.commit()  
+            self.db.commit()
 
             logger.info(f"Découverte terminée: {stats['total_discovered']} VMs trouvées")
             return stats
