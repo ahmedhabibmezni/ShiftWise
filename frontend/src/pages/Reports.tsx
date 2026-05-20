@@ -83,7 +83,11 @@ export default function Reports() {
         }
       />
 
-      <StatsStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
+      <StatsStrip
+        stats={statsQuery.data}
+        isLoading={statsQuery.isPending}
+        isError={statsQuery.isError}
+      />
 
       <BreakdownPanel
         breakdown={breakdown}
@@ -116,10 +120,19 @@ export default function Reports() {
 function StatsStrip({
   stats,
   isLoading,
+  isError,
 }: {
   stats: MigrationStats | undefined;
   isLoading: boolean;
+  isError: boolean;
 }) {
+  if (isError) {
+    return (
+      <Callout tone="err" role="alert">
+        Could not load migration stats. Refresh to retry.
+      </Callout>
+    );
+  }
   return (
     <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
       <KPIPrimary
