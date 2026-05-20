@@ -13,6 +13,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
+from app.models.migration_event import MigrationEvent, MigrationEventType
 
 
 def get_migration(
@@ -141,6 +142,18 @@ def create_migration(
     )
 
     db.add(migration)
+    db.flush()  # obtient l'id pour le FK de l'événement initial
+
+    # Audit J1 — première entrée du journal: création de la migration.
+    db.add(MigrationEvent(
+        tenant_id=migration.tenant_id,
+        migration_id=migration.id,
+        event_type=MigrationEventType.STATUS_CHANGE,
+        from_status=None,
+        to_status=MigrationStatus.PENDING.value,
+        message="Migration created",
+    ))
+
     db.commit()
     db.refresh(migration)
 
@@ -229,11 +242,20 @@ def set_migration_status(
     migration_id: int,
     status: MigrationStatus,
 ) -> Optional[Migration]:
-    """Privileged status setter for the orchestrator worker."""
+    """Privileged status setter for the orchestrator worker.
+
+    Audit J1 — écrit un MigrationEvent append-only à chaque transition
+    effective (old_status != new_status). Récupère ``error_code`` /
+    ``error_message`` déjà posés sur la ligne pour enrichir l'événement
+    sans paramètres supplémentaires : la séquence conventionnelle
+    ``fail_migration()`` puis ``set_migration_status(FAILED)`` enregistre
+    automatiquement le code et le message d'erreur dans l'audit.
+    """
     migration = db.query(Migration).filter(Migration.id == migration_id).first()
     if not migration:
         return None
 
+    old_status = migration.status
     now = datetime.now(timezone.utc)
     migration.status = status
 
@@ -247,6 +269,29 @@ def set_migration_status(
     ):
         migration.completed_at = now
         migration.success = (status == MigrationStatus.COMPLETED)
+
+    # Audit J1 — journal append-only. Saute les no-ops (re-livraison
+    # Celery qui repose le même statut) pour ne pas polluer l'historique.
+    if old_status != status:
+        event_type = (
+            MigrationEventType.ERROR
+            if status == MigrationStatus.FAILED
+            else MigrationEventType.STATUS_CHANGE
+        )
+        payload = (
+            {"error_code": migration.error_code}
+            if migration.error_code
+            else None
+        )
+        db.add(MigrationEvent(
+            tenant_id=migration.tenant_id,
+            migration_id=migration.id,
+            event_type=event_type,
+            from_status=old_status.value if old_status else None,
+            to_status=status.value,
+            message=migration.error_message,
+            payload=payload,
+        ))
 
     db.commit()
     db.refresh(migration)

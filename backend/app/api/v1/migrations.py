@@ -28,9 +28,12 @@ from app.schemas.migration import (
     MigrationProgressUpdate,
     MigrationResponse,
     MigrationListResponse,
+    MigrationEventResponse,
+    MigrationEventListResponse,
     MigrationStats
 )
 from app.crud import migration as crud_migration
+from app.crud import migration_event as crud_migration_event
 from app.crud import vm as crud_vm
 from app.tasks.migration import run_migration
 from app.services.migrator.service import MigratorService
@@ -365,10 +368,12 @@ def start_migration(
             detail=f"La migration ne peut être démarrée (statut actuel: {migration.status.value})"
         )
 
-    # Marquer comme démarrée
-    migration.mark_started()
-
-    db.commit()
+    # Audit J1 — transition PENDING → VALIDATING via le chokepoint qui
+    # écrit aussi l'événement audit. `set_migration_status` initialise
+    # `started_at` quand la cible est VALIDATING.
+    crud_migration.set_migration_status(
+        db, migration.id, MigrationStatus.VALIDATING,
+    )
     db.refresh(migration)
 
     # Enqueue l'orchestrateur Celery — la migration tourne en arrière-plan.
@@ -468,14 +473,17 @@ def cancel_migration(
                 migration.celery_task_id,
             )
 
-    # Annuler
-    migration.status = MigrationStatus.CANCELLED
-    migration.completed_at = datetime.now(timezone.utc)
-    migration.success = False
-    migration.error_message = (cancel_data.reason if cancel_data and cancel_data.reason
-                               else "Annulée par l'utilisateur")
-
-    db.commit()
+    # Audit J1 — pose la raison sur la ligne AVANT la transition pour que
+    # `set_migration_status` capture le message dans l'événement audit-log.
+    # La fonction gère `completed_at`, `success=False`, et écrit l'événement
+    # de transition vers CANCELLED dans le journal append-only.
+    migration.error_message = (
+        cancel_data.reason if cancel_data and cancel_data.reason
+        else "Annulée par l'utilisateur"
+    )
+    crud_migration.set_migration_status(
+        db, migration.id, MigrationStatus.CANCELLED,
+    )
     db.refresh(migration)
 
     # Audit E6 — la tâche est révoquée ; on démonte maintenant, au mieux, les
@@ -483,6 +491,46 @@ def cancel_migration(
     _cleanup_migration_resources(db, migration)
 
     return MigrationResponse.model_validate(migration)
+
+
+@router.get(
+    "/{migration_id}/events",
+    response_model=MigrationEventListResponse,
+)
+def list_migration_events(
+        migration_id: int,
+        limit: Annotated[
+            int,
+            Query(ge=1, le=500, description="Nombre maximum d'événements à retourner"),
+        ] = 200,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "read"))] = None
+):
+    """
+    Journal d'audit append-only d'une migration (Audit J1).
+
+    Retourne les transitions de la machine à états (du plus ancien au plus
+    récent) plus toute erreur enregistrée. Filtré par tenant pour les
+    utilisateurs non-superuser.
+
+    **Permissions requises :** migrations:read
+    """
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+
+    # La présence de la migration et sa visibilité tenant sont vérifiées
+    # via le getter standard avant de retourner les événements.
+    migration = crud_migration.get_migration(db, migration_id, tenant_id=tenant_id)
+    if not migration:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Migration avec l'ID {migration_id} introuvable",
+        )
+
+    events = crud_migration_event.list_events_for_migration(
+        db, migration_id, tenant_id=tenant_id, limit=limit,
+    )
+    items = [MigrationEventResponse.model_validate(e) for e in events]
+    return MigrationEventListResponse(items=items, total=len(items))
 
 
 @router.put("/{migration_id}/progress", response_model=MigrationResponse)

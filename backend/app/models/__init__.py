@@ -34,6 +34,12 @@ from app.models.migration import (
     MigrationStrategy
 )
 
+# 5b. MigrationEvent (dépend de Migration — journal d'audit)
+from app.models.migration_event import (
+    MigrationEvent,
+    MigrationEventType,
+)
+
 # 6. Conversion (dépend de VirtualMachine et Migration)
 from app.models.conversion import (
     ConversionGroup,
@@ -69,6 +75,9 @@ __all__ = [
     "Migration",
     "MigrationStatus",
     "MigrationStrategy",
+    # MigrationEvent (audit log)
+    "MigrationEvent",
+    "MigrationEventType",
     # Conversion
     "ConversionGroup",
     "ConversionJob",

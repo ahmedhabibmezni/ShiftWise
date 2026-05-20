@@ -12,6 +12,7 @@ from datetime import datetime
 
 from app.models.migration import MigrationStatus as MigrationStatusEnum
 from app.models.migration import MigrationStrategy as MigrationStrategyEnum
+from app.models.migration_event import MigrationEventType as MigrationEventTypeEnum
 
 
 # Audit B18 — `current_step` est un texte libre alimenté par le worker
@@ -162,6 +163,30 @@ class MigrationListResponse(BaseModel):
 class MigrationRollback(BaseModel):
     """Schéma pour rollback d'une migration — id pris dans l'URL"""
     reason: Optional[str] = Field(None, max_length=500, description="Raison du rollback")
+
+
+# Schéma événement audit-log
+class MigrationEventResponse(BaseModel):
+    """Une entrée du journal d'audit d'une migration (Audit J1)."""
+    id: int
+    migration_id: int
+    tenant_id: str
+    event_type: MigrationEventTypeEnum
+    from_status: Optional[str] = None
+    to_status: Optional[str] = None
+    message: Optional[str] = None
+    payload: Optional[dict] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MigrationEventListResponse(BaseModel):
+    """Réponse paginée pour le journal d'audit d'une migration."""
+    items: list[MigrationEventResponse]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Schéma de statistiques
