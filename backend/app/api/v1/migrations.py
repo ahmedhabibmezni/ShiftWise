@@ -671,6 +671,9 @@ def list_migration_events(
     # "rien à reprendre" de "curseur à la position N". Sinon, le client
     # repasse en boucle la même valeur sans pouvoir détecter la fin.
     next_since: Optional[int] = items[-1].sequence_id if items else None
+    # ``total`` = taille de la page (delta-paginé). On évite un
+    # ``SELECT COUNT(*)`` par poll : le client UI s'appuie sur ``has_more``
+    # + ``next_since_sequence_id``, voir schemas.MigrationEventListResponse.
     return MigrationEventListResponse(
         items=items,
         total=len(items),

@@ -141,8 +141,11 @@ def test_tenant_user_pdf_excludes_by_tenant_section(db_session):
 def test_empty_scope_returns_valid_pdf(db_session):
     response = export_reports_pdf(db_session, _superuser())
     text = _read_pdf_text(response.body)
-    # Empty per-hypervisor / per-tenant tables show the empty paragraph.
-    assert "No data in this scope" in text or "By Hypervisor" in text
+    # An empty-scope PDF must render BOTH the breakdown headings and the
+    # placeholder paragraph — an `or` here would let a regression hide
+    # missing empty-state copy behind the always-present heading.
+    assert "By Hypervisor" in text
+    assert "No data in this scope" in text
     assert response.body.startswith(b"%PDF-")
 
 

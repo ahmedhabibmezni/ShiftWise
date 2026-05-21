@@ -194,11 +194,26 @@ class MigrationEventResponse(BaseModel):
 
 
 class MigrationEventListResponse(BaseModel):
-    """Réponse paginée pour le journal d'audit d'une migration."""
+    """Réponse paginée pour le journal d'audit d'une migration.
+
+    Pagination delta — le client consomme ``has_more`` + ``next_since_sequence_id``
+    et ne dépend PAS d'un compteur global. Contraste avec ``MigrationListResponse``
+    qui expose un vrai total : ici un ``SELECT COUNT(*)`` à chaque poll (toutes
+    les 2s pendant qu'une migration tourne) coûterait trop cher pour zéro
+    bénéfice côté client.
+    """
     items: list[MigrationEventResponse]
-    # Ancien champ retenu pour back-compat des appelants existants
-    # (tests + clients qui n'ont pas encore migré vers le polling delta).
-    total: int
+    # Taille de la page renvoyée (== ``len(items)``), PAS le nombre total
+    # d'événements pour la migration. Conservé pour la rétro-compatibilité
+    # des clients qui consommaient l'ancien shape avant le polling delta ;
+    # les nouveaux clients doivent utiliser ``has_more`` / ``next_since_sequence_id``.
+    total: int = Field(
+        ...,
+        description=(
+            "Taille de la page renvoyée (len(items)). Endpoint delta-paginé : "
+            "utilisez has_more et next_since_sequence_id pour parcourir le journal."
+        ),
+    )
     # Polling delta — le client repasse cette valeur en
     # `?since_sequence_id=` au prochain appel.
     next_since_sequence_id: Optional[int] = None

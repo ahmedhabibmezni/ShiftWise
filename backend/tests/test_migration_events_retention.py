@@ -16,7 +16,7 @@ support skip the test.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -125,7 +125,6 @@ def test_archival_path_requires_explicit_event_removal_first(db_session):
     db_session.execute(
         Migration.__table__.delete().where(Migration.id == -1)
     )  # no-op to confirm session is usable
-    from sqlalchemy import text
     db_session.execute(
         text("DELETE FROM migration_events WHERE migration_id = :id"),
         {"id": mig_id},
