@@ -1363,7 +1363,7 @@ class DiscoveryService:
         logger.info(f"Découverte Hyper-V: host={host}, auth_mode={auth_mode}")
 
         cmd, extra_env = _build_hyperv_command(
-            host, auth_mode, hypervisor.username, hypervisor.password
+            host, auth_mode, hypervisor.username, hypervisor.password_plain
         )
 
         run_env = None
@@ -1561,7 +1561,7 @@ class DiscoveryService:
           auth_method  — "password" (default) | "token"
           realm        — PVE realm (default: "pam")
           token_name   — API token name (required when auth_method == "token")
-          token_value  — API token value (falls back to hypervisor.password)
+          token_value  — API token value (falls back to hypervisor.password_plain)
           port         — API port (default: 8006)
           node_filter  — list of node names to restrict discovery to
         """
@@ -1589,12 +1589,12 @@ class DiscoveryService:
         try:
             if auth_method == "token":
                 token_name = cfg.get("token_name") or ""
-                token_value = cfg.get("token_value") or hypervisor.password or ""
+                token_value = cfg.get("token_value") or hypervisor.password_plain or ""
                 if not token_name or not token_value:
                     raise DiscoveryError(
                         "Authentification par token Proxmox requiert 'token_name' "
                         "dans connection_config et une valeur de token "
-                        "('token_value' ou hypervisor.password)."
+                        "('token_value' ou hypervisor.password_plain)."
                     )
                 proxmox = ProxmoxAPI(
                     host,
@@ -1609,7 +1609,7 @@ class DiscoveryService:
                 proxmox = ProxmoxAPI(
                     host,
                     user=user,
-                    password=hypervisor.password or "",
+                    password=hypervisor.password_plain or "",
                     port=port,
                     verify_ssl=bool(hypervisor.verify_ssl),
                     timeout=30,
@@ -1715,7 +1715,7 @@ class DiscoveryService:
             connection = sdk.Connection(
                 url=url,
                 username=hypervisor.username or "admin@internal",
-                password=hypervisor.password or "",
+                password=hypervisor.password_plain or "",
                 ca_file=ca_file,
                 insecure=insecure,
                 timeout=30,

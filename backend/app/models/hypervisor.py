@@ -6,8 +6,8 @@ depuis lequel les VMs seront découvertes et migrées.
 """
 
 from sqlalchemy import (
-    Column, String, Integer, Boolean, DateTime, Text,
-    Enum as SQLEnum, JSON, UniqueConstraint, text, false, true,
+    Column, String, Integer, Boolean, DateTime, Text, LargeBinary,
+    Enum as SQLEnum, JSON, UniqueConstraint, text, false, true, func,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -71,10 +71,25 @@ class Hypervisor(BaseModel):
     host = Column(String(255), nullable=False)  # Hostname ou IP
     port = Column(Integer, nullable=True)  # Port (défaut selon type)
 
-    # Authentification (À CHIFFRER EN PRODUCTION)
-    # TODO: Implémenter le chiffrement des credentials avec Fernet ou Vault
+    # Authentification — US4 production-readiness :
+    #   * `password_ciphertext` (Fernet) est la source de vérité pour les
+    #     credentials.
+    #   * `password` (texte clair, nullable) est conservé pour la rétro-
+    #     compatibilité pendant la fenêtre de cutover ; les writes ne le
+    #     remplissent plus depuis l'introduction du vault. Une migration
+    #     Alembic ultérieure dropera la colonne.
     username = Column(String(255), nullable=False)
-    password = Column(Text, nullable=False)  # ATTENTION: Stocker chiffré en production
+    password = Column(Text, nullable=True)
+    password_ciphertext = Column(LargeBinary, nullable=True)
+    credential_key_version = Column(
+        Integer, nullable=False,
+        default=1, server_default="1",
+    )
+    credentials_updated_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        server_default=func.now(),
+    )
 
     # Configuration SSL/TLS
     verify_ssl = Column(Boolean, default=False, server_default=false())  # Vérifier certificats SSL
@@ -118,6 +133,23 @@ class Hypervisor(BaseModel):
     def is_reachable(self) -> bool:
         """Vérifie si l'hyperviseur est accessible"""
         return self.status in [HypervisorStatus.ACTIVE, HypervisorStatus.AUTHENTICATING]
+
+    @property
+    def password_plain(self) -> str | None:
+        """Decrypted credential — single accessor for connectors and CRUD.
+
+        Reads ``password_ciphertext`` via the credential vault when it's
+        populated (post-encrypt). Falls back to the legacy ``password``
+        column for historical rows whose ciphertext has not yet been
+        backfilled. Returns ``None`` when neither is available.
+        """
+        if self.password_ciphertext:
+            from app.services.credentials import get_vault
+
+            decrypted = get_vault().try_decrypt(self.password_ciphertext)
+            if decrypted is not None:
+                return decrypted
+        return self.password or None
 
     @property
     def username_masked(self) -> str:

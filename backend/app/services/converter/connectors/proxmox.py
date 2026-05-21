@@ -106,7 +106,7 @@ class ProxmoxPuller:
             client = ProxmoxAPI(
                 hv.host,
                 user=hv.username,
-                password=hv.password,
+                password=hv.password_plain,
                 verify_ssl=bool(hv.verify_ssl),
                 port=hv.port or 8006,
             )
@@ -246,7 +246,7 @@ class ProxmoxPuller:
                 hostname=hv.host,
                 port=22,
                 username=hv.username,
-                password=hv.password,
+                password=hv.password_plain,
                 timeout=15,
                 allow_agent=False,
                 look_for_keys=False,
@@ -307,7 +307,7 @@ class ProxmoxPuller:
                 hostname=hv.host,
                 port=22,
                 username=hv.username,
-                password=hv.password,
+                password=hv.password_plain,
                 timeout=30,
                 allow_agent=False,
                 look_for_keys=False,

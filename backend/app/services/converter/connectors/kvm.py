@@ -48,7 +48,7 @@ def _ssh_connect(hv: Hypervisor):
             hostname=hv.host,
             port=hv.port or 22,
             username=hv.username,
-            password=hv.password,
+            password=hv.password_plain,
             timeout=15,
             allow_agent=False,
             look_for_keys=False,

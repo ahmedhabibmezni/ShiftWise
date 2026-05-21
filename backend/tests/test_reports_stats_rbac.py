@@ -56,6 +56,7 @@ def _seed_hypervisor(db, name: str = "vsphere-1") -> Hypervisor:
         type=HypervisorType.VSPHERE,
         host="10.0.0.1",
         port=443,
+        username="admin",
         tenant_id="tenant-a",
     )
     db.add(h)

@@ -2,6 +2,7 @@
 Pytest configuration and shared fixtures for all tests.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,16 @@ import pytest
 
 # Ensure app module is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# US4 — provide a deterministic Fernet key BEFORE any app import so
+# ``Settings()`` (which makes SHIFTWISE_FERNET_KEY required) instantiates
+# cleanly in any environment, including CI runners without a .env file.
+# The key is generated fresh each test session; it never decrypts real
+# production ciphertext.
+if not os.environ.get("SHIFTWISE_FERNET_KEY"):
+    from cryptography.fernet import Fernet
+
+    os.environ["SHIFTWISE_FERNET_KEY"] = Fernet.generate_key().decode()
 
 from app.ml.synthetic_data import generate_dataset
 from app.services.feature_extractor import FEATURE_NAMES, to_vector, rules_features

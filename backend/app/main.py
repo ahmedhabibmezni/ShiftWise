@@ -12,6 +12,7 @@ Ce fichier configure :
 """
 
 import logging
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -28,6 +29,19 @@ from app.core.database import get_db, init_db
 from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
 
 logger = logging.getLogger("shiftwise")
+
+
+# US4 — refuse to start if REFRESH_COOKIE_DOMAIN is set to a non-empty
+# value. The constitution forbids a wildcard-subdomain cookie scope on a
+# shared OpenShift cluster (lateral-movement surface); the only safe
+# scope is host-only, expressed by an empty/unset REFRESH_COOKIE_DOMAIN.
+if (settings.REFRESH_COOKIE_DOMAIN or "").strip():
+    logger.critical(
+        "REFRESH_COOKIE_DOMAIN must be empty for host-only cookie scope; "
+        "got %r. Refusing to start (constitution Security Requirements).",
+        settings.REFRESH_COOKIE_DOMAIN,
+    )
+    sys.exit(1)
 
 
 @asynccontextmanager
