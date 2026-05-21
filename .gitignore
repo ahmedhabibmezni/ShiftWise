@@ -72,6 +72,8 @@ screenshot.mjs
 frontend/verify-redesign.mjs
 screenshots/
 audits/
+.specify/
+specs/
 
 # Agent / IDE assistant artefacts (per-tool config + caches, never commit)
 .agents/
