@@ -278,7 +278,7 @@ def refresh_token_endpoint(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=REFRESH_INVALID_MSG,
-        )
+        ) from None
 
     user = crud_user.get_user(db, user_id=user_id)
     if not user:

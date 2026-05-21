@@ -81,7 +81,7 @@ def create_role(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
-        )
+        ) from None
 
     return new_role
 
@@ -417,7 +417,7 @@ def update_role(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
-        )
+        ) from None
 
     if not updated_role:
         raise HTTPException(
@@ -491,7 +491,7 @@ def delete_role(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
-        )
+        ) from None
 
 
 @router.get("/{role_id}/users/count")

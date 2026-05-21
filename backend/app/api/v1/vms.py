@@ -114,7 +114,7 @@ def create_vm(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
-        )
+        ) from None
 
     return VMResponse.model_validate(vm)
 

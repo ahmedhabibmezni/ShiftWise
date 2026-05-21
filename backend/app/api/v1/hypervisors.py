@@ -161,7 +161,7 @@ def create_hypervisor(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
-        )
+        ) from None
 
     return HypervisorResponse.model_validate(hypervisor)
 
@@ -438,4 +438,4 @@ def sync_hypervisor(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur lors de la découverte: {str(e)}"
-        )
+        ) from None

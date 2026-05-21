@@ -92,7 +92,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalide — identifiant utilisateur malformé",
             headers=_WWW_AUTHENTICATE,
-        )
+        ) from None
 
     # Récupérer l'utilisateur depuis la BDD
     user = crud_user.get_user(db, user_id=user_id_int)

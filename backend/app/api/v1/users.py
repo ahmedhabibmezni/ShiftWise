@@ -109,7 +109,7 @@ def create_user(
     try:
         return crud_user.create_user(db, user_data)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 @router.get("", response_model=UserList)
 def list_users(
@@ -385,7 +385,7 @@ def update_user(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
-        )
+        ) from None
 
     return updated_user
 
