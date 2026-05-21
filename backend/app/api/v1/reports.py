@@ -10,6 +10,7 @@ code.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -28,6 +29,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 RESOURCE_REPORTS = "reports"
+
+# tenant_id is a free-form String(100); a value with quotes, CR/LF, or
+# path separators would corrupt the Content-Disposition header (header
+# injection) or write outside the intended path on the client. Restrict
+# the slug used inside the download filename to a conservative allowlist.
+_SCOPE_LABEL_ALLOWED = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_scope_label(raw: str) -> str:
+    """Return a filename-safe version of ``raw`` (alphanumeric + ``.-_``).
+
+    Anything else collapses to a single ``_``. Length-capped at 60 chars
+    so an absurdly long tenant_id can't blow out the header. Empty result
+    falls back to ``"scope"`` so the filename stays well-formed.
+    """
+    cleaned = _SCOPE_LABEL_ALLOWED.sub("_", raw).strip("_")[:60]
+    return cleaned or "scope"
 
 
 @router.get("/export/pdf")
@@ -56,23 +74,29 @@ def export_reports_pdf(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=(
-                "Scope too large for synchronous export. "
-                "Filter by date range."
+                "Scope too large for synchronous export "
+                f"({breakdown_rows} breakdown rows > "
+                f"{settings.REPORTS_PDF_MAX_BREAKDOWN_ROWS}). "
+                "Contact your administrator to raise "
+                "REPORTS_PDF_MAX_BREAKDOWN_ROWS, or split the scope "
+                "(e.g. per-tenant export)."
             ),
         )
 
-    scope_label = "cluster" if current_user.is_superuser else (
+    raw_scope_label = "cluster" if current_user.is_superuser else (
         f"tenant-{current_user.tenant_id}"
     )
+    # Free-form tenant_id never reaches the response header verbatim.
+    safe_scope_label = _sanitize_scope_label(raw_scope_label)
     generated_at = datetime.now(timezone.utc)
     pdf_bytes = generate_reports_pdf(
         stats,
-        scope_label=scope_label,
+        scope_label=raw_scope_label,
         generated_at=generated_at,
     )
 
     filename = (
-        f"shiftwise-report-{scope_label}-"
+        f"shiftwise-report-{safe_scope_label}-"
         f"{generated_at.strftime('%Y%m%d')}.pdf"
     )
     return Response(

@@ -15,7 +15,9 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Install dependencies first so the layer caches when only source changes.
-COPY package.json package-lock.json* ./
+# package-lock.json is REQUIRED (no glob) — a missing lockfile must fail
+# the build loudly rather than silently produce a non-reproducible image.
+COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .

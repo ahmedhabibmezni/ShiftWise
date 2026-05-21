@@ -72,13 +72,16 @@ export function nextAdaptiveInterval(
     return false;
   }
   if (!KNOWN_MIGRATION_STATUSES.has(input.status)) {
-    // Surface backend / frontend drift loudly. The poll continues at the
-    // standard cadence so a typo never silently freezes the UI forever.
+    // Surface backend / frontend drift loudly. The poll falls through to
+    // the standard decay (INITIAL_POLL_MS on a fresh state, decaying
+    // toward MAX_POLL_MS) so a typo never silently freezes the UI.
     // eslint-disable-next-line no-console
     console.warn(
       `nextAdaptiveInterval: unknown migration status ${JSON.stringify(
         input.status,
-      )} - polling continues at the cap; check MigrationStatus enum sync`,
+      )} - polling continues at the standard adaptive cadence (` +
+        `${INITIAL_POLL_MS}ms initial, decaying toward ${MAX_POLL_MS}ms); ` +
+        `check MigrationStatus enum sync`,
     );
   }
   if (input.prevInterval == null || input.observedNewEvent) {

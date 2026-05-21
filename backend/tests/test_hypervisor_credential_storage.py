@@ -10,12 +10,14 @@ plaintext back through ``hypervisor.password_plain``.
 from __future__ import annotations
 
 import pytest
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.crud import hypervisor as crud_hypervisor
 from app.models.base import Base
 from app.models.hypervisor import HypervisorType
+from app.services.credentials import get_vault
 
 
 @pytest.fixture
@@ -109,10 +111,6 @@ def test_undecryptable_ciphertext_returns_none_not_legacy_plaintext(
     the rotation set can decrypt it. That fallback used to mask key-
     rotation incidents with stale credentials (silent-failure-hunter P0).
     """
-    from cryptography.fernet import Fernet
-
-    from app.services.credentials import get_vault
-
     hv = _create(db_session, password="x")
 
     # Corrupt the ciphertext: replace with a token encrypted under a key
@@ -126,7 +124,9 @@ def test_undecryptable_ciphertext_returns_none_not_legacy_plaintext(
     db_session.refresh(hv)
 
     # Confirm the live vault genuinely cannot decrypt this token.
-    with pytest.raises(Exception):
+    # Narrow to InvalidToken — a bare Exception would let any unrelated
+    # bug (settings parse error, AttributeError) pass for "decrypt failed".
+    with pytest.raises(InvalidToken):
         get_vault().decrypt(hv.password_ciphertext)
 
     import logging
