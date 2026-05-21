@@ -94,23 +94,33 @@ jobs:
       - name: build & push backend with bounded retry
         # Three attempts with exponential backoff (30s / 2min / 8min)
         # absorbs registry hiccups; the run fails cleanly on retry
-        # exhaustion (US5 R7, FR-012).
+        # exhaustion (US5 R7, FR-012). Exit code is captured explicitly
+        # so retry classification stays independent of bash ``until``
+        # semantics under ``pipefail``.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           attempt=1
           delay=30
-          until docker buildx build \
-              --platform linux/amd64 \
-              --push \
-              --tag docker.io/dida1609/shiftwise-backend:${{ github.ref_name }} \
-              --tag docker.io/dida1609/shiftwise-backend:sha-${{ github.sha }} \
-              --file backend/Dockerfile \
-              backend; do
+          while true; do
+            set +e
+            docker buildx build \
+                --platform linux/amd64 \
+                --push \
+                --tag docker.io/dida1609/shiftwise-backend:${{ github.ref_name }} \
+                --tag docker.io/dida1609/shiftwise-backend:sha-${{ github.sha }} \
+                --file backend/Dockerfile \
+                backend
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "::notice::backend push succeeded on attempt $attempt"
+              break
+            fi
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::backend image push failed after $attempt attempts"
+              echo "::error::backend image push failed after $attempt attempts (last exit=$rc)"
               exit 1
             fi
-            echo "::warning::backend push attempt $attempt failed; sleeping ${delay}s"
+            echo "::warning::backend push attempt $attempt failed (exit=$rc); sleeping ${delay}s"
             sleep "$delay"
             attempt=$((attempt + 1))
             delay=$((delay * 4))
@@ -118,21 +128,29 @@ jobs:
 
       - name: build & push frontend with bounded retry
         run: |
-          set -euo pipefail
+          set -uo pipefail
           attempt=1
           delay=30
-          until docker buildx build \
-              --platform linux/amd64 \
-              --push \
-              --tag docker.io/dida1609/shiftwise-frontend:${{ github.ref_name }} \
-              --tag docker.io/dida1609/shiftwise-frontend:sha-${{ github.sha }} \
-              --file frontend/Dockerfile \
-              frontend; do
+          while true; do
+            set +e
+            docker buildx build \
+                --platform linux/amd64 \
+                --push \
+                --tag docker.io/dida1609/shiftwise-frontend:${{ github.ref_name }} \
+                --tag docker.io/dida1609/shiftwise-frontend:sha-${{ github.sha }} \
+                --file frontend/Dockerfile \
+                frontend
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "::notice::frontend push succeeded on attempt $attempt"
+              break
+            fi
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::frontend image push failed after $attempt attempts"
+              echo "::error::frontend image push failed after $attempt attempts (last exit=$rc)"
               exit 1
             fi
-            echo "::warning::frontend push attempt $attempt failed; sleeping ${delay}s"
+            echo "::warning::frontend push attempt $attempt failed (exit=$rc); sleeping ${delay}s"
             sleep "$delay"
             attempt=$((attempt + 1))
             delay=$((delay * 4))
@@ -160,33 +178,60 @@ jobs:
           oc login --token="$OPENSHIFT_TOKEN" --server="$OPENSHIFT_SERVER" --insecure-skip-tls-verify=false
 
       - name: apply staging overlay with bounded retry
+        # Retries are gated on the failure being transient. Deterministic
+        # ``oc apply`` failures (Forbidden, Invalid, immutable-field) will
+        # never recover from a retry and we surface them on attempt #1
+        # instead of wasting two more 30s/2min/8min backoff cycles.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           attempt=1
           delay=30
-          until oc apply -k backend/openshift/staging/; do
-            if [ "$attempt" -ge 3 ]; then
-              echo "::error::oc apply failed after $attempt attempts"
+          while true; do
+            set +e
+            apply_log=$(oc apply -k backend/openshift/staging/ 2>&1)
+            rc=$?
+            set -e
+            echo "$apply_log"
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if echo "$apply_log" | grep -qiE "(forbidden|invalid|field is immutable)"; then
+              echo "::error::oc apply failed with a deterministic, non-retryable error"
               exit 1
             fi
-            echo "::warning::oc apply attempt $attempt failed; sleeping ${delay}s"
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::oc apply failed after $attempt attempts (last exit=$rc)"
+              exit 1
+            fi
+            echo "::warning::oc apply attempt $attempt failed (transient, exit=$rc); sleeping ${delay}s"
             sleep "$delay"
             attempt=$((attempt + 1))
             delay=$((delay * 4))
           done
 
       - name: wait for rollout
+        # ``oc rollout status --timeout=10m`` already blocks for ten
+        # minutes per Deployment; one outer retry on top is enough to
+        # absorb a flake in the rollout APIs themselves (kubelet image
+        # pull stall, transient API-server unavailability).
         run: |
-          set -euo pipefail
+          set -uo pipefail
           attempt=1
           delay=30
-          until oc rollout status deploy/shiftwise-backend -n shiftwise-staging --timeout=10m \
-              && oc rollout status deploy/shiftwise-worker -n shiftwise-staging --timeout=10m; do
+          while true; do
+            set +e
+            oc rollout status deploy/shiftwise-backend -n shiftwise-staging --timeout=10m \
+              && oc rollout status deploy/shiftwise-worker -n shiftwise-staging --timeout=10m
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::rollout failed after $attempt attempts"
+              echo "::error::rollout failed after $attempt attempts (last exit=$rc)"
               exit 1
             fi
-            echo "::warning::rollout attempt $attempt failed; sleeping ${delay}s"
+            echo "::warning::rollout attempt $attempt failed (exit=$rc); sleeping ${delay}s"
             sleep "$delay"
             attempt=$((attempt + 1))
             delay=$((delay * 4))
