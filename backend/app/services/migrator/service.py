@@ -44,6 +44,7 @@ from app.crud import vm as crud_vm
 from app.models.conversion import ConversionGroupStatus, ConversionJob
 from app.models.migration import Migration, MigrationStatus
 from app.models.virtual_machine import VirtualMachine
+from app.services.audit_log import AuditEmitter
 from app.services.migrator.errors import MigratorError
 from app.services.migrator.namespace import ensure_tenant_namespace
 from app.services.migrator.populator_job import (
@@ -132,6 +133,15 @@ class MigratorService:
             current_step=f"Populating {len(jobs)} target PVC(s)",
             step_number=5,
         )
+        # US3 audit — stage_event marks the boundary so the timeline UI
+        # shows the populate phase even when no state transition follows
+        # within it.
+        AuditEmitter.emit_stage_event(
+            db,
+            migration=migration,
+            message=f"populator phase started ({len(jobs)} disk(s))",
+            commit=True,
+        )
         disks = self._populate_disks(
             db=db,
             migration_id=migration_id,
@@ -142,12 +152,24 @@ class MigratorService:
         )
 
         # ---- 2. Create + start VM -------------------------------------------
+        AuditEmitter.emit_stage_event(
+            db,
+            migration=migration,
+            message=f"populator phase finished ({len(disks)} disk(s) ready)",
+            commit=True,
+        )
         self._set_status(db, migration_id, MigrationStatus.STARTING)
         self._update_progress(
             db, migration_id,
             progress=85.0,
             current_step=f"Creating VirtualMachine {target_vm_name}",
             step_number=6,
+        )
+        AuditEmitter.emit_stage_event(
+            db,
+            migration=migration,
+            message=f"creating VirtualMachine {target_vm_name}",
+            commit=True,
         )
         self._create_and_start_vm(
             namespace=target_namespace,
@@ -311,6 +333,19 @@ class MigratorService:
                 src_relative_path=src_rel,
                 active_deadline_seconds=settings.MIGRATOR_POPULATOR_TIMEOUT,
             )
+
+            # US3 audit — emit one heartbeat before the long wait so the
+            # timeline shows liveness even before the next stage_event
+            # lands. Proper periodic emission inside wait_for_populator()
+            # is tracked as a TARGET (see specs/001-production-readiness).
+            migration_row = crud_migration.get_migration(db, migration_id)
+            if migration_row is not None:
+                AuditEmitter.emit_heartbeat(
+                    db,
+                    migration=migration_row,
+                    message=f"waiting on populator disk {job.disk_index}",
+                    commit=True,
+                )
 
             outcome = wait_for_populator(
                 namespace=target_namespace,

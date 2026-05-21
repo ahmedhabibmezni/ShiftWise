@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.migration_event import MigrationEvent, MigrationEventType
-from app.crud.migration_event import record_event as _record_event
+from app.services.audit_log import AuditEmitter
 
 
 def get_migration(
@@ -146,14 +146,12 @@ def create_migration(
     db.flush()  # obtient l'id pour le FK de l'événement initial
 
     # Audit J1 — première entrée du journal: création de la migration.
-    # Allocation atomique du sequence_id via record_event() (US3 Q2).
-    _record_event(
+    # Allocation atomique du sequence_id via AuditEmitter (US3 Q2).
+    AuditEmitter.emit_state_transition(
         db,
-        migration_id=migration.id,
-        tenant_id=migration.tenant_id,
-        event_type=MigrationEventType.STATE_TRANSITION,
+        migration=migration,
         from_status=None,
-        to_status=MigrationStatus.PENDING.value,
+        to_status=MigrationStatus.PENDING,
         actor_type="system",
         message="Migration created",
         commit=False,
@@ -278,28 +276,31 @@ def set_migration_status(
     # Audit J1 — journal append-only. Saute les no-ops (re-livraison
     # Celery qui repose le même statut) pour ne pas polluer l'historique.
     if old_status != status:
-        event_type = (
-            MigrationEventType.CLASSIFIED_ERROR
-            if status == MigrationStatus.FAILED
-            else MigrationEventType.STATE_TRANSITION
-        )
-        payload = (
-            {"error_code": migration.error_code}
-            if migration.error_code
-            else None
-        )
-        _record_event(
-            db,
-            migration_id=migration.id,
-            tenant_id=migration.tenant_id,
-            event_type=event_type,
-            from_status=old_status.value if old_status else None,
-            to_status=status.value,
-            actor_type="worker",
-            message=migration.error_message,
-            payload=payload,
-            commit=False,
-        )
+        if status == MigrationStatus.FAILED:
+            AuditEmitter.emit_classified_error(
+                db,
+                migration=migration,
+                error_code=migration.error_code or "ERR_MIG_INTERNAL",
+                message=migration.error_message or "Migration failed",
+                actor_type="worker",
+                commit=False,
+            )
+        else:
+            payload = (
+                {"error_code": migration.error_code}
+                if migration.error_code
+                else None
+            )
+            AuditEmitter.emit_state_transition(
+                db,
+                migration=migration,
+                from_status=old_status,
+                to_status=status,
+                actor_type="worker",
+                message=migration.error_message,
+                payload=payload,
+                commit=False,
+            )
 
     db.commit()
     db.refresh(migration)
