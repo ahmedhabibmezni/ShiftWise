@@ -35,6 +35,7 @@ import type { Vm } from "@/api/vms";
 import { formatDuration, formatRelativeTime } from "@/lib/format";
 import { useHasPermission } from "@/lib/permissions";
 import { describeError } from "@/lib/errors";
+import { MigrationTimeline } from "@/pages/MigrationTimeline";
 
 const PIPELINE_STEPS = [
   { key: "validating",  label: "Validate" },
@@ -152,6 +153,10 @@ export function MigrationDetailDrawer({
           <Hero migration={migration} vms={vms} />
           <Pipeline migration={migration} />
           <Facts migration={migration} />
+          <MigrationTimeline
+            migrationId={migration.id}
+            status={migration.status}
+          />
           {migration.error_message && (
             <Callout tone="err" kicker={migration.error_code ?? "Error"}>
               <span className="break-words">{migration.error_message}</span>

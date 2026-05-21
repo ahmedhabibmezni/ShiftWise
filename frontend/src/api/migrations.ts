@@ -142,3 +142,69 @@ export async function cancelMigration(
 export async function deleteMigration(id: number): Promise<void> {
   await api.delete(`/migrations/${id}`);
 }
+
+/* ------------------------------------------------------------------ *
+ * Audit log — US3 / US1
+ * The four canonical event categories from the Q1 clarification.
+ * ------------------------------------------------------------------ */
+
+export const MIGRATION_EVENT_TYPES = [
+  "state_transition",
+  "stage_event",
+  "classified_error",
+  "heartbeat",
+] as const;
+
+export type MigrationEventType = (typeof MIGRATION_EVENT_TYPES)[number];
+
+export type MigrationEventResponse = {
+  id: number;
+  migration_id: number;
+  tenant_id: string;
+  sequence_id: number;
+  event_type: MigrationEventType;
+  from_status: string | null;
+  to_status: string | null;
+  actor_id: number | null;
+  actor_type: string;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type MigrationEventListResponse = {
+  items: MigrationEventResponse[];
+  total: number;
+  next_since_sequence_id: number | null;
+  has_more: boolean;
+};
+
+export type FetchMigrationEventsParams = {
+  sinceSequenceId?: number;
+  eventType?: MigrationEventType;
+  limit?: number;
+  signal?: AbortSignal;
+};
+
+/**
+ * Fetch a page of audit events for a migration. The caller passes the
+ * previous response's `next_since_sequence_id` as `sinceSequenceId` to
+ * fetch only new events (delta polling).
+ */
+export async function fetchMigrationEvents(
+  migrationId: number,
+  params: FetchMigrationEventsParams = {},
+): Promise<MigrationEventListResponse> {
+  const res = await api.get<MigrationEventListResponse>(
+    `/migrations/${migrationId}/events`,
+    {
+      params: {
+        since_sequence_id: params.sinceSequenceId ?? 0,
+        event_type: params.eventType,
+        limit: params.limit ?? 200,
+      },
+      signal: params.signal,
+    },
+  );
+  return res.data;
+}
