@@ -24,6 +24,7 @@ from app.crud import migration as crud_migration
 from app.crud import migration_event as crud_migration_event
 from app.models.base import Base
 from app.models.migration import Migration, MigrationStrategy
+from app.models.virtual_machine import VirtualMachine
 
 
 @pytest.fixture
@@ -44,6 +45,21 @@ def db_session():
 
 
 def _seed_migration_with_event(db_session):
+    # SQLite FK enforcement is on for these tests, so the parent VM row
+    # must exist before the migration can reference it via vm_id=1.
+    if db_session.query(VirtualMachine).filter(VirtualMachine.id == 1).first() is None:
+        vm = VirtualMachine(
+            id=1,
+            tenant_id="t1",
+            name="seed-vm",
+            source_uuid="seed-vm-uuid",
+            cpu_cores=1,
+            memory_mb=512,
+            disk_gb=10,
+        )
+        db_session.add(vm)
+        db_session.commit()
+
     mig = crud_migration.create_migration(
         db_session,
         data={

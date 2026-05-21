@@ -17,6 +17,8 @@ provides no PL/pgSQL, so these tests SKIP on sqlite. Run them with a
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, InternalError
@@ -29,13 +31,56 @@ from app.models.migration import MigrationStatus, MigrationStrategy
 from app.models.migration_event import MigrationEventType
 
 
+# PostgreSQL function + trigger that the Alembic migration installs. Re-
+# applied here so a CI run that bootstraps the schema with
+# ``Base.metadata.create_all`` (no Alembic upgrade) still exercises the
+# append-only contract end-to-end.
+_PG_APPEND_ONLY_FUNCTION = """
+CREATE OR REPLACE FUNCTION migration_events_no_mutation()
+RETURNS trigger AS $$
+BEGIN
+    IF current_setting('shiftwise.migration_role', true)
+            = 'migration_runner' THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+    RAISE EXCEPTION 'migration_events is append-only';
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+_PG_APPEND_ONLY_TRIGGER = """
+DROP TRIGGER IF EXISTS trg_migration_events_no_mutation
+ON migration_events;
+CREATE TRIGGER trg_migration_events_no_mutation
+BEFORE UPDATE OR DELETE ON migration_events
+FOR EACH ROW
+EXECUTE FUNCTION migration_events_no_mutation();
+"""
+
+
 @pytest.fixture
 def db_session():
-    engine = create_engine("sqlite:///:memory:")
+    # ``TEST_DATABASE_URL`` is set by the ``backend-postgres`` CI job to a
+    # live Postgres service container. Defaulting to in-memory SQLite keeps
+    # the test runnable on developer machines; the trigger assertions
+    # auto-skip in that case via ``_skip_unless_postgres``.
+    url = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
+    engine = create_engine(url)
+    # Postgres CI: drop everything we own first so a previous run does not
+    # contaminate the state. SQLite in-memory has no carry-over.
+    if engine.dialect.name == "postgresql":
+        Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text(_PG_APPEND_ONLY_FUNCTION))
+            conn.execute(text(_PG_APPEND_ONLY_TRIGGER))
     session = sessionmaker(bind=engine)()
     yield session
     session.close()
+    if engine.dialect.name == "postgresql":
+        Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 def _skip_unless_postgres(session) -> None:

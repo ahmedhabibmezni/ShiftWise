@@ -14,6 +14,7 @@ distinct strictly-monotonic ``sequence_id`` values.
 
 from __future__ import annotations
 
+import os
 import threading
 
 import pytest
@@ -29,9 +30,17 @@ from app.models.migration_event import MigrationEvent, MigrationEventType
 
 @pytest.fixture
 def engine():
-    engine = create_engine("sqlite:///:memory:")
+    # ``TEST_DATABASE_URL`` is set by the ``backend-postgres`` CI job; on a
+    # developer machine the default SQLite engine triggers
+    # ``_skip_unless_postgres`` and the race test no-ops.
+    url = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
+    engine = create_engine(url)
+    if engine.dialect.name == "postgresql":
+        Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield engine
+    if engine.dialect.name == "postgresql":
+        Base.metadata.drop_all(engine)
     engine.dispose()
 
 
