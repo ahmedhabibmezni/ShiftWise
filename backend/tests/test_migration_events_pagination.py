@@ -89,7 +89,9 @@ def test_second_call_with_cursor_returns_no_overlap(db_session):
     )
     assert second.items == []
     assert second.has_more is False
-    assert second.next_since_sequence_id == cursor
+    # An empty delta returns ``None`` so the client can distinguish
+    # "nothing new since the cursor" from "cursor parked at sequence N".
+    assert second.next_since_sequence_id is None
 
 
 def test_pagination_truncates_when_limit_smaller_than_page(db_session):

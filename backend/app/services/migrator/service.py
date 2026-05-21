@@ -136,11 +136,10 @@ class MigratorService:
         # US3 audit — stage_event marks the boundary so the timeline UI
         # shows the populate phase even when no state transition follows
         # within it.
-        AuditEmitter.emit_stage_event(
+        AuditEmitter.safe_emit_stage_event(
             db,
             migration=migration,
             message=f"populator phase started ({len(jobs)} disk(s))",
-            commit=True,
         )
         disks = self._populate_disks(
             db=db,
@@ -152,11 +151,10 @@ class MigratorService:
         )
 
         # ---- 2. Create + start VM -------------------------------------------
-        AuditEmitter.emit_stage_event(
+        AuditEmitter.safe_emit_stage_event(
             db,
             migration=migration,
             message=f"populator phase finished ({len(disks)} disk(s) ready)",
-            commit=True,
         )
         self._set_status(db, migration_id, MigrationStatus.STARTING)
         self._update_progress(
@@ -165,11 +163,10 @@ class MigratorService:
             current_step=f"Creating VirtualMachine {target_vm_name}",
             step_number=6,
         )
-        AuditEmitter.emit_stage_event(
+        AuditEmitter.safe_emit_stage_event(
             db,
             migration=migration,
             message=f"creating VirtualMachine {target_vm_name}",
-            commit=True,
         )
         self._create_and_start_vm(
             namespace=target_namespace,
@@ -340,11 +337,10 @@ class MigratorService:
             # is tracked as a TARGET (see specs/001-production-readiness).
             migration_row = crud_migration.get_migration(db, migration_id)
             if migration_row is not None:
-                AuditEmitter.emit_heartbeat(
+                AuditEmitter.safe_emit_heartbeat(
                     db,
                     migration=migration_row,
                     message=f"waiting on populator disk {job.disk_index}",
-                    commit=True,
                 )
 
             outcome = wait_for_populator(

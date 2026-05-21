@@ -185,7 +185,9 @@ def test_events_endpoint_404s_for_a_different_tenant(db_session):
     )
 
     with pytest.raises(HTTPException) as exc:
-        list_migration_events(mig.id, 200, db_session, _tenant_user("attacker"))
+        list_migration_events(
+            mig.id, 200, 0, None, db_session, _tenant_user("attacker"),
+        )
     assert exc.value.status_code == 404
 
 
@@ -202,7 +204,9 @@ def test_events_endpoint_returns_history_in_chronological_order(db_session):
     crud_migration.set_migration_status(db_session, mig.id, MigrationStatus.VALIDATING)
     crud_migration.set_migration_status(db_session, mig.id, MigrationStatus.PREPARING)
 
-    response = list_migration_events(mig.id, 200, db_session, _superuser())
+    response = list_migration_events(
+        mig.id, 200, 0, None, db_session, _superuser(),
+    )
 
     statuses = [e.to_status for e in response.items]
     assert statuses == [

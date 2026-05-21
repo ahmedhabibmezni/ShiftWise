@@ -14,13 +14,21 @@ d'horloge entre workers — Q2 production-readiness).
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.models.migration import Migration, MigrationStatus
 from app.models.migration_event import MigrationEvent, MigrationEventType
+
+logger = logging.getLogger(__name__)
+
+# Acteurs autorisés sur la colonne `actor_type` (modèle + schéma).
+# Listés une fois pour ne pas dupliquer la canonicalisation entre le
+# service Pydantic et la couche CRUD.
+_ALLOWED_ACTOR_TYPES = ("worker", "user", "system")
 
 
 def _next_sequence_id(db: Session, migration_id: int) -> int:
@@ -31,7 +39,15 @@ def _next_sequence_id(db: Session, migration_id: int) -> int:
     Under PostgreSQL this is a real row lock; under SQLite (tests) the
     statement is a no-op and concurrency is precluded by the single
     writer thread.
+
+    Avant le verrou on positionne ``lock_timeout=2s`` (Postgres only) —
+    sans timeout, deux emitters concurrents peuvent rester bloqués
+    indéfiniment sur la même ligne ; deux secondes nous ramènent un
+    ``OperationalError`` classifiable en ``ERR_MIG_AUDIT_DEADLOCK`` au
+    lieu de paralyser le worker.
     """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(text("SET LOCAL lock_timeout = '2s'"))
     db.query(Migration).filter(Migration.id == migration_id).with_for_update().first()
     current_max = (
         db.query(func.coalesce(func.max(MigrationEvent.sequence_id), 0))
@@ -97,7 +113,17 @@ def record_event(
     que l'auteur (ex. ``set_migration_status``). Le verrou ``FOR UPDATE``
     sur la migration parent garantit l'absence de collision sur
     ``(migration_id, sequence_id)`` même sous emit concurrent.
+
+    ``actor_type`` est validé côté CRUD pour empêcher un appelant de
+    glisser une chaîne non canonique (``"sys"``, ``"admin"``...) dans le
+    journal d'audit. Le modèle déclare la colonne en ``String(16)``
+    libre — donc cette validation est notre seul garde-fou.
     """
+    if actor_type not in _ALLOWED_ACTOR_TYPES:
+        raise ValueError(
+            f"invalid actor_type {actor_type!r}; "
+            f"must be one of {_ALLOWED_ACTOR_TYPES}"
+        )
     sequence_id = _next_sequence_id(db, migration_id)
     event = MigrationEvent(
         migration_id=migration_id,

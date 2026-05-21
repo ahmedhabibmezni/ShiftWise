@@ -626,7 +626,10 @@ def list_migration_events(
     events = raw[:limit] if has_more else raw
 
     items = [MigrationEventResponse.model_validate(e) for e in events]
-    next_since = items[-1].sequence_id if items else since_sequence_id
+    # ``None`` quand la page est vide : permet au client de distinguer
+    # "rien à reprendre" de "curseur à la position N". Sinon, le client
+    # repasse en boucle la même valeur sans pouvoir détecter la fin.
+    next_since: Optional[int] = items[-1].sequence_id if items else None
     return MigrationEventListResponse(
         items=items,
         total=len(items),

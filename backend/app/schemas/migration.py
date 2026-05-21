@@ -7,7 +7,7 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 import re
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Optional
+from typing import Literal, Optional
 from datetime import datetime
 
 from app.models.migration import MigrationStatus as MigrationStatusEnum
@@ -182,7 +182,10 @@ class MigrationEventResponse(BaseModel):
     # pipeline ; user_id + actor_type='user' pour les actions opérateur
     # (cancel/retry).
     actor_id: Optional[int] = None
-    actor_type: str = "worker"
+    # Canonical set; ``record_event`` rejects anything else at write time.
+    # Pinning the type here gives the OpenAPI schema and any TypeScript
+    # client a closed union to discriminate on.
+    actor_type: Literal["worker", "user", "system"] = "worker"
     message: Optional[str] = None
     payload: Optional[dict] = None
     created_at: datetime
