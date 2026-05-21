@@ -13,6 +13,7 @@ Les rôles système (super_admin, admin, user, viewer) ne peuvent pas être modi
 
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,29 @@ router = APIRouter()
 ROLE_NOT_FOUND = "Rôle non trouvé"
 SYSTEM_ROLE_IMMUTABLE = "Les rôles système ne peuvent pas être modifiés ou supprimés"
 RESOURCE_ROLES = "roles"
+
+
+# --- Response models for the static count / metadata endpoints --------------
+# Declared inline because they are local to this router and have no reuse
+# elsewhere. Adding `response_model=` blocks accidental leaks of internal
+# fields and emits an OpenAPI schema instead of a raw dict.
+
+class RoleCountResponse(BaseModel):
+    total: int = Field(..., description="Total number of roles")
+    system_roles: int = Field(..., description="Number of system roles")
+    custom_roles: int = Field(..., description="Number of custom roles")
+
+
+class PermissionResourcesResponse(BaseModel):
+    resources: list[str]
+    actions: list[str]
+    description: dict[str, str]
+
+
+class RoleUserCountResponse(BaseModel):
+    role_id: int
+    role_name: str
+    user_count: int
 
 
 @router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
@@ -148,7 +172,7 @@ def list_roles(
     return roles
 
 
-@router.get("/count")
+@router.get("/count", response_model=RoleCountResponse)
 def count_roles(
         db: Annotated[Session, Depends(get_db)],
         current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))],
@@ -256,7 +280,7 @@ def initialize_system_roles(
     )
 
 
-@router.get("/permissions/resources")
+@router.get("/permissions/resources", response_model=PermissionResourcesResponse)
 def list_available_resources(
         current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
 ):
@@ -308,6 +332,47 @@ def list_available_resources(
             "settings": "Paramètres système"
         }
     }
+
+
+@router.get(
+    "/{role_id}/users/count",
+    response_model=RoleUserCountResponse,
+)
+def get_role_user_count(
+        role_id: int,
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
+):
+    """
+    Compte le nombre d'utilisateurs ayant un rôle donné.
+
+    **Permissions requises :** `roles:read`
+
+    **Example :**
+    ```
+    GET /api/v1/roles/1/users/count
+    ```
+
+    Note d'ordre : cette route est déclarée avec les routes statiques même
+    si son préfixe ressemble à `/{role_id}` — son chemin complet contient
+    le suffixe statique `/users/count`, et la convention du projet veut
+    que tout suffixe statique précède la route catch-all `/{role_id}`.
+    """
+    role = crud_role.get_role(db, role_id)
+
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ROLE_NOT_FOUND
+        )
+
+    count = crud_role.get_role_users_count(db, role_id)
+
+    return RoleUserCountResponse(
+        role_id=role_id,
+        role_name=role.name,
+        user_count=count,
+    )
 
 
 # ─── Dynamic routes (/{role_id}) — must be declared AFTER all static routes ───
@@ -494,43 +559,6 @@ def delete_role(
         ) from None
 
 
-@router.get("/{role_id}/users/count")
-def get_role_user_count(
-        role_id: int,
-        db: Annotated[Session, Depends(get_db)],
-        current_user: Annotated[User, Depends(check_permission(RESOURCE_ROLES, "read"))]
-):
-    """
-    Compte le nombre d'utilisateurs ayant un rôle donné.
-
-    **Permissions requises :** `roles:read`
-
-    **Example :**
-    ```
-    GET /api/v1/roles/1/users/count
-    ```
-
-    **Response :**
-    ```json
-    {
-        "role_id": 1,
-        "role_name": "admin",
-        "user_count": 5
-    }
-    ```
-    """
-    role = crud_role.get_role(db, role_id)
-
-    if not role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=ROLE_NOT_FOUND
-        )
-
-    count = crud_role.get_role_users_count(db, role_id)
-
-    return {
-        "role_id": role_id,
-        "role_name": role.name,
-        "user_count": count
-    }
+# NB: ``GET /{role_id}/users/count`` est déclarée plus haut, avec les
+# routes statiques, pour respecter la règle « static-before-dynamic »
+# (CLAUDE.md → FastAPI Route Ordering Rule).

@@ -37,6 +37,22 @@ router = APIRouter()
 # Audit I / S1192 — resource literal reused across the router.
 RESOURCE_HYPERVISORS = "hypervisors"
 
+
+class HypervisorStatsResponse(BaseModel):
+    """Shape of ``GET /hypervisors/stats/summary``.
+
+    Declared inline because the response is local to this router and has
+    no reuse elsewhere. The breakdowns are dicts keyed by the enum
+    string value (lowercase), one entry per value present in the result
+    set (zero counts are filtered out at the SQL layer).
+    """
+
+    total: int
+    active: int
+    inactive: int
+    by_type: dict[str, int] = Field(default_factory=dict)
+    by_status: dict[str, int] = Field(default_factory=dict)
+
 # Audit B21 / H — rate-limit budget for POST /hypervisors/test-connection.
 # The endpoint drives an outbound connection with caller-supplied host +
 # credentials: an unthrottled credential/SSRF oracle. The window reuses the
@@ -170,7 +186,7 @@ def create_hypervisor(
 # Routes statiques — DOIVENT être déclarées avant les routes dynamiques /{id}
 # ---------------------------------------------------------------------------
 
-@router.get("/stats/summary")
+@router.get("/stats/summary", response_model=HypervisorStatsResponse)
 def get_hypervisors_stats(
         db: Annotated[Session, Depends(get_db)] = None,
         current_user: Annotated[User, Depends(check_permission(RESOURCE_HYPERVISORS, "read"))] = None
@@ -202,13 +218,13 @@ def get_hypervisors_stats(
         by_type_query = by_type_query.filter(Hypervisor.tenant_id == tenant_id)
         by_status_query = by_status_query.filter(Hypervisor.tenant_id == tenant_id)
 
-    return {
-        "total": total,
-        "active": active,
-        "inactive": total - active,
-        "by_type": {t.value: c for t, c in by_type_query.all() if c > 0},
-        "by_status": {s.value: c for s, c in by_status_query.all() if c > 0},
-    }
+    return HypervisorStatsResponse(
+        total=total,
+        active=active,
+        inactive=total - active,
+        by_type={t.value: c for t, c in by_type_query.all() if c > 0},
+        by_status={s.value: c for s, c in by_status_query.all() if c > 0},
+    )
 
 
 @router.post("/test-connection", response_model=HypervisorTestConnectionResponse)

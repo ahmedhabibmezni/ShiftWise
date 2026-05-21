@@ -15,6 +15,7 @@ import math
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -44,6 +45,14 @@ USER_NOT_FOUND = "Utilisateur non trouvé"
 USER_ACCESS_DENIED = "Accès non autorisé à cet utilisateur"
 SUPER_ADMIN_ROLE = "super_admin"
 RESOURCE_USERS = "users"
+
+
+class TenantUserCountResponse(BaseModel):
+    """Shape of ``GET /users/tenant/{tenant_id}/count``."""
+    tenant_id: str
+    total_users: int
+    active_users: int
+    inactive_users: int
 
 
 def _check_privilege_escalation(current_user: User, role_ids: list[int], db: Session) -> None:
@@ -195,7 +204,7 @@ def list_users(
     )
 
 
-@router.get("/tenant/{tenant_id}/count")
+@router.get("/tenant/{tenant_id}/count", response_model=TenantUserCountResponse)
 def count_users_by_tenant(
         tenant_id: str,
         db: Annotated[Session, Depends(get_db)],
@@ -238,12 +247,12 @@ def count_users_by_tenant(
     active = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=True)
     inactive = crud_user.get_users_count(db, tenant_id=tenant_id, is_active=False)
 
-    return {
-        "tenant_id": tenant_id,
-        "total_users": total,
-        "active_users": active,
-        "inactive_users": inactive
-    }
+    return TenantUserCountResponse(
+        tenant_id=tenant_id,
+        total_users=total,
+        active_users=active,
+        inactive_users=inactive,
+    )
 
 
 # ─── Dynamic routes (/{user_id}) — must be declared AFTER all static routes ───
