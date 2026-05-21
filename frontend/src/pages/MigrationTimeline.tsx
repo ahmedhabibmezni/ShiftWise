@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertOctagon,
@@ -29,7 +29,9 @@ import { formatRelativeTime } from "@/lib/format";
  * observed event and decays toward 15 s while the migration sits in the
  * same status. Polling stops as soon as the migration reaches a terminal
  * status. The cursor (`since_sequence_id`) is held in a ref so refetches
- * fetch deltas only.
+ * fetch deltas only; the accumulated event list lives in `useState` so
+ * appending a delta triggers a React re-render (a ref-only accumulator
+ * silently dropped frames during steady-state delta polls).
  *
  * Ordering follows `sequence_id` ASC — never `created_at` — because Q2
  * pinned that as the canonical ordering primitive for the audit log.
@@ -42,22 +44,17 @@ export function MigrationTimeline({
   status: MigrationStatus;
 }) {
   const sinceRef = useRef<number>(0);
-  const eventsRef = useRef<MigrationEventResponse[]>([]);
   const intervalRef = useRef<number | null>(null);
+  const [events, setEvents] = useState<MigrationEventResponse[]>([]);
 
   const query = useQuery({
     queryKey: ["migration", migrationId, "events"],
     queryFn: async ({ signal }) => {
-      const page = await fetchMigrationEvents(migrationId, {
+      return fetchMigrationEvents(migrationId, {
         sinceSequenceId: sinceRef.current,
         limit: 200,
         signal,
       });
-      if (page.items.length > 0) {
-        eventsRef.current = [...eventsRef.current, ...page.items];
-        sinceRef.current = page.next_since_sequence_id ?? sinceRef.current;
-      }
-      return page;
     },
     refetchInterval: (q) => {
       const data = q.state.data;
@@ -72,8 +69,22 @@ export function MigrationTimeline({
     },
   });
 
-  const events = eventsRef.current;
+  // Append-on-fetch effect — merges every successful delta into the
+  // accumulator state. Deduping by sequence_id makes the merge idempotent
+  // so a duplicate refetch (refocus / network retry) never doubles up.
+  useEffect(() => {
+    const page = query.data;
+    if (!page || page.items.length === 0) return;
+    setEvents((prev) => {
+      const known = new Set(prev.map((e) => e.sequence_id));
+      const fresh = page.items.filter((e) => !known.has(e.sequence_id));
+      return fresh.length > 0 ? [...prev, ...fresh] : prev;
+    });
+    sinceRef.current = page.next_since_sequence_id ?? sinceRef.current;
+  }, [query.data]);
+
   const isLoading = query.isPending && events.length === 0;
+  const isError = query.isError && events.length === 0;
 
   return (
     <section data-testid="migration-timeline">
@@ -95,7 +106,25 @@ export function MigrationTimeline({
         </div>
       )}
 
-      {!isLoading && events.length === 0 && (
+      {isError && (
+        <div
+          role="alert"
+          data-testid="timeline-error"
+          className="rounded-xl bg-[var(--surface-soft)] p-4 text-[13px]"
+          style={{ color: "var(--alert-critical)" }}
+        >
+          <span className="font-medium">Failed to load timeline.</span>{" "}
+          <button
+            type="button"
+            onClick={() => query.refetch()}
+            className="underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!isLoading && !isError && events.length === 0 && (
         <div className="rounded-xl bg-[var(--surface-soft)] p-4 text-[13px] text-[var(--text-muted)]">
           No events recorded yet for this migration.
         </div>

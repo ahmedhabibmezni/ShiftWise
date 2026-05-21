@@ -138,6 +138,22 @@ describe("MigrationTimeline", () => {
     });
   });
 
+  it("renders an error banner with a Retry button when the fetch fails", async () => {
+    server.use(
+      http.get("*/api/v1/migrations/500/events", () =>
+        HttpResponse.json({ detail: "Internal Server Error" }, { status: 500 }),
+      ),
+    );
+
+    renderTimeline({ migrationId: 500, status: "transferring" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("timeline-error")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    expect(screen.queryByText(/no events recorded yet/i)).not.toBeInTheDocument();
+  });
+
   it("renders classified_error rows with the error code in the headline", async () => {
     server.use(
       http.get("*/api/v1/migrations/7/events", () =>

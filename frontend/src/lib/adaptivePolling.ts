@@ -19,6 +19,28 @@ export const TERMINAL_MIGRATION_STATUSES: ReadonlySet<MigrationStatus> = new Set
   ["completed", "failed", "cancelled", "rolled_back"],
 );
 
+/**
+ * Every MigrationStatus value the backend is allowed to emit (from the
+ * SQLAlchemy enum). The list lets us detect a status the frontend has no
+ * mapping for — typo, new enum value forgotten in a deploy, lowercase
+ * mismatch — and surface it as a console warning instead of silently
+ * polling forever at the cap.
+ */
+const KNOWN_MIGRATION_STATUSES: ReadonlySet<MigrationStatus> = new Set([
+  "pending",
+  "validating",
+  "preparing",
+  "transferring",
+  "configuring",
+  "starting",
+  "verifying",
+  "completed",
+  "failed",
+  "cancelled",
+  "rollback",
+  "rolled_back",
+]);
+
 /** Initial cadence right after a transition is observed (ms). */
 export const INITIAL_POLL_MS = 2000;
 
@@ -48,6 +70,16 @@ export function nextAdaptiveInterval(
 ): number | false {
   if (TERMINAL_MIGRATION_STATUSES.has(input.status)) {
     return false;
+  }
+  if (!KNOWN_MIGRATION_STATUSES.has(input.status)) {
+    // Surface backend / frontend drift loudly. The poll continues at the
+    // standard cadence so a typo never silently freezes the UI forever.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `nextAdaptiveInterval: unknown migration status ${JSON.stringify(
+        input.status,
+      )} - polling continues at the cap; check MigrationStatus enum sync`,
+    );
   }
   if (input.prevInterval == null || input.observedNewEvent) {
     return INITIAL_POLL_MS;

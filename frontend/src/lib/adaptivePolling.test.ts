@@ -8,7 +8,7 @@
  *      capped at 15 000 ms.
  *   3. A terminal status returns `false` so the client stops polling.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INITIAL_POLL_MS,
   MAX_POLL_MS,
@@ -95,5 +95,56 @@ describe("nextAdaptiveInterval", () => {
     expect(TERMINAL_MIGRATION_STATUSES).toEqual(
       new Set(["completed", "failed", "cancelled", "rolled_back"]),
     );
+  });
+
+  describe("unknown-status guard", () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it("logs a console.warn when status is not a known MigrationStatus", () => {
+      // cast bypasses the union type — we are simulating a backend drift
+      // (typo, new enum value, lowercase mismatch) the frontend has not
+      // been updated for.
+      const interval = nextAdaptiveInterval({
+        status: "weird_state" as never,
+        observedNewEvent: false,
+        prevInterval: null,
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [message] = warnSpy.mock.calls[0];
+      expect(message).toMatch(/unknown migration status/i);
+      expect(message).toMatch(/weird_state/);
+      // The poll itself MUST continue — silent freeze is worse than noisy.
+      expect(interval).toBe(INITIAL_POLL_MS);
+    });
+
+    it("does not warn for any KNOWN_MIGRATION_STATUSES member", () => {
+      const knownNonTerminals = [
+        "pending",
+        "validating",
+        "preparing",
+        "transferring",
+        "configuring",
+        "starting",
+        "verifying",
+        "rollback",
+      ] as const;
+      for (const s of knownNonTerminals) {
+        nextAdaptiveInterval({
+          status: s,
+          observedNewEvent: false,
+          prevInterval: null,
+        });
+      }
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 });
