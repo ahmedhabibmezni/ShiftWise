@@ -167,13 +167,22 @@ class MigrationRollback(BaseModel):
 
 # Schéma événement audit-log
 class MigrationEventResponse(BaseModel):
-    """Une entrée du journal d'audit d'une migration (Audit J1)."""
+    """Une entrée du journal d'audit d'une migration (Audit J1, US3)."""
     id: int
     migration_id: int
     tenant_id: str
+    # Q2 — primitif d'ordre canonique. Le client (timeline UI, audit
+    # endpoint) trie sur ce champ et l'utilise comme curseur de pagination
+    # (`since_sequence_id` du polling delta), JAMAIS sur `created_at`.
+    sequence_id: int
     event_type: MigrationEventTypeEnum
     from_status: Optional[str] = None
     to_status: Optional[str] = None
+    # Acteur — None + actor_type='worker' pour les events émis par le
+    # pipeline ; user_id + actor_type='user' pour les actions opérateur
+    # (cancel/retry).
+    actor_id: Optional[int] = None
+    actor_type: str = "worker"
     message: Optional[str] = None
     payload: Optional[dict] = None
     created_at: datetime
@@ -184,7 +193,15 @@ class MigrationEventResponse(BaseModel):
 class MigrationEventListResponse(BaseModel):
     """Réponse paginée pour le journal d'audit d'une migration."""
     items: list[MigrationEventResponse]
+    # Ancien champ retenu pour back-compat des appelants existants
+    # (tests + clients qui n'ont pas encore migré vers le polling delta).
     total: int
+    # Polling delta — le client repasse cette valeur en
+    # `?since_sequence_id=` au prochain appel.
+    next_since_sequence_id: Optional[int] = None
+    # `True` quand la page a été tronquée par `limit` ; le client doit
+    # repasser un autre appel pour récupérer la suite.
+    has_more: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

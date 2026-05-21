@@ -86,7 +86,7 @@ def test_create_migration_writes_initial_pending_event(db_session):
     events = crud_migration_event.list_events_for_migration(db_session, mig.id)
     assert len(events) == 1
     initial = events[0]
-    assert initial.event_type == MigrationEventType.STATUS_CHANGE
+    assert initial.event_type == MigrationEventType.STATE_TRANSITION
     assert initial.from_status is None
     assert initial.to_status == MigrationStatus.PENDING.value
     assert initial.tenant_id == "t1"
@@ -127,7 +127,7 @@ def test_failed_transition_records_error_code_in_payload(db_session):
 
     events = crud_migration_event.list_events_for_migration(db_session, mig.id)
     failure = events[-1]
-    assert failure.event_type == MigrationEventType.ERROR
+    assert failure.event_type == MigrationEventType.CLASSIFIED_ERROR
     assert failure.to_status == MigrationStatus.FAILED.value
     assert failure.message == "No space"
     assert failure.payload == {"error_code": "ERR_DISK_FULL"}
@@ -146,7 +146,7 @@ def test_start_endpoint_records_pending_to_validating_event(db_session, monkeypa
         e for e in events if e.to_status == MigrationStatus.VALIDATING.value
     )
     assert transition.from_status == MigrationStatus.PENDING.value
-    assert transition.event_type == MigrationEventType.STATUS_CHANGE
+    assert transition.event_type == MigrationEventType.STATE_TRANSITION
 
 
 def test_cancel_endpoint_records_reason_as_audit_message(db_session, monkeypatch):

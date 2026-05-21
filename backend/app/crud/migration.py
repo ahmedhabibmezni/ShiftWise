@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.migration_event import MigrationEvent, MigrationEventType
+from app.crud.migration_event import record_event as _record_event
 
 
 def get_migration(
@@ -145,14 +146,18 @@ def create_migration(
     db.flush()  # obtient l'id pour le FK de l'événement initial
 
     # Audit J1 — première entrée du journal: création de la migration.
-    db.add(MigrationEvent(
-        tenant_id=migration.tenant_id,
+    # Allocation atomique du sequence_id via record_event() (US3 Q2).
+    _record_event(
+        db,
         migration_id=migration.id,
-        event_type=MigrationEventType.STATUS_CHANGE,
+        tenant_id=migration.tenant_id,
+        event_type=MigrationEventType.STATE_TRANSITION,
         from_status=None,
         to_status=MigrationStatus.PENDING.value,
+        actor_type="system",
         message="Migration created",
-    ))
+        commit=False,
+    )
 
     db.commit()
     db.refresh(migration)
@@ -274,24 +279,27 @@ def set_migration_status(
     # Celery qui repose le même statut) pour ne pas polluer l'historique.
     if old_status != status:
         event_type = (
-            MigrationEventType.ERROR
+            MigrationEventType.CLASSIFIED_ERROR
             if status == MigrationStatus.FAILED
-            else MigrationEventType.STATUS_CHANGE
+            else MigrationEventType.STATE_TRANSITION
         )
         payload = (
             {"error_code": migration.error_code}
             if migration.error_code
             else None
         )
-        db.add(MigrationEvent(
-            tenant_id=migration.tenant_id,
+        _record_event(
+            db,
             migration_id=migration.id,
+            tenant_id=migration.tenant_id,
             event_type=event_type,
             from_status=old_status.value if old_status else None,
             to_status=status.value,
+            actor_type="worker",
             message=migration.error_message,
             payload=payload,
-        ))
+            commit=False,
+        )
 
     db.commit()
     db.refresh(migration)

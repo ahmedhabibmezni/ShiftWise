@@ -18,6 +18,7 @@ from app.api.deps import check_permission
 from app.core.celery_app import celery_app
 from app.models.user import User
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
+from app.models.migration_event import MigrationEventType
 from app.models.virtual_machine import VirtualMachine
 from app.models.hypervisor import Hypervisor
 from app.models.conversion import ConversionGroup
@@ -571,17 +572,33 @@ def list_migration_events(
         migration_id: int,
         limit: Annotated[
             int,
-            Query(ge=1, le=500, description="Nombre maximum d'événements à retourner"),
+            Query(ge=1, le=1000, description="Nombre maximum d'événements à retourner"),
         ] = 200,
+        since_sequence_id: Annotated[
+            int,
+            Query(
+                ge=0,
+                description="Curseur de pagination delta (sequence_id strictement supérieur)",
+            ),
+        ] = 0,
+        event_type: Annotated[
+            Optional[MigrationEventType],
+            Query(description="Filtre optionnel sur le type d'événement"),
+        ] = None,
         db: Annotated[Session, Depends(get_db)] = None,
         current_user: Annotated[User, Depends(check_permission(RESOURCE_MIGRATIONS, "read"))] = None
 ):
     """
-    Journal d'audit append-only d'une migration (Audit J1).
+    Journal d'audit append-only d'une migration (US3).
 
-    Retourne les transitions de la machine à états (du plus ancien au plus
-    récent) plus toute erreur enregistrée. Filtré par tenant pour les
-    utilisateurs non-superuser.
+    Retourne les événements (transitions, stage_event, classified_error,
+    heartbeat) ordonnés par ``sequence_id`` ascending. Filtré par tenant
+    pour les utilisateurs non-superuser ; un accès cross-tenant renvoie
+    404 (jamais 403 — voir contracts/migration-events.md § 404).
+
+    Le client polling-delta passe le ``next_since_sequence_id`` de la
+    réponse précédente comme ``?since_sequence_id=`` pour ne récupérer
+    que les nouveaux événements.
 
     **Permissions requises :** migrations:read
     """
@@ -596,11 +613,26 @@ def list_migration_events(
             detail=f"Migration avec l'ID {migration_id} introuvable",
         )
 
-    events = crud_migration_event.list_events_for_migration(
-        db, migration_id, tenant_id=tenant_id, limit=limit,
+    # Fetch limit + 1 pour détecter has_more sans deuxième requête.
+    raw = crud_migration_event.list_events_for_migration(
+        db,
+        migration_id,
+        tenant_id=tenant_id,
+        since_sequence_id=since_sequence_id,
+        event_type=event_type,
+        limit=limit + 1,
     )
+    has_more = len(raw) > limit
+    events = raw[:limit] if has_more else raw
+
     items = [MigrationEventResponse.model_validate(e) for e in events]
-    return MigrationEventListResponse(items=items, total=len(items))
+    next_since = items[-1].sequence_id if items else since_sequence_id
+    return MigrationEventListResponse(
+        items=items,
+        total=len(items),
+        next_since_sequence_id=next_since,
+        has_more=has_more,
+    )
 
 
 @router.put("/{migration_id}/progress", response_model=MigrationResponse)
