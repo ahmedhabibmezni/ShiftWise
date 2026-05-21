@@ -68,3 +68,8 @@ scikit-learn==1.5.2
 joblib==1.4.2
 numpy==1.26.4
 pandas==2.2.1
+
+# Reports — PDF export (US5). ReportLab is pure-Python, no system-package
+# requirement, so it slots into the existing OpenShift image without
+# adding apt layers. BSD-style license.
+reportlab==4.2.5
