@@ -19,9 +19,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import check_permission
 from app.api.v1.migrations import get_migrations_stats
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.services.reports import REPORTS_PDF_ROW_CAP, generate_reports_pdf
+from app.services.reports import generate_reports_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,19 +42,17 @@ def export_reports_pdf(
 
     RBAC + tenant scoping are delegated to ``get_migrations_stats``
     (which is the canonical source of truth for both shapes). Scopes
-    above ``REPORTS_PDF_ROW_CAP`` rows return 413; the operator should
-    narrow the scope and retry.
+    whose combined breakdown row count exceeds
+    ``settings.REPORTS_PDF_MAX_BREAKDOWN_ROWS`` return 413; the operator
+    should narrow the scope and retry. The totals header table is fixed
+    size and does NOT count against the cap.
 
     **Permissions required:** ``reports:read``.
     """
     stats = get_migrations_stats(db, current_user)
 
-    total_rows = (
-        1
-        + len(stats.by_hypervisor)
-        + len(stats.by_tenant)
-    )
-    if total_rows > REPORTS_PDF_ROW_CAP:
+    breakdown_rows = len(stats.by_hypervisor) + len(stats.by_tenant)
+    if breakdown_rows > settings.REPORTS_PDF_MAX_BREAKDOWN_ROWS:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=(

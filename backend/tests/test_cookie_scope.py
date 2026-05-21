@@ -1,22 +1,38 @@
 """
 US4 — REFRESH_COOKIE_DOMAIN host-only guard (T043, T049).
 
-The constitution forbids a wildcard-subdomain cookie scope. The startup
-guard in ``app.main`` MUST refuse to start if ``REFRESH_COOKIE_DOMAIN``
-is set to a non-empty value, regardless of how it was supplied.
+The constitution forbids a wildcard-subdomain cookie scope. The lifespan
+guard in ``app.main`` MUST refuse to start the FastAPI process if
+``REFRESH_COOKIE_DOMAIN`` is set to a non-empty value, regardless of
+how it was supplied.
+
+The guard runs in the FastAPI ``lifespan`` (not at module import) so
+that Celery workers and ad-hoc scripts importing ``app.main``
+transitively do NOT get killed by an API-layer setting. Tests exercise
+the guard by driving the lifespan generator directly.
 """
 
 from __future__ import annotations
 
-import importlib
+import asyncio
 import logging
-import sys
 
 import pytest
 
 
-def _reload_main_with_cookie_domain(monkeypatch, value: str | None):
-    """Force-reload app.main with a patched setting and capture exits."""
+async def _run_lifespan_once() -> None:
+    """Enter ``app.main.lifespan(app)`` and immediately exit.
+
+    Any ``sys.exit`` raised in the startup block propagates out of the
+    ``async with`` as a ``SystemExit`` exception, which the test catches.
+    """
+    from app.main import app, lifespan
+
+    async with lifespan(app):
+        return None
+
+
+def _patch_cookie_domain(monkeypatch, value: str | None) -> None:
     from app.core import config as config_module
 
     monkeypatch.setattr(
@@ -25,17 +41,13 @@ def _reload_main_with_cookie_domain(monkeypatch, value: str | None):
         value,
         raising=False,
     )
-    # Ensure a fresh import so the startup guard runs against the patched value.
-    if "app.main" in sys.modules:
-        del sys.modules["app.main"]
 
 
 def test_empty_cookie_domain_does_not_block_startup(monkeypatch, caplog):
-    _reload_main_with_cookie_domain(monkeypatch, None)
+    _patch_cookie_domain(monkeypatch, None)
     caplog.set_level(logging.CRITICAL)
 
-    # Importing should not call sys.exit.
-    import app.main  # noqa: F401 — import is the assertion
+    asyncio.run(_run_lifespan_once())
 
     critical = [r for r in caplog.records if r.levelno >= logging.CRITICAL]
     assert not any(
@@ -44,13 +56,11 @@ def test_empty_cookie_domain_does_not_block_startup(monkeypatch, caplog):
 
 
 def test_populated_cookie_domain_aborts_startup(monkeypatch, caplog):
-    _reload_main_with_cookie_domain(
-        monkeypatch, ".apps.migration.nextstep-it.com",
-    )
+    _patch_cookie_domain(monkeypatch, ".apps.migration.nextstep-it.com")
     caplog.set_level(logging.CRITICAL)
 
     with pytest.raises(SystemExit) as exc_info:
-        import app.main  # noqa: F401 — import triggers the guard
+        asyncio.run(_run_lifespan_once())
 
     assert exc_info.value.code == 1
     assert any(
@@ -65,12 +75,23 @@ def test_empty_string_cookie_domain_is_treated_as_unset(monkeypatch, caplog):
     value) must not be punished — empty string is "unset" in production
     deployment overlays where the variable is declared but blank.
     """
-    _reload_main_with_cookie_domain(monkeypatch, "")
+    _patch_cookie_domain(monkeypatch, "")
     caplog.set_level(logging.CRITICAL)
 
-    import app.main  # noqa: F401
+    asyncio.run(_run_lifespan_once())
 
     critical = [r for r in caplog.records if r.levelno >= logging.CRITICAL]
     assert not any(
         "REFRESH_COOKIE_DOMAIN" in r.getMessage() for r in critical
     )
+
+
+def test_celery_worker_importing_app_main_does_not_exit(monkeypatch):
+    """Regression — the previous module-level guard killed any process
+    that imported ``app.main`` (including Celery workers that pulled it
+    in transitively). The lifespan-scoped guard must NOT fire on a bare
+    import.
+    """
+    _patch_cookie_domain(monkeypatch, ".apps.example.com")
+    # A bare import must not raise SystemExit even with the bad setting.
+    import app.main  # noqa: F401 — the import itself is the assertion

@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     SERVER_HOST: str = "127.0.0.1"
+    SERVER_PORT: int = 8000
+
+    # Synchronous PDF export cap — number of *breakdown rows* the endpoint
+    # will render before returning HTTP 413. The totals header table is
+    # fixed-size and does not count against this cap. Operators raise the
+    # cap through this setting rather than editing the source.
+    REPORTS_PDF_MAX_BREAKDOWN_ROWS: int = 1000
 
     # Database Configuration
     DATABASE_HOST: str

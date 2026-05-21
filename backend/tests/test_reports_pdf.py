@@ -71,7 +71,14 @@ def _seed_one_completed(db_session, tenant: str = "tenant-a"):
     db_session.add(h)
     db_session.commit()
     db_session.refresh(h)
-    vm = VirtualMachine(name="vm-1", source_hypervisor_id=h.id, tenant_id=tenant)
+    vm = VirtualMachine(
+        name="vm-1",
+        source_hypervisor_id=h.id,
+        tenant_id=tenant,
+        cpu_cores=1,
+        memory_mb=512,
+        disk_gb=10,
+    )
     db_session.add(vm)
     db_session.commit()
     db_session.refresh(vm)

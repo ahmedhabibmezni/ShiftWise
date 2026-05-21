@@ -33,10 +33,15 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.config import settings
 from app.schemas.migration import MigrationStats, MigrationStatsByGroup
 
-# Synchronous-export cap. Larger scopes return 413 from the endpoint.
-REPORTS_PDF_ROW_CAP = 1000
+
+# Backwards-compatible alias for callers and tests that still imported the
+# module-level constant. The authoritative source is now
+# ``settings.REPORTS_PDF_MAX_BREAKDOWN_ROWS`` — bump it via env / Settings
+# instead of editing this file.
+REPORTS_PDF_ROW_CAP = settings.REPORTS_PDF_MAX_BREAKDOWN_ROWS
 
 
 def generate_reports_pdf(
