@@ -70,6 +70,9 @@ def _seed_vm(db, hypervisor_id: int, tenant: str) -> VirtualMachine:
         name=f"vm-{tenant}",
         source_hypervisor_id=hypervisor_id,
         tenant_id=tenant,
+        cpu_cores=1,
+        memory_mb=512,
+        disk_gb=10,
     )
     db.add(vm)
     db.commit()

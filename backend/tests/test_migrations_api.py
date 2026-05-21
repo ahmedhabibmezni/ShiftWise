@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from kombu.exceptions import OperationalError as BrokerOperationalError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -58,7 +59,10 @@ def _superuser() -> User:
 def test_start_reverts_to_pending_when_broker_unreachable(db_session, monkeypatch):
     mig = _seed_pending_migration(db_session)
     broker_down = MagicMock()
-    broker_down.delay.side_effect = RuntimeError("broker unreachable")
+    # Use the canonical kombu broker-down exception that the narrowed
+    # except in start_migration actually catches (a bare RuntimeError now
+    # propagates to the global handler as a 500 — programmer-bug class).
+    broker_down.delay.side_effect = BrokerOperationalError("broker unreachable")
     monkeypatch.setattr("app.api.v1.migrations.run_migration", broker_down)
 
     with pytest.raises(HTTPException) as exc:
@@ -68,6 +72,22 @@ def test_start_reverts_to_pending_when_broker_unreachable(db_session, monkeypatc
     assert exc.value.status_code == 503
     db_session.refresh(mig)
     assert mig.status == MigrationStatus.PENDING
+
+
+def test_start_does_not_swallow_non_broker_runtime_error(db_session, monkeypatch):
+    """A RuntimeError from .delay() is NOT a broker outage — it could be a
+    serialization bug, an import error, or any other programmer mistake.
+    The narrow except in start_migration must NOT downgrade it to 503;
+    it must propagate so the global handler returns 500 with a stack
+    trace and the operator notices.
+    """
+    mig = _seed_pending_migration(db_session)
+    bug = MagicMock()
+    bug.delay.side_effect = RuntimeError("argument out of range")
+    monkeypatch.setattr("app.api.v1.migrations.run_migration", bug)
+
+    with pytest.raises(RuntimeError):
+        start_migration(mig.id, db_session, _superuser())
 
 
 def test_start_enqueues_and_marks_started_when_broker_up(db_session, monkeypatch):
