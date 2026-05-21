@@ -37,6 +37,8 @@ import {
 } from "@/api/migrations";
 import { listVms, type Vm } from "@/api/vms";
 import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
+import { PerHypervisorPanel } from "@/pages/PerHypervisorPanel";
+import { PerTenantPanel } from "@/pages/PerTenantPanel";
 
 const REPORT_PAGE_SIZE = 100;
 const REFETCH_MS = 60_000;
@@ -94,6 +96,10 @@ export default function Reports() {
         total={items.length}
         isLoading={recentQuery.isPending}
       />
+
+      <PerHypervisorPanel rows={statsQuery.data?.by_hypervisor ?? []} />
+
+      <PerTenantPanel rows={statsQuery.data?.by_tenant ?? []} />
 
       <Panel
         kicker={`${items.length} migrations · last ${REPORT_PAGE_SIZE} max`}
