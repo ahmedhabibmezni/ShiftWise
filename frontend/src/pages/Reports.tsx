@@ -7,10 +7,13 @@ import {
   CheckCircle2,
   Download,
   FileBarChart,
+  FileText,
   Gauge,
   HardDrive,
   XCircle,
 } from "lucide-react";
+import toast from "react-hot-toast";
+import { describeError } from "@/lib/errors";
 import { MigrationStatusBadge, type MigrationStatusKey } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
@@ -31,6 +34,7 @@ import {
 import { downloadCsv, rowsToCsv, type CsvColumn } from "@/lib/csv";
 import {
   MIGRATION_STATUSES,
+  downloadReportsPdf,
   listMigrations,
   type Migration,
   type MigrationStatus,
@@ -74,14 +78,30 @@ export default function Reports() {
         title="Reports"
         description="Historical migration outcomes for audit, SLA review, and capacity planning."
         actions={
-          <Button
-            variant="primary"
-            leadingIcon={<Icon icon={Download} size={14} strokeWidth={2.25} />}
-            disabled={items.length === 0}
-            onClick={() => downloadCsv(buildFilename(), csv)}
-          >
-            Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              leadingIcon={<Icon icon={FileText} size={14} strokeWidth={2.25} />}
+              onClick={async () => {
+                try {
+                  await downloadReportsPdf();
+                  toast.success("Report PDF downloaded");
+                } catch (err) {
+                  toast.error(describeError(err, "PDF export failed"));
+                }
+              }}
+            >
+              Export PDF
+            </Button>
+            <Button
+              variant="primary"
+              leadingIcon={<Icon icon={Download} size={14} strokeWidth={2.25} />}
+              disabled={items.length === 0}
+              onClick={() => downloadCsv(buildFilename(), csv)}
+            >
+              Export CSV
+            </Button>
+          </div>
         }
       />
 

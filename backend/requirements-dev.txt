@@ -21,6 +21,9 @@ httpx==0.26.0
 # In-memory Redis used by the login-throttle + auth-store tests so the
 # CI suite doesn't need a live Redis broker.
 fakeredis==2.21.3
+# PDF inspection — test_reports_pdf reads back the ReportLab output and
+# asserts its contents (US5).
+pypdf==5.1.0
 
 # Linting & type checking
 black==23.12.1

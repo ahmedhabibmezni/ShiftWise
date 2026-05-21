@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db, init_db
-from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
+from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions, reports
 
 logger = logging.getLogger("shiftwise")
 
@@ -311,6 +311,12 @@ app.include_router(
     conversions.router,
     prefix=f"{settings.API_V1_PREFIX}/conversions",
     tags=["Conversions"],
+)
+
+app.include_router(
+    reports.router,
+    prefix=f"{settings.API_V1_PREFIX}/reports",
+    tags=["Reports"],
 )
 
 

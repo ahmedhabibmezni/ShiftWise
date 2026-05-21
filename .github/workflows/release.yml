@@ -1,0 +1,200 @@
+name: release
+
+# Trigger on semantic-version tags pushed to the default branch
+# (e.g. v1.0.0, v1.0.0-rc1). All quality gates run before the build /
+# push / deploy phase; any failure stops the workflow before a tag
+# becomes visible in the registry.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality-gates:
+    name: quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: install backend deps
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff
+        working-directory: backend
+        run: ruff check app/ tests/
+
+      - name: pytest with coverage gate
+        working-directory: backend
+        env:
+          # Generate an ephemeral Fernet key for the test session so
+          # Settings() boots cleanly. conftest.py also does this, but
+          # we set it at the workflow level for defence-in-depth.
+          SHIFTWISE_FERNET_KEY: ${{ secrets.CI_FERNET_KEY }}
+        run: pytest tests/ -v --tb=short --cov=app --cov-fail-under=80
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: install frontend deps
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: frontend typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: frontend vitest
+        working-directory: frontend
+        run: npm test
+
+      - name: frontend vite build
+        working-directory: frontend
+        run: npm run build
+
+  build-push:
+    name: build, tag and push images
+    runs-on: ubuntu-latest
+    needs: quality-gates
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: build & push backend with bounded retry
+        # Three attempts with exponential backoff (30s / 2min / 8min)
+        # absorbs registry hiccups; the run fails cleanly on retry
+        # exhaustion (US5 R7, FR-012).
+        run: |
+          set -euo pipefail
+          attempt=1
+          delay=30
+          until docker buildx build \
+              --platform linux/amd64 \
+              --push \
+              --tag docker.io/dida1609/shiftwise-backend:${{ github.ref_name }} \
+              --tag docker.io/dida1609/shiftwise-backend:sha-${{ github.sha }} \
+              --file backend/Dockerfile \
+              backend; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::backend image push failed after $attempt attempts"
+              exit 1
+            fi
+            echo "::warning::backend push attempt $attempt failed; sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: build & push frontend with bounded retry
+        run: |
+          set -euo pipefail
+          attempt=1
+          delay=30
+          until docker buildx build \
+              --platform linux/amd64 \
+              --push \
+              --tag docker.io/dida1609/shiftwise-frontend:${{ github.ref_name }} \
+              --tag docker.io/dida1609/shiftwise-frontend:sha-${{ github.sha }} \
+              --file frontend/Dockerfile \
+              frontend; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::frontend image push failed after $attempt attempts"
+              exit 1
+            fi
+            echo "::warning::frontend push attempt $attempt failed; sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+  deploy-staging:
+    name: deploy to OpenShift staging
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install oc
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: latest
+
+      - name: oc login
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+        run: |
+          oc login --token="$OPENSHIFT_TOKEN" --server="$OPENSHIFT_SERVER" --insecure-skip-tls-verify=false
+
+      - name: apply staging overlay with bounded retry
+        run: |
+          set -euo pipefail
+          attempt=1
+          delay=30
+          until oc apply -k backend/openshift/staging/; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::oc apply failed after $attempt attempts"
+              exit 1
+            fi
+            echo "::warning::oc apply attempt $attempt failed; sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: wait for rollout
+        run: |
+          set -euo pipefail
+          attempt=1
+          delay=30
+          until oc rollout status deploy/shiftwise-backend -n shiftwise-staging --timeout=10m \
+              && oc rollout status deploy/shiftwise-worker -n shiftwise-staging --timeout=10m; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::rollout failed after $attempt attempts"
+              exit 1
+            fi
+            echo "::warning::rollout attempt $attempt failed; sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: summary
+        run: |
+          echo "## Released ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Images: shiftwise-backend:${{ github.ref_name }}, shiftwise-frontend:${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Staging namespace: shiftwise-staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "Production promotion is manual (constitution Governance §4)." >> "$GITHUB_STEP_SUMMARY"

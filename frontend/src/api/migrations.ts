@@ -187,6 +187,33 @@ export type FetchMigrationEventsParams = {
 };
 
 /**
+ * Fetch the migration Reports PDF as a binary blob and trigger a
+ * browser download. Uses the same RBAC as `GET /migrations/stats/summary`.
+ *
+ * The filename is derived from the server-supplied `Content-Disposition`
+ * header; we fall back to a stamped default if the browser cannot parse
+ * the header.
+ */
+export async function downloadReportsPdf(): Promise<void> {
+  const res = await api.get("/reports/export/pdf", {
+    responseType: "blob",
+  });
+  const blob = res.data as Blob;
+  const disposition = res.headers["content-disposition"] as string | undefined;
+  const matched = disposition?.match(/filename="?([^";]+)"?/i);
+  const filename = matched?.[1] ?? `shiftwise-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Fetch a page of audit events for a migration. The caller passes the
  * previous response's `next_since_sequence_id` as `sinceSequenceId` to
  * fetch only new events (delta polling).
