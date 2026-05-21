@@ -45,6 +45,11 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
         ErrorSpec("ERR_NFS_INSUFFICIENT_SPACE", ErrorBucket.CONFIGURABLE, "Not enough free space on NFS"),
         ErrorSpec("ERR_TOOL_NOT_FOUND", ErrorBucket.CONFIGURABLE, "Conversion tool not installed"),
         ErrorSpec("ERR_HV_AUTH_FAILED", ErrorBucket.CONFIGURABLE, "Hypervisor authentication failed"),
+        ErrorSpec(
+            "ERR_HV_CREDENTIALS_MISSING",
+            ErrorBucket.CONFIGURABLE,
+            "No usable hypervisor credential (ciphertext absent or undecryptable)",
+        ),
         ErrorSpec("ERR_HV_UNREACHABLE", ErrorBucket.CONFIGURABLE, "Hypervisor unreachable"),
         ErrorSpec("ERR_K8S_JOB_DENIED", ErrorBucket.CONFIGURABLE, "Kubernetes refused the conversion Job"),
         ErrorSpec("ERR_VM_RUNNING_NEEDS_COLD", ErrorBucket.CONFIGURABLE, "VM is running but cold pull requested"),

@@ -102,11 +102,18 @@ class ProxmoxPuller:
                 cause=e,
             ) from e
 
+        password = hv.password_plain
+        if not password:
+            raise ConversionError(
+                "ERR_HV_CREDENTIALS_MISSING",
+                f"No usable credential for Proxmox host {hv.host} "
+                f"(ciphertext absent or undecryptable; see vault.decrypt log lines)",
+            )
         try:
             client = ProxmoxAPI(
                 hv.host,
                 user=hv.username,
-                password=hv.password_plain,
+                password=password,
                 verify_ssl=bool(hv.verify_ssl),
                 port=hv.port or 8006,
             )
@@ -239,6 +246,13 @@ class ProxmoxPuller:
                 cause=e,
             ) from e
 
+        password = hv.password_plain
+        if not password:
+            raise ConversionError(
+                "ERR_HV_CREDENTIALS_MISSING",
+                f"No usable credential for Proxmox host {hv.host} "
+                f"(ciphertext absent or undecryptable; see vault.decrypt log lines)",
+            )
         ssh = paramiko.SSHClient()
         apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
         try:
@@ -246,7 +260,7 @@ class ProxmoxPuller:
                 hostname=hv.host,
                 port=22,
                 username=hv.username,
-                password=hv.password_plain,
+                password=password,
                 timeout=15,
                 allow_agent=False,
                 look_for_keys=False,
@@ -300,6 +314,13 @@ class ProxmoxPuller:
         partial = dest_path.with_suffix(dest_path.suffix + ".partial")
         h = hashlib.sha256()
 
+        password = hv.password_plain
+        if not password:
+            raise ConversionError(
+                "ERR_HV_CREDENTIALS_MISSING",
+                f"No usable credential for Proxmox host {hv.host} "
+                f"(ciphertext absent or undecryptable; see vault.decrypt log lines)",
+            )
         ssh = paramiko.SSHClient()
         apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
         try:
@@ -307,7 +328,7 @@ class ProxmoxPuller:
                 hostname=hv.host,
                 port=22,
                 username=hv.username,
-                password=hv.password_plain,
+                password=password,
                 timeout=30,
                 allow_agent=False,
                 look_for_keys=False,

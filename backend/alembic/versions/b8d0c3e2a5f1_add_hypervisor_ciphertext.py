@@ -25,11 +25,14 @@ Revises: a7c9b2e1f4d8
 Create Date: 2026-05-21
 """
 
+import logging
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
+
+logger = logging.getLogger("alembic.runtime.migration")
 
 revision: str = "b8d0c3e2a5f1"
 down_revision: Union[str, None] = "a7c9b2e1f4d8"
@@ -95,13 +98,42 @@ def upgrade() -> None:
         from app.services.credentials import get_vault
 
         vault = get_vault()
+        encrypted = 0
+        skipped = 0
         for row in rows:
-            ciphertext = vault.encrypt(row.password)
+            # Empty / whitespace passwords can't be Fernet-encrypted
+            # (vault.encrypt rejects them) and have no legitimate use.
+            # Log and skip rather than aborting the whole backfill mid-loop;
+            # the operator repopulates them out-of-band afterwards.
+            if not row.password or not row.password.strip():
+                logger.warning(
+                    "Hypervisor credential backfill: id=%s has empty/whitespace "
+                    "password - skipping, operator must repopulate manually",
+                    row.id,
+                )
+                skipped += 1
+                continue
+            try:
+                ciphertext = vault.encrypt(row.password)
+            except ValueError as exc:
+                logger.error(
+                    "Hypervisor credential backfill: id=%s vault.encrypt rejected: %s "
+                    "- skipping",
+                    row.id, exc,
+                )
+                skipped += 1
+                continue
             bind.execute(
                 hypervisors.update()
                 .where(hypervisors.c.id == row.id)
                 .values(password_ciphertext=ciphertext, password=None)
             )
+            encrypted += 1
+
+        logger.info(
+            "Hypervisor credential backfill complete: encrypted=%d skipped=%d total=%d",
+            encrypted, skipped, len(rows),
+        )
 
 
 def downgrade() -> None:

@@ -99,3 +99,44 @@ def test_legacy_row_without_ciphertext_falls_back_to_plaintext(db_session):
     db_session.refresh(hv)
 
     assert hv.password_plain == "historical-plaintext"
+
+
+def test_undecryptable_ciphertext_returns_none_not_legacy_plaintext(
+    db_session, caplog
+):
+    """Regression: ``password_plain`` MUST NOT silently fall back to the
+    legacy plaintext column when the ciphertext is present but no key in
+    the rotation set can decrypt it. That fallback used to mask key-
+    rotation incidents with stale credentials (silent-failure-hunter P0).
+    """
+    from cryptography.fernet import Fernet
+
+    from app.services.credentials import get_vault
+
+    hv = _create(db_session, password="x")
+
+    # Corrupt the ciphertext: replace with a token encrypted under a key
+    # that the live vault never sees. ``MultiFernet.decrypt`` then raises
+    # ``InvalidToken`` because no key in the rotation matches.
+    foreign_key = Fernet.generate_key()
+    foreign_fernet = Fernet(foreign_key)
+    hv.password_ciphertext = foreign_fernet.encrypt(b"never-decryptable")
+    hv.password = "legacy-stale-plaintext"  # MUST NOT leak through
+    db_session.commit()
+    db_session.refresh(hv)
+
+    # Confirm the live vault genuinely cannot decrypt this token.
+    with pytest.raises(Exception):
+        get_vault().decrypt(hv.password_ciphertext)
+
+    import logging
+    with caplog.at_level(logging.ERROR, logger="app.models.hypervisor"):
+        result = hv.password_plain
+
+    assert result is None, (
+        "ciphertext present but undecryptable MUST NOT silently fall back to "
+        f"legacy plaintext column; got {result!r}"
+    )
+    assert any("vault.decrypt failed" in rec.message for rec in caplog.records), (
+        "operator MUST see a logger.error message identifying the rotation issue"
+    )
