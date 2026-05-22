@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -21,11 +22,35 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.v1 import auth as auth_module
+from app.core import login_throttle
+from app.core import redis_client as redis_client_module
 from app.core.database import get_db
 from app.core.security import get_password_hash
 from app.main import app
 from app.models.base import Base
 from app.models.user import User
+
+
+@pytest.fixture(autouse=True)
+def _fake_redis(monkeypatch):
+    """Bind an in-memory fakeredis to every get_redis() consumer so the
+    login throttle helper (and refresh-store, by extension) does not
+    try to dial a real broker on ``localhost:6379``. Mirrors the
+    fixture in ``test_login_throttle.py`` — both files exercise the
+    /auth/login endpoint, so both need the same Redis stub."""
+    server = fakeredis.FakeServer()
+    client = fakeredis.FakeStrictRedis(server=server, decode_responses=True)
+    factory = lambda: client
+
+    monkeypatch.setattr(redis_client_module, "get_redis", factory)
+    monkeypatch.setattr(login_throttle, "get_redis", factory)
+
+    from app.core import refresh_token_store as _rts
+
+    monkeypatch.setattr(_rts, "get_redis", factory)
+
+    yield client
+    client.flushall()
 
 
 @pytest.fixture
