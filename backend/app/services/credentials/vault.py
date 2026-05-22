@@ -102,6 +102,19 @@ def get_vault() -> CredentialVault:
     for old in old_keys:
         fernets.append(Fernet(old.encode()))
 
+    # TODO(P3-vault-versioning) — ``key_version`` is currently derived
+    # from ``len(old_keys)``, which is non-monotonic across the full
+    # rotation lifecycle: after an operator prunes spent keys from
+    # ``SHIFTWISE_FERNET_OLD_KEYS`` the count drops and newly encrypted
+    # rows receive a *lower* version than rows encrypted before the
+    # prune, collapsing traceability for forensic audits.
+    #
+    # Impact is bounded — the version is metadata only, decryption uses
+    # ``MultiFernet`` which trials every key in order — so the symptom
+    # is misleading audit columns, not a decryption failure. Proper fix
+    # is a dedicated ``SHIFTWISE_FERNET_KEY_VERSION`` setting that the
+    # operator bumps explicitly on rotation, with a matching runbook
+    # update in ``docs/operations``. Deferred to keep this PR scoped.
     return CredentialVault(
         MultiFernet(fernets),
         key_version=1 + len(old_keys),
