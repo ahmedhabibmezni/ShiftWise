@@ -117,9 +117,18 @@ export default function Reports() {
         isLoading={recentQuery.isPending}
       />
 
-      <PerHypervisorPanel rows={statsQuery.data?.by_hypervisor ?? []} />
-
-      <PerTenantPanel rows={statsQuery.data?.by_tenant ?? []} />
+      {/* Skip the breakdown panels until the stats query lands —
+          otherwise PerHypervisorPanel shows "No hypervisor data yet"
+          during pending/error, which reads as a real empty state.
+          PerTenantPanel already self-hides on empty rows, but we
+          gate it identically for consistency. The StatsStrip above
+          already conveys the loading/error state to the user. */}
+      {statsQuery.isSuccess && (
+        <>
+          <PerHypervisorPanel rows={statsQuery.data.by_hypervisor ?? []} />
+          <PerTenantPanel rows={statsQuery.data.by_tenant ?? []} />
+        </>
+      )}
 
       <Panel
         kicker={`${items.length} migrations · last ${REPORT_PAGE_SIZE} max`}

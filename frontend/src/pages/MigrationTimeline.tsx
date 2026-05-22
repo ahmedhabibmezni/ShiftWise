@@ -47,6 +47,17 @@ export function MigrationTimeline({
   const intervalRef = useRef<number | null>(null);
   const [events, setEvents] = useState<MigrationEventResponse[]>([]);
 
+  // Reset cursor + accumulator when the component is reused across
+  // migrations (drawer navigation). Without this, a new migration's
+  // first poll would carry the previous migration's
+  // `since_sequence_id` and the new event list would be prefixed by
+  // stale rows from the old timeline.
+  useEffect(() => {
+    sinceRef.current = 0;
+    intervalRef.current = null;
+    setEvents([]);
+  }, [migrationId]);
+
   const query = useQuery({
     queryKey: ["migration", migrationId, "events"],
     queryFn: async ({ signal }) => {
