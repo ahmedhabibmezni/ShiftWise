@@ -210,8 +210,14 @@ class AuditEmitter:
         in the caller's outer transaction. On success the outer
         transaction is committed so the audit row is durable on return
         — required by Q1.C, see the section comment above. Callers
-        with their own uncommitted work MUST commit it first. Returns
-        ``None`` on DB failure; the caller continues the migration.
+        with their own uncommitted work MUST commit it first.
+
+        On SQLAlchemyError the SAVEPOINT auto-rolls back; if the outer
+        ``db.commit()`` itself fails (rare — serialization, connection
+        drop), we explicitly ``db.rollback()`` to clear the failed-tx
+        state so subsequent CRUD calls on the same session don't hit
+        ``PendingRollbackError``. Returns ``None``; the caller
+        continues the migration.
         """
         try:
             with db.begin_nested():
@@ -232,6 +238,7 @@ class AuditEmitter:
                 "(stage=%s) - continuing migration without audit row",
                 migration.id, migration.status.value, exc_info=True,
             )
+            db.rollback()
             return None
 
     @staticmethod
@@ -241,8 +248,8 @@ class AuditEmitter:
         migration: Migration,
         message: Optional[str] = None,
     ) -> Optional[MigrationEvent]:
-        """Non-fatal :meth:`emit_heartbeat`. Same SAVEPOINT contract as
-        :meth:`safe_emit_stage_event`."""
+        """Non-fatal :meth:`emit_heartbeat`. Same SAVEPOINT + rollback
+        contract as :meth:`safe_emit_stage_event`."""
         try:
             with db.begin_nested():
                 event = AuditEmitter.emit_heartbeat(
@@ -259,4 +266,5 @@ class AuditEmitter:
                 "(stage=%s) - continuing migration without audit row",
                 migration.id, migration.status.value, exc_info=True,
             )
+            db.rollback()
             return None

@@ -30,6 +30,7 @@ from __future__ import annotations
 import enum
 
 from sqlalchemy import (
+    CheckConstraint,
     Column,
     Enum as SQLEnum,
     ForeignKey,
@@ -138,6 +139,16 @@ class MigrationEvent(BaseModel):
         # via le verrou FOR UPDATE de crud_migration_event.
         UniqueConstraint(
             "migration_id", "sequence_id", name="uq_migration_events_seq",
+        ),
+        # Defense-in-depth pour ``actor_type`` : la colonne est un
+        # ``String(16)`` libre et ``record_event`` valide la valeur côté
+        # CRUD (``_ALLOWED_ACTOR_TYPES``). Une CHECK contrainte côté DB
+        # bloque tout INSERT brut hors ORM (script ad hoc, future
+        # routine d'archivage) qui tenterait de glisser une chaîne non
+        # canonique dans le journal d'audit.
+        CheckConstraint(
+            "actor_type IN ('worker', 'user', 'system')",
+            name="ck_migration_events_actor_type",
         ),
         # Index principal — chemin de lecture du timeline UI et du
         # endpoint d'audit.
