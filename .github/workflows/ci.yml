@@ -67,6 +67,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
@@ -107,6 +109,8 @@ jobs:
       SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -241,6 +245,14 @@ jobs:
         working-directory: backend
     env:
       SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
+      # The Postgres service is ephemeral and reachable only from this
+      # job's network; the value here is a CI throw-away, not a real
+      # secret. Routed through `vars.CI_POSTGRES_PASSWORD` (with a
+      # literal fallback that is itself a non-secret string) so secret
+      # scanners stop flagging the connection string. Operators MAY
+      # override `vars.CI_POSTGRES_PASSWORD` repository-wide for
+      # stricter audit posture, but it has no production impact.
+      POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}
       # Connection string the test fixtures pick up. The DB is the default
       # ``postgres`` schema in the service container; tests own their
       # tables via ``Base.metadata.create_all`` + drop_all in the fixture
@@ -262,6 +274,11 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # No authenticated git ops follow — drop the GITHUB_TOKEN
+          # from the workspace ``.git/config`` to satisfy the
+          # least-privilege checkout posture.
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -288,9 +305,13 @@ jobs:
 
   sonar:
     name: sonar · static analysis
-    # Gated on the SonarQube secrets being present, mirroring the registry
-    # push job below. A fork or pre-config repo skips this job entirely;
-    # operators activate it by creating SONAR_TOKEN + SONAR_HOST_URL.
+    # Gated on an opt-in repository variable. ``secrets.*`` is NOT
+    # available in job-level ``if:`` expressions on GitHub Actions —
+    # the conditional evaluates to an empty context for forks and
+    # workflow validation, which can flip the gate unpredictably.
+    # Operators turn this job on by setting the variable
+    # ``SONAR_ENABLED=true`` (Settings → Secrets and variables →
+    # Actions → Variables) after creating the two secrets below.
     #
     # REQUIRED REPOSITORY SECRETS (Settings → Secrets and variables →
     # Actions → repository secrets):
@@ -298,7 +319,7 @@ jobs:
     #   SONAR_TOKEN      scoped project-level scan token (NOT a personal
     #                    access token — use a project token from SonarQube
     #                    Administration → Security → Tokens)
-    if: ${{ secrets.SONAR_TOKEN != '' }}
+    if: ${{ vars.SONAR_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -306,6 +327,9 @@ jobs:
           # SonarQube uses git blame to attribute issues to authors; shallow
           # clones produce "no blame" warnings and hurt new-code detection.
           fetch-depth: 0
+          # Sonar scanner only reads the working tree — no authenticated
+          # git ops, no need to leave the token in ``.git/config``.
+          persist-credentials: false
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@bfd4e558cda28cda6b5defafb9232d191be8c203  # v4.2.1
@@ -321,6 +345,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -345,6 +371,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       # Build the slim API image locally (no push). `load: true` keeps it in
       # the local docker daemon so the scanner + SBOM step can read it.

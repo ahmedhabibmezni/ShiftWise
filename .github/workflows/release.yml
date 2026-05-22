@@ -26,15 +26,13 @@ concurrency:
 #
 #   gh api repos/<owner>/<action>/git/refs/tags/<tag> --jq '.object.sha,.object.type'
 #
-# Verified SHAs (sourced from ci.yml, resolved 2026-05-18):
-#   actions/checkout@v4.2.2           11bd71901bbe5b1630ceea73d27597364c9af683
-#   actions/setup-node@v4.1.0         39370e3970a6d050c480ffad4ff0ed4d3fdee5af
-#   actions/setup-python@v5.3.0       0b93645e9fea7318ecaed2b359559ac225c90a2b
-#   docker/login-action@v3.3.0        9780b0c442fbb1117ed29e0efdff1e18412f7567
-#
-# TODO (SHA-pin follow-up, tracked) — resolve and pin:
-#   docker/setup-buildx-action            (release-only action, not in ci.yml)
-#   redhat-actions/openshift-tools-installer (release-only action, not in ci.yml)
+# Verified SHAs (sourced from ci.yml + release-only actions, resolved 2026-05-22):
+#   actions/checkout@v4.2.2                       11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0                     39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0                   0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/login-action@v3.3.0                    9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   docker/setup-buildx-action@v3.7.1             c47758b77c9736f4b2ef4073d4d51994fabfe349
+#   redhat-actions/openshift-tools-installer@v1   144527c7d98999f2652264c048c7a9bd103f8a82
 # ----------------------------------------------------------------------------
 
 jobs:
@@ -43,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: setup python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -100,6 +100,10 @@ jobs:
     needs: quality-gates
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # Buildx + docker push only need the working tree contents,
+          # not authenticated git ops — drop the token from .git/config.
+          persist-credentials: false
 
       - name: docker login
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
@@ -108,9 +112,8 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # TODO(G4): SHA-pin docker/setup-buildx-action; tag pin in the interim.
       - name: set up buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v3.7.1
 
       - name: build & push backend with bounded retry
         # Three attempts with exponential backoff (30s / 2min / 8min)
@@ -185,14 +188,17 @@ jobs:
       name: staging
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # `oc apply -k` reads the working tree only — no authenticated
+          # git ops needed; drop the token from .git/config.
+          persist-credentials: false
 
-      # TODO(G4): SHA-pin redhat-actions/openshift-tools-installer; tag pin
-      # in the interim. ``oc`` is pinned to 4.18 to match the production
-      # cluster version recorded in CLAUDE.md ("OpenShift 4.18.1 — Bare
-      # Metal UPI"). A floating ``latest`` could pull a major-version oc
+      # ``oc`` is pinned to 4.18 to match the production cluster
+      # version recorded in CLAUDE.md ("OpenShift 4.18.1 — Bare Metal
+      # UPI"). A floating ``latest`` could pull a major-version oc
       # whose CLI surface drifts from the cluster.
       - name: install oc
-        uses: redhat-actions/openshift-tools-installer@v1
+        uses: redhat-actions/openshift-tools-installer@144527c7d98999f2652264c048c7a9bd103f8a82  # v1
         with:
           oc: "4.18"
 
