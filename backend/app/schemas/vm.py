@@ -67,8 +67,15 @@ class VMUpdate(BaseModel):
 # Schéma pour la réponse (output API)
 class VMResponse(VMBase):
     """Schéma de réponse avec toutes les propriétés"""
-    # Override: discovery sets disk_gb=0 when the VMDK is not accessible from
-    # the backend host (remote hypervisor). 0 is a valid "unmeasured" sentinel.
+    # Overrides — discovery can write 0 to any of the three hardware specs
+    # when the source hypervisor doesn't expose the value (remote VMDK
+    # not reachable, guest agent down, PowerCLI permission denied). The
+    # input validators on `VMCreate` / `VMUpdate` still enforce the
+    # production floors (cpu_cores>=1, memory_mb>=512, disk_gb>=1); the
+    # response schema MUST accept whatever is in the DB so a legacy /
+    # partially-discovered row doesn't fail serialization with HTTP 500.
+    cpu_cores: int = Field(..., ge=0, le=128, description="Nombre de vCPUs (0 = non mesuré)")
+    memory_mb: int = Field(..., ge=0, description="Mémoire en MB (0 = non mesurée)")
     disk_gb: int = Field(..., ge=0, description="Taille du disque en GB (0 = non mesurée)")
 
     id: int
