@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     SERVER_HOST: str = "127.0.0.1"
+    SERVER_PORT: int = 8000
+
+    # Synchronous PDF export cap — number of *breakdown rows* the endpoint
+    # will render before returning HTTP 413. The totals header table is
+    # fixed-size and does not count against this cap. Operators raise the
+    # cap through this setting rather than editing the source.
+    REPORTS_PDF_MAX_BREAKDOWN_ROWS: int = 1000
 
     # Database Configuration
     DATABASE_HOST: str
@@ -122,6 +129,17 @@ class Settings(BaseSettings):
     # placeholder (voir validate_secret_key). Une clé publique ou faible
     # permet la forge de tokens JWT (HS256 — la clé signe ET vérifie).
     SECRET_KEY: str
+
+    # Credential vault (Fernet) — US4 production-readiness bundle.
+    # Hypervisor connection credentials are encrypted at rest using
+    # cryptography.fernet.MultiFernet. The primary key is required; older
+    # keys MAY be appended comma-separated to enable graceful rotation.
+    # No default — the app refuses to start without it.
+    # Generate via:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    SHIFTWISE_FERNET_KEY: str
+    SHIFTWISE_FERNET_OLD_KEYS: str = ""
+
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -155,6 +173,35 @@ class Settings(BaseSettings):
                 f"REFRESH_COOKIE_SAMESITE must be one of: {', '.join(sorted(allowed))}"
             )
         return v_low
+
+    @field_validator("SHIFTWISE_FERNET_KEY")
+    @classmethod
+    def validate_fernet_key(cls, v: str) -> str:
+        """
+        US4 — refuse une SHIFTWISE_FERNET_KEY vide ou manifestement invalide.
+
+        Une Fernet key valide est un base64-urlsafe encodé sur 32 bytes (44
+        caractères après encodage). On vérifie la longueur minimum et qu'on
+        peut instancier Fernet sans exception : sinon l'app démarre mais
+        casse à la première écriture/lecture de credentials.
+        """
+        if not v or v.strip() == "":
+            raise ValueError(
+                "SHIFTWISE_FERNET_KEY ne doit pas être vide. Générer via : "
+                "python -c \"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\""
+            )
+        # Validation paresseuse — on importe cryptography uniquement si la
+        # clé est non-vide, pour ne pas pénaliser les tests qui mockent.
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(v.encode() if isinstance(v, str) else v)
+        except Exception as exc:  # noqa: BLE001 — Fernet raise plusieurs types
+            raise ValueError(
+                f"SHIFTWISE_FERNET_KEY n'est pas une clé Fernet valide : {exc}"
+            ) from exc
+        return v
 
     @field_validator("SECRET_KEY")
     @classmethod

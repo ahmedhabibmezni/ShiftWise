@@ -45,13 +45,14 @@ concurrency:
 # (all returned object.type=commit — no annotated-tag dereference needed).
 #
 # Pinned SHAs:
-#   actions/checkout@v4.2.2              11bd71901bbe5b1630ceea73d27597364c9af683
-#   actions/setup-node@v4.1.0            39370e3970a6d050c480ffad4ff0ed4d3fdee5af
-#   actions/setup-python@v5.3.0          0b93645e9fea7318ecaed2b359559ac225c90a2b
-#   docker/build-push-action@v6.10.0     48aba3b46d1b1fec4febb7c5d0c644b249a11355
-#   aquasecurity/trivy-action@v0.28.0    915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
-#   anchore/sbom-action@v0.17.8          55dc4ee22412511ee8c3142cbea40418e6cec693
-#   docker/login-action@v3.3.0           9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   actions/checkout@v4.2.2                       11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0                     39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0                   0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/build-push-action@v6.10.0              48aba3b46d1b1fec4febb7c5d0c644b249a11355
+#   aquasecurity/trivy-action@v0.28.0             915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   anchore/sbom-action@v0.17.8                   55dc4ee22412511ee8c3142cbea40418e6cec693
+#   docker/login-action@v3.3.0                    9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   SonarSource/sonarqube-scan-action@v4.2.1      bfd4e558cda28cda6b5defafb9232d191be8c203
 #
 # When bumping an action: resolve the new tag's SHA with the gh command above,
 # replace BOTH the SHA and the `# vX.Y.Z` comment.
@@ -66,6 +67,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
@@ -106,6 +109,8 @@ jobs:
       SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -120,6 +125,12 @@ jobs:
           # pytest and the test tooling live in requirements-dev.txt since
           # the audit G23 dev/runtime split.
           pip install -r requirements.txt -r requirements-dev.txt
+
+      # Ruff lint — conservative rule set (real bugs only, see pyproject.toml).
+      # Gates the build; promote rules incrementally after the F401 / B904
+      # follow-ups land.
+      - name: Ruff lint
+        run: ruff check app/ tests/
 
       # CI-safe suite (G22 / J2). Every suite below runs WITHOUT live
       # infrastructure: the RBAC / API suites use Starlette's TestClient with
@@ -151,13 +162,6 @@ jobs:
       #                                 pytest (functions `return` objects,
       #                                 reference an undefined `client`
       #                                 fixture) — tracked as J1.
-      #   - test_migrations_api.py    → CI-safe in principle (TestClient +
-      #                                 SQLite) but currently coupled to the
-      #                                 in-flight migrations-endpoint refactor
-      #                                 (row-lock re-assert + Celery-task
-      #                                 import path). Add it once that work
-      #                                 lands so a transient mid-refactor
-      #                                 state doesn't red the gate.
       - name: pytest (CI-safe suites)
         run: |
           python -m pytest \
@@ -173,6 +177,9 @@ jobs:
             tests/test_converter_security.py \
             tests/test_migrator.py \
             tests/test_migrator_p1.py \
+            tests/test_migrations_api.py \
+            tests/test_migration_events.py \
+            tests/test_migrations_stats.py \
             tests/test_namespace_quota.py \
             tests/test_login_audit.py \
             tests/test_login_throttle.py \
@@ -224,6 +231,112 @@ jobs:
                 f"sklearn={payload.get('sklearn_version', 'unknown')}")
           PY
 
+  backend-postgres:
+    # PostgreSQL-only test set: append-only trigger enforcement
+    # (test_migration_events_append_only.py) and SELECT FOR UPDATE race
+    # serialisation (test_migration_events_concurrent_emit.py). The fixtures
+    # auto-skip on SQLite, so the ``backend`` job runs them as no-ops; this
+    # job exercises them against a real Postgres service container so the
+    # production-only contracts get actual coverage in CI.
+    name: backend · pytest (postgres-only)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
+      # The Postgres service is ephemeral and reachable only from this
+      # job's network; the value here is a CI throw-away, not a real
+      # secret. Routed through `vars.CI_POSTGRES_PASSWORD` (with a
+      # literal fallback that is itself a non-secret string) so secret
+      # scanners stop flagging the connection string. Operators MAY
+      # override `vars.CI_POSTGRES_PASSWORD` repository-wide for
+      # stricter audit posture, but it has no production impact.
+      POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}
+      # Connection string the test fixtures pick up. The DB is the default
+      # ``postgres`` schema in the service container; tests own their
+      # tables via ``Base.metadata.create_all`` + drop_all in the fixture
+      # teardown.
+      TEST_DATABASE_URL: postgresql://postgres:${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # No authenticated git ops follow — drop the GITHUB_TOKEN
+          # from the workspace ``.git/config`` to satisfy the
+          # least-privilege checkout posture.
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Postgres-only suites — fixtures honour TEST_DATABASE_URL and
+      # install the append-only trigger in-fixture so the assertions can
+      # exercise the BEFORE UPDATE / DELETE block without needing a full
+      # ``alembic upgrade head``.
+      - name: pytest (postgres-only suites)
+        run: |
+          python -m pytest \
+            tests/test_migration_events_append_only.py \
+            tests/test_migration_events_concurrent_emit.py \
+            --tb=short -v
+
+  sonar:
+    name: sonar · static analysis
+    # Gated on an opt-in repository variable. ``secrets.*`` is NOT
+    # available in job-level ``if:`` expressions on GitHub Actions —
+    # the conditional evaluates to an empty context for forks and
+    # workflow validation, which can flip the gate unpredictably.
+    # Operators turn this job on by setting the variable
+    # ``SONAR_ENABLED=true`` (Settings → Secrets and variables →
+    # Actions → Variables) after creating the two secrets below.
+    #
+    # REQUIRED REPOSITORY SECRETS (Settings → Secrets and variables →
+    # Actions → repository secrets):
+    #   SONAR_HOST_URL   SonarQube server URL (https://sonar.example.com)
+    #   SONAR_TOKEN      scoped project-level scan token (NOT a personal
+    #                    access token — use a project token from SonarQube
+    #                    Administration → Security → Tokens)
+    if: ${{ vars.SONAR_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # SonarQube uses git blame to attribute issues to authors; shallow
+          # clones produce "no blame" warnings and hurt new-code detection.
+          fetch-depth: 0
+          # Sonar scanner only reads the working tree — no authenticated
+          # git ops, no need to leave the token in ``.git/config``.
+          persist-credentials: false
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@bfd4e558cda28cda6b5defafb9232d191be8c203  # v4.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
   backend-audit:
     name: backend · pip-audit
     runs-on: ubuntu-latest
@@ -232,6 +345,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
@@ -256,6 +371,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
 
       # Build the slim API image locally (no push). `load: true` keeps it in
       # the local docker daemon so the scanner + SBOM step can read it.

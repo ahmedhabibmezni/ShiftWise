@@ -21,8 +21,18 @@ httpx==0.26.0
 # In-memory Redis used by the login-throttle + auth-store tests so the
 # CI suite doesn't need a live Redis broker.
 fakeredis==2.21.3
+# PDF inspection — test_reports_pdf reads back the ReportLab output and
+# asserts its contents (US5). pypdf bumped to the 6.10.2+ floor: the 5.x
+# stream tracks GHSA infinite-loop / recursion advisories that were fixed
+# in the 6.10 line; tests only use the stable PdfReader + extract_text
+# surface so the major bump is safe.
+pypdf>=6.10.2,<7.0.0
 
 # Linting & type checking
 black==23.12.1
 flake8==7.0.0
 mypy==1.8.0
+# Ruff — fast lint (pyflakes + pycodestyle + bugbear). Config in pyproject.toml;
+# CI gates a conservative rule set (real bugs, no style nits). Promote rules
+# incrementally after the F401 / B904 audit follow-ups.
+ruff==0.7.4

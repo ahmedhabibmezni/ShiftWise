@@ -45,6 +45,18 @@ class VMAnalyzeBatchRequest(BaseModel):
     vm_ids: list[int] = Field(default_factory=list, description="VM IDs à analyser")
 
 
+class VMStatsResponse(BaseModel):
+    """Shape of ``GET /vms/stats/summary``.
+
+    ``by_status`` is keyed by ``VMStatus.value`` (lowercase) and seeded
+    with every enum value at zero so the UI always sees the full set of
+    columns. Same shape for ``by_compatibility``.
+    """
+    total: int
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_compatibility: dict[str, int] = Field(default_factory=dict)
+
+
 class VMMigrationsResponse(BaseModel):
     """Réponse paginée de GET /vms/{id}/migrations (Audit C8 / C19)."""
     vm_id: int
@@ -114,7 +126,7 @@ def create_vm(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
-        )
+        ) from None
 
     return VMResponse.model_validate(vm)
 
@@ -123,7 +135,7 @@ def create_vm(
 # Routes statiques — DOIVENT être déclarées avant les routes dynamiques /{id}
 # ---------------------------------------------------------------------------
 
-@router.get("/stats/summary")
+@router.get("/stats/summary", response_model=VMStatsResponse)
 def get_vms_stats(
     db: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[User, Depends(check_permission(RESOURCE_VMS, "read"))] = None
@@ -137,12 +149,6 @@ def get_vms_stats(
 
     total = crud_vm.get_vms_count(db, tenant_id=tenant_id)
 
-    stats = {
-        "total": total,
-        "by_status": {},
-        "by_compatibility": {}
-    }
-
     # Par statut — single GROUP BY query (replaces 9 individual COUNT queries)
     by_status = {s.value: 0 for s in VMStatus}
     status_query = db.query(
@@ -153,7 +159,6 @@ def get_vms_stats(
         status_query = status_query.filter(VirtualMachine.tenant_id == tenant_id)
     for row_status, count in status_query.all():
         by_status[row_status.value] = count
-    stats["by_status"] = by_status
 
     # Par compatibilité — single GROUP BY query (replaces 4 individual COUNT queries)
     by_compat = {c.value: 0 for c in CompatibilityStatus}
@@ -165,9 +170,12 @@ def get_vms_stats(
         compat_query = compat_query.filter(VirtualMachine.tenant_id == tenant_id)
     for row_compat, count in compat_query.all():
         by_compat[row_compat.value] = count
-    stats["by_compatibility"] = by_compat
 
-    return stats
+    return VMStatsResponse(
+        total=total,
+        by_status=by_status,
+        by_compatibility=by_compat,
+    )
 
 
 @router.get("/analyze/stats")

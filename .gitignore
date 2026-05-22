@@ -12,6 +12,7 @@ secrets.local.yml
 
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.class
 venv/
@@ -72,6 +73,8 @@ screenshot.mjs
 frontend/verify-redesign.mjs
 screenshots/
 audits/
+.specify/
+specs/
 
 # Agent / IDE assistant artefacts (per-tool config + caches, never commit)
 .agents/
@@ -83,6 +86,7 @@ audits/
 .windsurf/
 skills/
 skills-lock.json
+.sixth/
 
 # Documentations
 docs/

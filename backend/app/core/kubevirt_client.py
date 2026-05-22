@@ -516,9 +516,9 @@ class KubeVirtClient:
             logger.error(f"❌ Error getting VMI '{name}': {e}")
             raise KubeVirtClientError(f"Failed to get VMI: {e}") from e
 
-     
+
     # CONTRÔLE D'ÉTAT DES VMS
-     
+
 
     def start_vm(
         self,
@@ -598,9 +598,9 @@ class KubeVirtClient:
             logger.error(f"❌ Error stopping VM '{name}': {e}")
             raise KubeVirtClientError(f"Failed to stop VM: {e}") from e
 
-     
+
     # UTILITAIRES
-     
+
 
     def get_vm_status(
         self,
@@ -707,9 +707,9 @@ class KubeVirtClient:
             }
         }
 
-         
+
         # GESTION DES DISQUES (NOUVEAU)
-         
+
 
         if disk_size:
             raise KubeVirtClientError(

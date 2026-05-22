@@ -7,11 +7,12 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 import re
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Optional
+from typing import Literal, Optional
 from datetime import datetime
 
 from app.models.migration import MigrationStatus as MigrationStatusEnum
 from app.models.migration import MigrationStrategy as MigrationStrategyEnum
+from app.models.migration_event import MigrationEventType as MigrationEventTypeEnum
 
 
 # Audit B18 — `current_step` est un texte libre alimenté par le worker
@@ -164,7 +165,89 @@ class MigrationRollback(BaseModel):
     reason: Optional[str] = Field(None, max_length=500, description="Raison du rollback")
 
 
+# Schéma événement audit-log
+class MigrationEventResponse(BaseModel):
+    """Une entrée du journal d'audit d'une migration (Audit J1, US3)."""
+    id: int
+    migration_id: int
+    tenant_id: str
+    # Q2 — primitif d'ordre canonique. Le client (timeline UI, audit
+    # endpoint) trie sur ce champ et l'utilise comme curseur de pagination
+    # (`since_sequence_id` du polling delta), JAMAIS sur `created_at`.
+    sequence_id: int
+    event_type: MigrationEventTypeEnum
+    from_status: Optional[str] = None
+    to_status: Optional[str] = None
+    # Acteur — None + actor_type='worker' pour les events émis par le
+    # pipeline ; user_id + actor_type='user' pour les actions opérateur
+    # (cancel/retry).
+    actor_id: Optional[int] = None
+    # Canonical set; ``record_event`` rejects anything else at write time.
+    # Pinning the type here gives the OpenAPI schema and any TypeScript
+    # client a closed union to discriminate on.
+    actor_type: Literal["worker", "user", "system"] = "worker"
+    message: Optional[str] = None
+    payload: Optional[dict] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MigrationEventListResponse(BaseModel):
+    """Réponse paginée pour le journal d'audit d'une migration.
+
+    Pagination delta — le client consomme ``has_more`` + ``next_since_sequence_id``
+    et ne dépend PAS d'un compteur global. Contraste avec ``MigrationListResponse``
+    qui expose un vrai total : ici un ``SELECT COUNT(*)`` à chaque poll (toutes
+    les 2s pendant qu'une migration tourne) coûterait trop cher pour zéro
+    bénéfice côté client.
+    """
+    items: list[MigrationEventResponse]
+    # Taille de la page renvoyée (== ``len(items)``), PAS le nombre total
+    # d'événements pour la migration. Conservé pour la rétro-compatibilité
+    # des clients qui consommaient l'ancien shape avant le polling delta ;
+    # les nouveaux clients doivent utiliser ``has_more`` / ``next_since_sequence_id``.
+    # ``deprecated=True`` est porté dans l'OpenAPI via ``json_schema_extra``
+    # (Pydantic 2.5 ne supporte pas encore l'arg ``Field(deprecated=...)``
+    # — ajouté en 2.7). Les clients générés voient le marqueur, les
+    # consommateurs humains voient le ``[DEPRECATED]`` en tête de description.
+    total: int = Field(
+        ...,
+        description=(
+            "[DEPRECATED — sera retiré dans la prochaine majeure de l'API] "
+            "Taille de la page renvoyée (len(items)), PAS le nombre total "
+            "d'événements. Endpoint delta-paginé : utilisez has_more et "
+            "next_since_sequence_id pour parcourir le journal."
+        ),
+        json_schema_extra={"deprecated": True},
+    )
+    # Polling delta — le client repasse cette valeur en
+    # `?since_sequence_id=` au prochain appel.
+    next_since_sequence_id: Optional[int] = None
+    # `True` quand la page a été tronquée par `limit` ; le client doit
+    # repasser un autre appel pour récupérer la suite.
+    has_more: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Schéma de statistiques
+class MigrationStatsByGroup(BaseModel):
+    """Une ligne d'agrégation par tenant ou par hyperviseur.
+
+    `key` est l'identifiant brut (tenant_id ou hypervisor_id) pour les
+    consommateurs machine ; `label` est le libellé humain affiché côté UI
+    (le nom de l'hyperviseur, le tenant_id lui-même).
+    """
+    key: str
+    label: str
+    total: int
+    completed: int
+    failed: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MigrationStats(BaseModel):
     """Statistiques globales des migrations"""
     total_migrations: int
@@ -175,5 +258,10 @@ class MigrationStats(BaseModel):
     success_rate: float = Field(..., ge=0.0, le=100.0, description="Taux de succès en %")
     average_duration_seconds: Optional[int] = None
     total_data_transferred_gb: float
+    # Breakdowns — vides par défaut pour rétro-compat. by_tenant n'est
+    # renseigné que pour un superuser (visibilité multi-tenant) ; par
+    # défaut, un utilisateur ne voit que son propre tenant.
+    by_tenant: list[MigrationStatsByGroup] = []
+    by_hypervisor: list[MigrationStatsByGroup] = []
 
     model_config = ConfigDict(from_attributes=True)  # Audit D18

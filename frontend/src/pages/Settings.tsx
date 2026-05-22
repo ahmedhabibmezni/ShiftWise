@@ -187,6 +187,15 @@ function ProfileSection({ user }: { user: User }) {
         noValidate
         className="space-y-4 mt-2"
       >
+        {mutation.isError && (
+          <Callout tone="err" kicker="Save failed" role="alert">
+            {describeError(
+              mutation.error,
+              "Could not save the profile. Please try again.",
+            )}
+          </Callout>
+        )}
+
         <Field id="set-email" label="Email" error={errors.email?.message}>
           <Input
             id="set-email"
@@ -287,6 +296,15 @@ function PasswordSection() {
         noValidate
         className="space-y-4 mt-4"
       >
+        {mutation.isError && (
+          <Callout tone="err" kicker="Password change failed" role="alert">
+            {describeError(
+              mutation.error,
+              "Could not update the password. Verify the current password and the new-password requirements.",
+            )}
+          </Callout>
+        )}
+
         <Field
           id="set-current"
           label="Current Password"

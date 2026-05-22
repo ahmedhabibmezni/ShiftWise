@@ -23,11 +23,13 @@ Usage:
 """
 
 import os
+import socket
 import requests
 import sys
 import time
 import json
 import psycopg2
+import pytest
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -36,6 +38,31 @@ load_dotenv()
 # ─── Configuration ──────────────────────────────────────────────────────────
 BASE_URL = "http://localhost:8000"
 API = f"{BASE_URL}/api/v1"
+
+
+def _live_server_reachable(host: str = "localhost", port: int = 8000) -> bool:
+    """Best-effort TCP probe — confirms the live backend listening at
+    ``$BASE_URL`` is actually up before pytest tries to drive it. The
+    suite is documented in CLAUDE.md as "Genuinely excluded — cannot
+    run in CI (documented, not an oversight)" because it talks to
+    uvicorn + a populated Postgres via ``requests`` and ``psycopg2``.
+    Without this guard the default ``pytest tests/`` sweep dumps 12
+    requests.ConnectionError fails into the report, drowning the
+    real-bug signal."""
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _live_server_reachable(),
+    reason=(
+        "Live backend at http://localhost:8000 is not reachable. "
+        "Start uvicorn (see module docstring) to run this suite."
+    ),
+)
 
 # Test superuser created by this script directly in the DB
 SUPERUSER_EMAIL = "test-superadmin@shiftwise-test.com"

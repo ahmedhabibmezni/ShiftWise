@@ -12,6 +12,7 @@ Ce fichier configure :
 """
 
 import logging
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db, init_db
-from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions
+from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions, reports
 
 logger = logging.getLogger("shiftwise")
 
@@ -33,12 +34,32 @@ logger = logging.getLogger("shiftwise")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Lifecycle: startup and shutdown events."""
+    # US4 — refuse to start if REFRESH_COOKIE_DOMAIN is set to a non-empty
+    # value. The constitution forbids a wildcard-subdomain cookie scope on
+    # a shared OpenShift cluster (lateral-movement surface); the only safe
+    # scope is host-only, expressed by an empty/unset REFRESH_COOKIE_DOMAIN.
+    #
+    # The check lives in the FastAPI lifespan rather than at module import
+    # so that Celery workers and ad-hoc scripts that pull in app.main
+    # transitively (via shared models / config) are NOT killed by a setting
+    # that only concerns the HTTP layer.
+    if (settings.REFRESH_COOKIE_DOMAIN or "").strip():
+        logger.critical(
+            "REFRESH_COOKIE_DOMAIN must be empty for host-only cookie scope; "
+            "got %r. Refusing to start (constitution Security Requirements).",
+            settings.REFRESH_COOKIE_DOMAIN,
+        )
+        sys.exit(1)
+
     # Startup
     print(f"🚀 Démarrage de {settings.APP_NAME} v{settings.APP_VERSION}")
     print(f"📊 Base de données : {settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_NAME}")
     init_db()
     print("✅ Base de données initialisée")
-    print("📖 Documentation disponible sur : http://localhost:8000/docs")
+    print(
+        "📖 Documentation disponible sur : "
+        f"http://{settings.SERVER_HOST}:{settings.SERVER_PORT}/docs"
+    )
     print(f"🔐 Mode debug : {settings.DEBUG}")
 
     yield
@@ -299,6 +320,12 @@ app.include_router(
     tags=["Conversions"],
 )
 
+app.include_router(
+    reports.router,
+    prefix=f"{settings.API_V1_PREFIX}/reports",
+    tags=["Reports"],
+)
+
 
 # Global exception handler
 @app.exception_handler(Exception)
@@ -342,7 +369,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host=settings.SERVER_HOST,
-        port=8000,
+        port=settings.SERVER_PORT,
         reload=settings.DEBUG,  # Auto-reload en mode debug
         log_level="info"
     )

@@ -1,0 +1,277 @@
+name: release
+
+# Trigger on semantic-version tags pushed to the default branch
+# (e.g. v1.0.0, v1.0.0-rc1). All quality gates run before the build /
+# push / deploy phase; any failure stops the workflow before a tag
+# becomes visible in the registry.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# ----------------------------------------------------------------------------
+# Action pinning (G4) — supply-chain hardening. Mirror of the ci.yml policy.
+#
+# Every third-party action below is pinned to a full 40-char commit SHA, with
+# a trailing `# vX.Y.Z` comment for human readability. Tags can be force-moved
+# by the maintainer; a commit SHA is immutable. Resolve a new SHA with:
+#
+#   gh api repos/<owner>/<action>/git/refs/tags/<tag> --jq '.object.sha,.object.type'
+#
+# Verified SHAs (sourced from ci.yml + release-only actions, resolved 2026-05-22):
+#   actions/checkout@v4.2.2                       11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0                     39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0                   0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/login-action@v3.3.0                    9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   docker/setup-buildx-action@v3.7.1             c47758b77c9736f4b2ef4073d4d51994fabfe349
+#   redhat-actions/openshift-tools-installer@v1   144527c7d98999f2652264c048c7a9bd103f8a82
+# ----------------------------------------------------------------------------
+
+jobs:
+  quality-gates:
+    name: quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: setup python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: install backend deps
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff
+        working-directory: backend
+        run: ruff check app/ tests/
+
+      - name: pytest with coverage gate
+        working-directory: backend
+        env:
+          # Generate an ephemeral Fernet key for the test session so
+          # Settings() boots cleanly. conftest.py also does this, but
+          # we set it at the workflow level for defence-in-depth.
+          SHIFTWISE_FERNET_KEY: ${{ secrets.CI_FERNET_KEY }}
+        run: pytest tests/ -v --tb=short --cov=app --cov-fail-under=80
+
+      - name: setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: install frontend deps
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: frontend typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: frontend vitest
+        working-directory: frontend
+        run: npm test
+
+      - name: frontend vite build
+        working-directory: frontend
+        run: npm run build
+
+  build-push:
+    name: build, tag and push images
+    runs-on: ubuntu-latest
+    needs: quality-gates
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # Buildx + docker push only need the working tree contents,
+          # not authenticated git ops — drop the token from .git/config.
+          persist-credentials: false
+
+      - name: docker login
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v3.7.1
+
+      - name: build & push backend with bounded retry
+        # Three attempts with exponential backoff (30s / 2min / 8min)
+        # absorbs registry hiccups; the run fails cleanly on retry
+        # exhaustion (US5 R7, FR-012). Exit code is captured explicitly
+        # so retry classification stays independent of bash ``until``
+        # semantics under ``pipefail``.
+        run: |
+          set -uo pipefail
+          attempt=1
+          delay=30
+          while true; do
+            set +e
+            docker buildx build \
+                --platform linux/amd64 \
+                --push \
+                --tag docker.io/dida1609/shiftwise-backend:${{ github.ref_name }} \
+                --tag docker.io/dida1609/shiftwise-backend:sha-${{ github.sha }} \
+                --file backend/Dockerfile \
+                backend
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "::notice::backend push succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::backend image push failed after $attempt attempts (last exit=$rc)"
+              exit 1
+            fi
+            echo "::warning::backend push attempt $attempt failed (exit=$rc); sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: build & push frontend with bounded retry
+        run: |
+          set -uo pipefail
+          attempt=1
+          delay=30
+          while true; do
+            set +e
+            docker buildx build \
+                --platform linux/amd64 \
+                --push \
+                --tag docker.io/dida1609/shiftwise-frontend:${{ github.ref_name }} \
+                --tag docker.io/dida1609/shiftwise-frontend:sha-${{ github.sha }} \
+                --file frontend/Dockerfile \
+                frontend
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "::notice::frontend push succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::frontend image push failed after $attempt attempts (last exit=$rc)"
+              exit 1
+            fi
+            echo "::warning::frontend push attempt $attempt failed (exit=$rc); sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+  deploy-staging:
+    name: deploy to OpenShift staging
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # `oc apply -k` reads the working tree only — no authenticated
+          # git ops needed; drop the token from .git/config.
+          persist-credentials: false
+
+      # ``oc`` is pinned to 4.18 to match the production cluster
+      # version recorded in CLAUDE.md ("OpenShift 4.18.1 — Bare Metal
+      # UPI"). A floating ``latest`` could pull a major-version oc
+      # whose CLI surface drifts from the cluster.
+      - name: install oc
+        uses: redhat-actions/openshift-tools-installer@144527c7d98999f2652264c048c7a9bd103f8a82  # v1
+        with:
+          oc: "4.18"
+
+      - name: oc login
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+        run: |
+          oc login --token="$OPENSHIFT_TOKEN" --server="$OPENSHIFT_SERVER" --insecure-skip-tls-verify=false
+
+      - name: apply staging overlay with bounded retry
+        # Retries are gated on the failure being transient. Deterministic
+        # ``oc apply`` failures (Forbidden, Invalid, immutable-field) will
+        # never recover from a retry and we surface them on attempt #1
+        # instead of wasting two more 30s/2min/8min backoff cycles.
+        run: |
+          set -uo pipefail
+          attempt=1
+          delay=30
+          while true; do
+            set +e
+            apply_log=$(oc apply -k backend/openshift/staging/ 2>&1)
+            rc=$?
+            set -e
+            echo "$apply_log"
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if echo "$apply_log" | grep -qiE "(forbidden|invalid|field is immutable)"; then
+              echo "::error::oc apply failed with a deterministic, non-retryable error"
+              exit 1
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::oc apply failed after $attempt attempts (last exit=$rc)"
+              exit 1
+            fi
+            echo "::warning::oc apply attempt $attempt failed (transient, exit=$rc); sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: wait for rollout
+        # ``oc rollout status --timeout=10m`` already blocks for ten
+        # minutes per Deployment; one outer retry on top is enough to
+        # absorb a flake in the rollout APIs themselves (kubelet image
+        # pull stall, transient API-server unavailability).
+        run: |
+          set -uo pipefail
+          attempt=1
+          delay=30
+          while true; do
+            set +e
+            oc rollout status deploy/shiftwise-backend -n shiftwise-staging --timeout=10m \
+              && oc rollout status deploy/shiftwise-worker -n shiftwise-staging --timeout=10m
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::rollout failed after $attempt attempts (last exit=$rc)"
+              exit 1
+            fi
+            echo "::warning::rollout attempt $attempt failed (exit=$rc); sleeping ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 4))
+          done
+
+      - name: summary
+        run: |
+          echo "## Released ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Images: shiftwise-backend:${{ github.ref_name }}, shiftwise-frontend:${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Staging namespace: shiftwise-staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "Production promotion is manual (constitution Governance §4)." >> "$GITHUB_STEP_SUMMARY"

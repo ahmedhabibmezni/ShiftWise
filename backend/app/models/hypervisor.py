@@ -6,14 +6,17 @@ depuis lequel les VMs seront découvertes et migrées.
 """
 
 from sqlalchemy import (
-    Column, String, Integer, Boolean, DateTime, Text,
-    Enum as SQLEnum, JSON, UniqueConstraint, text, false, true,
+    Column, String, Integer, Boolean, DateTime, Text, LargeBinary,
+    Enum as SQLEnum, JSON, UniqueConstraint, text, false, true, func,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import enum
+import logging
 
 from app.models.base import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class HypervisorType(str, enum.Enum):
@@ -71,10 +74,25 @@ class Hypervisor(BaseModel):
     host = Column(String(255), nullable=False)  # Hostname ou IP
     port = Column(Integer, nullable=True)  # Port (défaut selon type)
 
-    # Authentification (À CHIFFRER EN PRODUCTION)
-    # TODO: Implémenter le chiffrement des credentials avec Fernet ou Vault
+    # Authentification — US4 production-readiness :
+    #   * `password_ciphertext` (Fernet) est la source de vérité pour les
+    #     credentials.
+    #   * `password` (texte clair, nullable) est conservé pour la rétro-
+    #     compatibilité pendant la fenêtre de cutover ; les writes ne le
+    #     remplissent plus depuis l'introduction du vault. Une migration
+    #     Alembic ultérieure dropera la colonne.
     username = Column(String(255), nullable=False)
-    password = Column(Text, nullable=False)  # ATTENTION: Stocker chiffré en production
+    password = Column(Text, nullable=True)
+    password_ciphertext = Column(LargeBinary, nullable=True)
+    credential_key_version = Column(
+        Integer, nullable=False,
+        default=1, server_default="1",
+    )
+    credentials_updated_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        server_default=func.now(),
+    )
 
     # Configuration SSL/TLS
     verify_ssl = Column(Boolean, default=False, server_default=false())  # Vérifier certificats SSL
@@ -118,6 +136,39 @@ class Hypervisor(BaseModel):
     def is_reachable(self) -> bool:
         """Vérifie si l'hyperviseur est accessible"""
         return self.status in [HypervisorStatus.ACTIVE, HypervisorStatus.AUTHENTICATING]
+
+    @property
+    def password_plain(self) -> str | None:
+        """Decrypted credential — single accessor for connectors and CRUD.
+
+        Behavior matrix:
+        - ``password_ciphertext`` set, decrypt succeeds -> return plaintext.
+        - ``password_ciphertext`` set, decrypt fails    -> log + return
+          ``None``. We MUST NOT silently fall back to the legacy
+          ``password`` column: the ciphertext is the source of truth and a
+          decrypt failure points at a real rotation/corruption incident
+          the operator must see (constitution Principle VII).
+        - ``password_ciphertext`` NULL, legacy ``password`` set -> return
+          legacy plaintext (pre-cutover rows; will disappear once
+          c9e1d4f3b6a2 lands).
+        - both NULL                                     -> ``None``.
+        """
+        if self.password_ciphertext:
+            from cryptography.fernet import InvalidToken
+
+            from app.services.credentials import get_vault
+
+            try:
+                return get_vault().decrypt(self.password_ciphertext)
+            except InvalidToken:
+                logger.error(
+                    "vault.decrypt failed for hypervisor id=%s key_version=%s "
+                    "- ciphertext present but no key in the rotation set decrypts it; "
+                    "refusing to fall back to legacy plaintext column",
+                    self.id, self.credential_key_version,
+                )
+                return None
+        return self.password or None
 
     @property
     def username_masked(self) -> str:

@@ -1,0 +1,47 @@
+# Ruff configuration — fast Python linter for the backend.
+#
+# Conservative rule set: catches real bugs (syntax errors, undefined names,
+# bad-equality comparisons, mutable default arguments) without imposing
+# style or import-hygiene rules the existing code has not been audited
+# against. Promote individual rules once the code is clean.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+  "alembic/versions",   # auto-generated migration scripts
+  "ml/artifacts",       # serialised model payloads
+]
+
+[tool.ruff.lint]
+# Rule families selected:
+#   E9   — pycodestyle SYNTAX errors only (skip E501 line-length etc.)
+#   F6   — bad comparisons (`x == None`, redundant `not in`, etc.)
+#   F7   — syntax errors (default block, return outside function)
+#   F8   — undefined name, unused variable from kwargs, redefined function
+#          (F401 unused-import excluded — many side-effect-only imports
+#          across the ORM bootstrap; promote once `# noqa: F401` is added
+#          where intentional)
+#   W    — whitespace (W291/W292/W293)
+#   B    — flake8-bugbear: mutable defaults, useless expressions, …
+select = ["E9", "F6", "F7", "F8", "W", "B"]
+ignore = [
+  "B008",   # function call in default argument — FastAPI uses Depends() heavily
+  "F841",   # local variable assigned but never used — many existence checks
+  # B904 — was suppressed while the 25 raise sites carried no `from`
+  # clause. The Phase 9 sweep in the production-readiness bundle added
+  # `from None` everywhere (chosen over `from err` because the API
+  # surface never re-raises the inner exception object). The ignore is
+  # gone; new code MUST use `raise ... from None` or `raise ... from err`.
+  "B017",   # broad `pytest.raises(Exception)` — narrow test-quality nit.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files routinely shadow fixtures with same-named locals.
+"tests/**/*.py" = ["F811", "B011"]
+
+# Coverage gate (constitution Principle IV, FR-017). ≥ 80 % is the
+# documented backend floor; CI fails the run below that.
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-fail-under=80 --cov-report=term-missing"
+testpaths = ["tests"]

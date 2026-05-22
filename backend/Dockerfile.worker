@@ -47,6 +47,35 @@ USER 0
 # Guest-tooling — la seule différence vs l'image API (cf. G12 ci-dessus).
 # `recommends` désactivé : libguestfs-tools tire sinon des paquets X / doc
 # inutiles dans un conteneur.
+#
+# `libguestfs-tools` embarque virt-customize (Linux guests) ET virt-v2v +
+# virt-v2v-in-place (Windows guests). Le code Python sélectionne le bon
+# outil selon `VirtualMachine.os_type` ; cette image les couvre tous les
+# deux dès maintenant.
+#
+# Windows guest support — ajout du paquet virtio-win :
+#   Le stage Adapter pour os_type=WINDOWS appelle `virt-v2v-in-place`, qui
+#   injecte les drivers virtio Red Hat (NIC, balloon, viostor) requis par
+#   le bus virtio de KubeVirt. Ces drivers vivent dans le paquet
+#   `virtio-win`, indisponible dans les dépôts Debian principaux.
+#
+#   Pour activer la migration Windows :
+#     1. Télécharger l'ISO virtio-win signé Red Hat :
+#          curl -L -o /tmp/virtio-win.iso \
+#            https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+#     2. Ajouter dans cette image :
+#          RUN mkdir -p /usr/share/virtio-win \
+#              && curl -L -o /usr/share/virtio-win/virtio-win.iso <URL>
+#        (ou `apt-get install virtio-win` si un dépôt Red Hat est configuré).
+#     3. Le script Adapter exporte VIRTIO_WIN=/usr/share/virtio-win — pas
+#        de changement de code requis côté Python.
+#
+#   Tant que virtio-win n'est PAS ajouté, le pipeline Linux fonctionne ;
+#   une migration Windows échoue côté pod avec un message explicite
+#   "virtio-win drivers not found at /usr/share/virtio-win". Le contenu
+#   ML de l'analyzer marque déjà un VM Windows COMPATIBLE/PARTIAL en
+#   fonction des règles — au cluster admin de décider d'activer le
+#   support après avoir audité la licence virtio-win.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         qemu-utils \
         libguestfs-tools linux-image-amd64 \

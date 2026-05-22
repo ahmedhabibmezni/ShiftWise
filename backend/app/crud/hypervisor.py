@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
+from app.services.credentials import get_vault
 
 
 # Audit D6 — champs jamais modifiables via update_hypervisor, même si un
@@ -190,11 +191,21 @@ def create_hypervisor(db: Session, data: dict, tenant_id: str) -> Hypervisor:
     if existing:
         raise ValueError(f"Un hypervisor avec le nom '{data['name']}' existe déjà")
 
+    # US4 — chiffrer le mot de passe avant insertion. Le plaintext n'est
+    # JAMAIS persisté ; la colonne legacy `password` reste NULL pour les
+    # nouvelles lignes et sera dropée par une migration Alembic de cutover.
+    raw_password = data.pop("password", None)
+
     hypervisor = Hypervisor(
         **data,
         tenant_id=tenant_id,
         status=HypervisorStatus.UNKNOWN
     )
+    if raw_password:
+        vault = get_vault()
+        hypervisor.password_ciphertext = vault.encrypt(raw_password)
+        hypervisor.credential_key_version = vault.key_version
+        hypervisor.credentials_updated_at = vault.now_utc()
 
     db.add(hypervisor)
     db.commit()
@@ -233,6 +244,17 @@ def update_hypervisor(
         clash = get_hypervisor_by_name(db, new_name, tenant_id=hypervisor.tenant_id)
         if clash and clash.id != hypervisor.id:
             raise ValueError(f"Un hypervisor avec le nom '{new_name}' existe déjà")
+
+    # US4 — un update sur `password` chiffre la nouvelle valeur ; on ne
+    # touche jamais directement à la colonne legacy `password`.
+    raw_password = update_data.pop("password", None)
+    if raw_password:
+        vault = get_vault()
+        hypervisor.password_ciphertext = vault.encrypt(raw_password)
+        hypervisor.credential_key_version = vault.key_version
+        hypervisor.credentials_updated_at = vault.now_utc()
+        # Force-clear le plaintext historique si la ligne en avait encore un.
+        hypervisor.password = None
 
     for field, value in update_data.items():
         if field in _HYPERVISOR_PROTECTED_FIELDS:

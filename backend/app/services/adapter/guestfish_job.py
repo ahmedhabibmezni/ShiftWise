@@ -35,6 +35,7 @@ from kubernetes.client.rest import ApiException
 
 from app.core.config import settings
 from app.core.kubevirt_client import get_kubevirt_client
+from app.models.virtual_machine import OSType
 from app.services.adapter.errors import AdapterError
 from app.services.migrator.transit_discovery import discover_transit_nfs
 
@@ -59,11 +60,11 @@ _K8S_READ_TIMEOUT_SECONDS = 30
 #
 # All operations are idempotent and use ``|| true`` to survive missing
 # files (GRUB on Ubuntu vs grub2 on RHEL, etc.).
-_FIXUP_SCRIPT = r"""#!/bin/bash
+_LINUX_FIXUP_SCRIPT = r"""#!/bin/bash
 set -eu
 DISK="${DISK_PATH:?missing DISK_PATH}"
 
-echo ">>> Adapter starting on $DISK"
+echo ">>> Adapter starting on $DISK (Linux guest — virt-customize)"
 ls -la "$DISK"
 
 # OpenShift assigne une UID différente par namespace. Le qcow2 a été écrit
@@ -165,6 +166,73 @@ echo ">>> Adapter done"
 """
 
 
+# Windows guest path — virt-customize cannot configure DHCP / serial on a
+# Windows partition (NTFS plus driver-injection requirements). The standard
+# tool is libguestfs's `virt-v2v-in-place`, which:
+#   - injects Red Hat-signed virtio drivers (NIC, balloon, viostor) so the
+#     guest boots on KubeVirt's virtio bus
+#   - drops VMware Tools / Hyper-V Integration Services
+#   - sets the new NIC to DHCP and runs a first-boot Windows script that
+#     activates the drivers after the next boot
+#
+# Requires the image to ship the virtio-win driver ISO at
+# /usr/share/virtio-win (the default location libguestfs looks at — picked
+# up via the VIRTIO_WIN env var). On a Debian-based ADAPTER_IMAGE this
+# means installing the `virtio-win` package or unpacking the upstream ISO
+# into that path during image build.
+_WINDOWS_FIXUP_SCRIPT = r"""#!/bin/bash
+set -eu
+DISK="${DISK_PATH:?missing DISK_PATH}"
+
+echo ">>> Adapter starting on $DISK (Windows guest — virt-v2v-in-place)"
+ls -la "$DISK"
+
+# Cross-namespace UID workaround — same as the Linux path. The qcow2 was
+# written by the converter under the `shiftwise` namespace UID; the adapter
+# Job runs under the tenant-namespace UID. NTFS host-side permissions are
+# governed by the file mode on the qcow2 container, not the in-guest ACL.
+chmod 0666 "$DISK" || {
+  echo "WARN: chmod failed (file probably read-only on NFS); continuing"
+}
+ls -la "$DISK"
+
+# virt-v2v-in-place picks up virtio drivers from $VIRTIO_WIN. The default
+# /usr/share/virtio-win is honoured if unset, but spelling it out here makes
+# the failure mode (missing ISO) obvious in the log.
+export VIRTIO_WIN="${VIRTIO_WIN:-/usr/share/virtio-win}"
+if [ ! -d "$VIRTIO_WIN" ] && [ ! -f "$VIRTIO_WIN" ]; then
+  echo "ERROR: virtio-win drivers not found at $VIRTIO_WIN"
+  echo "       The ADAPTER_IMAGE must ship the virtio-win ISO or expanded tree"
+  echo "       at that path — Windows guest adaptation cannot proceed without it."
+  exit 1
+fi
+
+echo ">>> Running virt-v2v-in-place"
+# -i disk: input is a raw disk image (we converted to qcow2 upstream, which
+#          libguestfs detects via its header — no need to declare format).
+# -v -x : verbose + trace, lands in the Job pod log for diagnosis.
+virt-v2v-in-place -v -x -i disk "$DISK" || {
+  echo "ERROR virt-v2v-in-place exit $?"
+  exit 1
+}
+
+echo ">>> Adapter done"
+"""
+
+
+def _fixup_script_for_os(os_type: OSType) -> str:
+    """Pick the libguestfs strategy that fits the guest OS family.
+
+    Windows guests need `virt-v2v-in-place` (virtio driver injection plus
+    Windows first-boot scripting). Linux — and OTHER/UNKNOWN as a safe
+    fallback — use the multi-stack DHCP / serial-console / GRUB script
+    above driven by `virt-customize`.
+    """
+    if os_type == OSType.WINDOWS:
+        return _WINDOWS_FIXUP_SCRIPT
+    return _LINUX_FIXUP_SCRIPT
+
+
 @dataclass(frozen=True)
 class AdapterOutcome:
     succeeded: bool
@@ -183,10 +251,16 @@ def submit_adapter_job(
     migration_id: int,
     disk_index: int,
     src_relative_path: str,
+    os_type: OSType = OSType.LINUX,
     backoff_limit: int = 0,
     active_deadline_seconds: int = 30 * 60,
 ) -> str:
-    """Submit the adapter Job. Idempotent on AlreadyExists."""
+    """Submit the adapter Job. Idempotent on AlreadyExists.
+
+    ``os_type`` selects the in-pod fixup strategy: WINDOWS uses
+    `virt-v2v-in-place`, everything else falls through to the Linux
+    multi-stack DHCP / serial-console script.
+    """
     kv = get_kubevirt_client()
     # Audit C-07 : découvrir le serveur/chemin NFS de transit depuis le PV
     # lié, comme le fait le populator. settings.MIGRATOR_NFS_* est vide par
@@ -201,6 +275,7 @@ def submit_adapter_job(
         src_relative_path=src_relative_path,
         nfs_server=nfs_server,
         nfs_path=nfs_path,
+        os_type=os_type,
         backoff_limit=backoff_limit,
         active_deadline_seconds=active_deadline_seconds,
     )
@@ -320,6 +395,7 @@ def _build_manifest(
     nfs_path: str,
     backoff_limit: int,
     active_deadline_seconds: int,
+    os_type: OSType = OSType.LINUX,
 ) -> dict:
     labels = {
         _LABEL_APP: _LABEL_APP_VAL,
@@ -327,6 +403,7 @@ def _build_manifest(
         _LABEL_DISK: str(disk_index),
     }
     disk_path = f"/src/{src_relative_path.lstrip('/')}"
+    fixup_script = _fixup_script_for_os(os_type)
 
     return {
         "apiVersion": "batch/v1",
@@ -349,7 +426,7 @@ def _build_manifest(
                         "name": "adapter",
                         "image": settings.ADAPTER_IMAGE,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["/bin/bash", "-c", _FIXUP_SCRIPT],
+                        "command": ["/bin/bash", "-c", fixup_script],
                         "env": [
                             {"name": "DISK_PATH", "value": disk_path},
                             # libguestfs auto-detects /dev/kvm; falls back to

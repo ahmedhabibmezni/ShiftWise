@@ -1,10 +1,25 @@
-import type { ReactNode, ThHTMLAttributes, TdHTMLAttributes } from "react";
+import type {
+  HTMLAttributes,
+  ReactNode,
+  TdHTMLAttributes,
+  ThHTMLAttributes,
+} from "react";
 import { cn } from "@/lib/cn";
 
-export function Table({ children, className }: { children: ReactNode; className?: string }) {
+export function Table({
+  children,
+  className,
+  ...rest
+}: HTMLAttributes<HTMLTableElement> & { children: ReactNode }) {
   return (
     <div className={cn("w-full overflow-x-auto", className)}>
-      <table className="w-full border-collapse">{children}</table>
+      {/* Forward data-* and aria-* (and the rest of the standard HTML
+          table attribute set) so callers can attach `data-testid` and
+          assistive-tech hooks without us having to enumerate every
+          prop here. */}
+      <table className="w-full border-collapse" {...rest}>
+        {children}
+      </table>
     </div>
   );
 }
@@ -13,15 +28,15 @@ export function THead({ children }: { children: ReactNode }) {
   return <thead>{children}</thead>;
 }
 
+type TrProps = HTMLAttributes<HTMLTableRowElement> & {
+  interactive?: boolean;
+};
 export function TR({
   children,
   interactive,
   className,
-}: {
-  children: ReactNode;
-  interactive?: boolean;
-  className?: string;
-}) {
+  ...rest
+}: TrProps) {
   return (
     <tr
       className={cn(
@@ -30,6 +45,7 @@ export function TR({
           "transition-colors duration-200 hover:bg-[var(--surface-soft)] cursor-pointer",
         className,
       )}
+      {...rest}
     >
       {children}
     </tr>

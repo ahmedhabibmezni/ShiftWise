@@ -1,0 +1,32 @@
+# Staging overlay — ShiftWise backend
+#
+# Applied by the release.yml GitHub Actions workflow on every tag push
+# after the quality gates and image push succeed (US5). Staging uses the
+# permissive dev-style defaults: KUBERNETES_VERIFY_SSL stays False
+# because the staging cluster carries self-signed certs.
+#
+# The credential-vault Secret is created out-of-band by the operator
+# before the first deploy (see credential-key-secret.yaml in this
+# directory for the template). The Deployment in the base overlay
+# already references the Secret via `envFrom`, so applying this overlay
+# is enough once the Secret exists.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shiftwise-staging
+
+resources:
+  - ../
+# NOTE: credential-key-secret.yaml is INTENTIONALLY NOT in this resources
+# list. It is a template only — applying it would create a Secret with an
+# empty SHIFTWISE_FERNET_KEY, which crashes the backend at boot because
+# the Pydantic settings validator rejects empty keys. The operator MUST
+# create the Secret out-of-band (see credential-key-secret.yaml header).
+
+# Tag the staging Deployments with the environment label so observability
+# tooling can filter by it.
+commonLabels:
+  app.shiftwise.io/environment: staging
+
+# Keep the dev-time KUBERNETES_VERIFY_SSL=False here (self-signed certs).
+# The production overlay flips it to True.

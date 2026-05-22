@@ -7,6 +7,7 @@ with auth_mode=local pointing at the local machine.
 """
 
 import platform
+import socket
 import time
 
 import pytest
@@ -17,10 +18,35 @@ HYPERVISOR_ID = 35
 MIGRATOR_UUID = "95b48096df704999978eb374f8ddaeb7"
 FAKE_UUID = "aaaa0000000000000000000000000001"
 
-pytestmark = pytest.mark.skipif(
-    platform.system() != "Windows",
-    reason="Hyper-V discovery requires Windows",
-)
+
+def _live_server_reachable(host: str = "localhost", port: int = 8000) -> bool:
+    """TCP probe so the suite skips cleanly when the dev server is
+    not running, instead of dumping requests.ConnectionError errors
+    into the default ``pytest tests/`` sweep."""
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+# Two preconditions — Windows host AND a reachable live backend. The
+# Windows check stays first because PowerShell / Hyper-V availability
+# is a HARD requirement; the server check is the soft one (operator
+# forgot to start uvicorn).
+pytestmark = [
+    pytest.mark.skipif(
+        platform.system() != "Windows",
+        reason="Hyper-V discovery requires Windows",
+    ),
+    pytest.mark.skipif(
+        not _live_server_reachable(),
+        reason=(
+            "Live backend at http://localhost:8000 is not reachable. "
+            "Start uvicorn before running this suite."
+        ),
+    ),
+]
 
 
 @pytest.fixture(scope="module")

@@ -1,0 +1,49 @@
+# Production overlay — ShiftWise backend
+#
+# This overlay patches the cluster defaults so production runs with
+# TLS verification ENABLED against the Kubernetes API (constitution
+# Security Requirements §3, US4 FR-010).
+#
+# Apply with:
+#
+#     oc apply -k backend/openshift/production/
+#
+# Prerequisites — the operator MUST have created the credential-vault
+# Secret out-of-band BEFORE applying this overlay:
+#
+#     FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+#     oc -n shiftwise create secret generic shiftwise-credential-key \
+#       --from-literal=SHIFTWISE_FERNET_KEY="$FERNET_KEY"
+#
+# The Deployment in the base overlay declares an `envFrom: secretRef`
+# referencing that Secret; this overlay does NOT modify that reference.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shiftwise
+
+resources:
+  - ../
+
+# Patch the backend Deployment to flip KUBERNETES_VERIFY_SSL from the
+# dev-time False to the production-mandatory True. The base overlay
+# leaves it False because OpenShift CI uses self-signed certs.
+patches:
+  - target:
+      kind: Deployment
+      name: shiftwise-backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KUBERNETES_VERIFY_SSL
+          value: "True"
+  - target:
+      kind: Deployment
+      name: shiftwise-worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KUBERNETES_VERIFY_SSL
+          value: "True"

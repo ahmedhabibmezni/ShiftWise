@@ -7,10 +7,13 @@ import {
   CheckCircle2,
   Download,
   FileBarChart,
+  FileText,
   Gauge,
   HardDrive,
   XCircle,
 } from "lucide-react";
+import toast from "react-hot-toast";
+import { describeError } from "@/lib/errors";
 import { MigrationStatusBadge, type MigrationStatusKey } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
@@ -31,12 +34,15 @@ import {
 import { downloadCsv, rowsToCsv, type CsvColumn } from "@/lib/csv";
 import {
   MIGRATION_STATUSES,
+  downloadReportsPdf,
   listMigrations,
   type Migration,
   type MigrationStatus,
 } from "@/api/migrations";
 import { listVms, type Vm } from "@/api/vms";
 import { fetchMigrationStats, type MigrationStats } from "@/api/stats";
+import { PerHypervisorPanel } from "@/pages/PerHypervisorPanel";
+import { PerTenantPanel } from "@/pages/PerTenantPanel";
 
 const REPORT_PAGE_SIZE = 100;
 const REFETCH_MS = 60_000;
@@ -72,24 +78,57 @@ export default function Reports() {
         title="Reports"
         description="Historical migration outcomes for audit, SLA review, and capacity planning."
         actions={
-          <Button
-            variant="primary"
-            leadingIcon={<Icon icon={Download} size={14} strokeWidth={2.25} />}
-            disabled={items.length === 0}
-            onClick={() => downloadCsv(buildFilename(), csv)}
-          >
-            Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              leadingIcon={<Icon icon={FileText} size={14} strokeWidth={2.25} />}
+              onClick={async () => {
+                try {
+                  await downloadReportsPdf();
+                  toast.success("Report PDF downloaded");
+                } catch (err) {
+                  toast.error(describeError(err, "PDF export failed"));
+                }
+              }}
+            >
+              Export PDF
+            </Button>
+            <Button
+              variant="primary"
+              leadingIcon={<Icon icon={Download} size={14} strokeWidth={2.25} />}
+              disabled={items.length === 0}
+              onClick={() => downloadCsv(buildFilename(), csv)}
+            >
+              Export CSV
+            </Button>
+          </div>
         }
       />
 
-      <StatsStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
+      <StatsStrip
+        stats={statsQuery.data}
+        isLoading={statsQuery.isPending}
+        isError={statsQuery.isError}
+      />
 
       <BreakdownPanel
         breakdown={breakdown}
         total={items.length}
         isLoading={recentQuery.isPending}
       />
+
+      {/* Skip the breakdown panels until the stats query lands —
+          otherwise PerHypervisorPanel shows "No hypervisor data yet"
+          during pending/error, which reads as a real empty state.
+          PerTenantPanel already self-hides on empty rows, but we
+          gate it identically for consistency. The StatsStrip above
+          already conveys the loading/error state to the user. */}
+      {statsQuery.isSuccess && (
+        <>
+          <PerHypervisorPanel rows={statsQuery.data.by_hypervisor ?? []} />
+          <PerTenantPanel rows={statsQuery.data.by_tenant ?? []} />
+        </>
+      )}
 
       <Panel
         kicker={`${items.length} migrations · last ${REPORT_PAGE_SIZE} max`}
@@ -116,10 +155,19 @@ export default function Reports() {
 function StatsStrip({
   stats,
   isLoading,
+  isError,
 }: {
   stats: MigrationStats | undefined;
   isLoading: boolean;
+  isError: boolean;
 }) {
+  if (isError) {
+    return (
+      <Callout tone="err" role="alert">
+        Could not load migration stats. Refresh to retry.
+      </Callout>
+    );
+  }
   return (
     <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
       <KPIPrimary

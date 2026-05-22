@@ -143,9 +143,9 @@ def _run_vmrun(vmrun_path: str, *args, timeout: int = 30) -> str:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise DiscoveryError(f"vmrun timeout ({timeout}s): {' '.join(cmd)}")
+        raise DiscoveryError(f"vmrun timeout ({timeout}s): {' '.join(cmd)}") from None
     except FileNotFoundError:
-        raise DiscoveryError(f"vmrun introuvable à: {vmrun_path}")
+        raise DiscoveryError(f"vmrun introuvable à: {vmrun_path}") from None
 
     if result.returncode != 0:
         logger.debug(
@@ -175,7 +175,7 @@ def _parse_vmx(vmx_path: str) -> Dict[str, str]:
         with open(vmx_path, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
     except OSError as exc:
-        raise DiscoveryError(f"Impossible de lire {vmx_path}: {exc}")
+        raise DiscoveryError(f"Impossible de lire {vmx_path}: {exc}") from None
 
     config: Dict[str, str] = {}
     for line in lines:
@@ -792,7 +792,7 @@ def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise DiscoveryError(f"Impossible de parser la sortie JSON PowerShell: {exc}")
+        raise DiscoveryError(f"Impossible de parser la sortie JSON PowerShell: {exc}") from None
 
     # PowerShell emits a bare object (not array) when exactly one VM exists
     if isinstance(data, dict):
@@ -1140,7 +1140,7 @@ class DiscoveryService:
             stats = self._save_discovered_vms(hypervisor, vms_data)
 
             hypervisor.update_status(HypervisorStatus.ACTIVE)
-            self.db.commit()  
+            self.db.commit()
 
             logger.info(f"Découverte terminée: {stats['total_discovered']} VMs trouvées")
             return stats
@@ -1150,7 +1150,7 @@ class DiscoveryService:
             hypervisor.update_status(HypervisorStatus.ERROR, error_message=str(e))
             hypervisor.mark_sync_completed(success=False)
             self.db.commit()
-            raise DiscoveryError(f"Échec de la découverte: {str(e)}")
+            raise DiscoveryError(f"Échec de la découverte: {str(e)}") from None
 
         except Exception as e:  # NOSONAR — voir Audit E5 ci-dessous
             # Audit E5 — toute exception non classifiée (driver tiers, bug,
@@ -1273,7 +1273,7 @@ class DiscoveryService:
                 },
             ]
         except Exception as e:
-            raise DiscoveryError(f"Erreur connexion vSphere: {str(e)}")
+            raise DiscoveryError(f"Erreur connexion vSphere: {str(e)}") from None
 
     def _discover_vmware_workstation(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """
@@ -1363,7 +1363,7 @@ class DiscoveryService:
         logger.info(f"Découverte Hyper-V: host={host}, auth_mode={auth_mode}")
 
         cmd, extra_env = _build_hyperv_command(
-            host, auth_mode, hypervisor.username, hypervisor.password
+            host, auth_mode, hypervisor.username, hypervisor.password_plain
         )
 
         run_env = None
@@ -1382,11 +1382,11 @@ class DiscoveryService:
         except FileNotFoundError:
             raise DiscoveryError(
                 "powershell.exe introuvable. La découverte Hyper-V nécessite Windows avec PowerShell."
-            )
+            ) from None
         except subprocess.TimeoutExpired:
             raise DiscoveryError(
                 f"PowerShell timeout (120s) lors de la découverte Hyper-V id={hypervisor.id}"
-            )
+            ) from None
 
         if result.returncode != 0:
             raise DiscoveryError(
@@ -1523,7 +1523,7 @@ class DiscoveryService:
                 # Audit E8 — fermer le client si connect() échoue, sinon le
                 # transport paramiko (et son thread) fuit jusqu'au GC.
                 client.close()
-                raise DiscoveryError(f"SSH KVM connection failed ({ssh_user}@{ssh_host}): {exc}")
+                raise DiscoveryError(f"SSH KVM connection failed ({ssh_user}@{ssh_host}): {exc}") from None
 
         try:
             names_out, names_err, names_rc = _run("virsh --connect qemu:///system list --all --name")
@@ -1561,7 +1561,7 @@ class DiscoveryService:
           auth_method  — "password" (default) | "token"
           realm        — PVE realm (default: "pam")
           token_name   — API token name (required when auth_method == "token")
-          token_value  — API token value (falls back to hypervisor.password)
+          token_value  — API token value (falls back to hypervisor.password_plain)
           port         — API port (default: 8006)
           node_filter  — list of node names to restrict discovery to
         """
@@ -1571,7 +1571,7 @@ class DiscoveryService:
             raise DiscoveryError(
                 f"proxmoxer n'est pas installé: {exc}. "
                 "Ajoutez 'proxmoxer' à requirements.txt."
-            )
+            ) from None
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
         host: str = hypervisor.host or "localhost"
@@ -1589,12 +1589,12 @@ class DiscoveryService:
         try:
             if auth_method == "token":
                 token_name = cfg.get("token_name") or ""
-                token_value = cfg.get("token_value") or hypervisor.password or ""
+                token_value = cfg.get("token_value") or hypervisor.password_plain or ""
                 if not token_name or not token_value:
                     raise DiscoveryError(
                         "Authentification par token Proxmox requiert 'token_name' "
                         "dans connection_config et une valeur de token "
-                        "('token_value' ou hypervisor.password)."
+                        "('token_value' ou hypervisor.password_plain)."
                     )
                 proxmox = ProxmoxAPI(
                     host,
@@ -1609,18 +1609,18 @@ class DiscoveryService:
                 proxmox = ProxmoxAPI(
                     host,
                     user=user,
-                    password=hypervisor.password or "",
+                    password=hypervisor.password_plain or "",
                     port=port,
                     verify_ssl=bool(hypervisor.verify_ssl),
                     timeout=30,
                 )
         except Exception as exc:
-            raise DiscoveryError(f"Proxmox: échec de connexion à {host}: {exc}")
+            raise DiscoveryError(f"Proxmox: échec de connexion à {host}: {exc}") from None
 
         try:
             resources = proxmox.cluster.resources.get(type="vm")
         except Exception as exc:
-            raise DiscoveryError(f"Proxmox: cluster/resources a échoué: {exc}")
+            raise DiscoveryError(f"Proxmox: cluster/resources a échoué: {exc}") from None
 
         # Restrict to QEMU (KVM) VMs — LXC containers are not yet supported.
         qemu_resources = [
@@ -1695,7 +1695,7 @@ class DiscoveryService:
             raise DiscoveryError(
                 f"ovirt-engine-sdk-python n'est pas installé: {exc}. "
                 "Ajoutez 'ovirt-engine-sdk-python' à requirements.txt."
-            )
+            ) from None
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
         host: str = hypervisor.host or "localhost"
@@ -1715,13 +1715,13 @@ class DiscoveryService:
             connection = sdk.Connection(
                 url=url,
                 username=hypervisor.username or "admin@internal",
-                password=hypervisor.password or "",
+                password=hypervisor.password_plain or "",
                 ca_file=ca_file,
                 insecure=insecure,
                 timeout=30,
             )
         except Exception as exc:
-            raise DiscoveryError(f"oVirt: échec de connexion à {url}: {exc}")
+            raise DiscoveryError(f"oVirt: échec de connexion à {url}: {exc}") from None
 
         try:
             system = connection.system_service()

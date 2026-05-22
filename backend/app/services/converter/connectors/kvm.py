@@ -41,6 +41,13 @@ def _ssh_connect(hv: Hypervisor):
             "paramiko not installed in worker image",
             cause=e,
         ) from e
+    password = hv.password_plain
+    if not password:
+        raise ConversionError(
+            "ERR_HV_CREDENTIALS_MISSING",
+            f"No usable credential for KVM host {hv.host} "
+            f"(ciphertext absent or undecryptable; see vault.decrypt log lines)",
+        )
     ssh = paramiko.SSHClient()
     apply_host_key_policy(ssh)  # Audit H-02 — vérifie les clés d'hôte SSH
     try:
@@ -48,7 +55,7 @@ def _ssh_connect(hv: Hypervisor):
             hostname=hv.host,
             port=hv.port or 22,
             username=hv.username,
-            password=hv.password,
+            password=password,
             timeout=15,
             allow_agent=False,
             look_for_keys=False,

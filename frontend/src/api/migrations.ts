@@ -142,3 +142,96 @@ export async function cancelMigration(
 export async function deleteMigration(id: number): Promise<void> {
   await api.delete(`/migrations/${id}`);
 }
+
+/* ------------------------------------------------------------------ *
+ * Audit log — US3 / US1
+ * The four canonical event categories from the Q1 clarification.
+ * ------------------------------------------------------------------ */
+
+export const MIGRATION_EVENT_TYPES = [
+  "state_transition",
+  "stage_event",
+  "classified_error",
+  "heartbeat",
+] as const;
+
+export type MigrationEventType = (typeof MIGRATION_EVENT_TYPES)[number];
+
+export type MigrationEventResponse = {
+  id: number;
+  migration_id: number;
+  tenant_id: string;
+  sequence_id: number;
+  event_type: MigrationEventType;
+  from_status: string | null;
+  to_status: string | null;
+  actor_id: number | null;
+  actor_type: string;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type MigrationEventListResponse = {
+  items: MigrationEventResponse[];
+  total: number;
+  next_since_sequence_id: number | null;
+  has_more: boolean;
+};
+
+export type FetchMigrationEventsParams = {
+  sinceSequenceId?: number;
+  eventType?: MigrationEventType;
+  limit?: number;
+  signal?: AbortSignal;
+};
+
+/**
+ * Fetch the migration Reports PDF as a binary blob and trigger a
+ * browser download. Uses the same RBAC as `GET /migrations/stats/summary`.
+ *
+ * The filename is derived from the server-supplied `Content-Disposition`
+ * header; we fall back to a stamped default if the browser cannot parse
+ * the header.
+ */
+export async function downloadReportsPdf(): Promise<void> {
+  const res = await api.get("/reports/export/pdf", {
+    responseType: "blob",
+  });
+  const blob = res.data as Blob;
+  const disposition = res.headers["content-disposition"] as string | undefined;
+  const matched = disposition?.match(/filename="?([^";]+)"?/i);
+  const filename = matched?.[1] ?? `shiftwise-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Fetch a page of audit events for a migration. The caller passes the
+ * previous response's `next_since_sequence_id` as `sinceSequenceId` to
+ * fetch only new events (delta polling).
+ */
+export async function fetchMigrationEvents(
+  migrationId: number,
+  params: FetchMigrationEventsParams = {},
+): Promise<MigrationEventListResponse> {
+  const res = await api.get<MigrationEventListResponse>(
+    `/migrations/${migrationId}/events`,
+    {
+      params: {
+        since_sequence_id: params.sinceSequenceId ?? 0,
+        event_type: params.eventType,
+        limit: params.limit ?? 200,
+      },
+      signal: params.signal,
+    },
+  );
+  return res.data;
+}
