@@ -183,6 +183,15 @@ class AuditEmitter:
     # row, not any uncommitted work the caller had queued on the same
     # session. They then commit the outer transaction so the audit row
     # — when it succeeded — is durable before the caller continues.
+    #
+    # NOTE — the trailing ``db.commit()`` is INTENTIONAL and part of the
+    # contract: Q1.C requires the audit row to be durable before the
+    # next pipeline stage runs (otherwise a subsequent stage rollback
+    # would discard the row and the audit log would silently diverge
+    # from the migration's actual progression). Callers MUST flush or
+    # commit any unrelated pending work BEFORE invoking the safe
+    # variants; the migrator service's `run_stage → commit → emit`
+    # ordering already guarantees this.
 
     @staticmethod
     def safe_emit_stage_event(
@@ -198,8 +207,11 @@ class AuditEmitter:
 
         Wraps the audit write in a SQLAlchemy SAVEPOINT so a failure
         only discards this audit row, not any uncommitted work pending
-        in the caller's outer transaction. Returns ``None`` on DB
-        failure; the caller continues the migration.
+        in the caller's outer transaction. On success the outer
+        transaction is committed so the audit row is durable on return
+        — required by Q1.C, see the section comment above. Callers
+        with their own uncommitted work MUST commit it first. Returns
+        ``None`` on DB failure; the caller continues the migration.
         """
         try:
             with db.begin_nested():
