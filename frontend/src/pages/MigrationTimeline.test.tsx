@@ -23,11 +23,12 @@ function renderTimeline(args: { migrationId: number; status: Parameters<typeof M
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(
+  const utils = render(
     <QueryClientProvider client={client}>
       <MigrationTimeline {...args} />
     </QueryClientProvider>,
   );
+  return { ...utils, client };
 }
 
 const SAMPLE_EVENTS: MigrationEventListResponse["items"] = [
@@ -118,16 +119,16 @@ describe("MigrationTimeline", () => {
       ),
     );
 
-    const { rerender } = renderTimeline({
+    const { rerender, client } = renderTimeline({
       migrationId: 1,
       status: "transferring",
     });
     await waitFor(() => screen.getAllByTestId("timeline-row"));
     expect(screen.getByText(/· live/i)).toBeInTheDocument();
 
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
+    // Réutiliser le QueryClient initial — un nouveau provider repartirait
+    // d'un cache vide et le test mesurerait un montage neuf, pas la
+    // transition vers un statut terminal.
     rerender(
       <QueryClientProvider client={client}>
         <MigrationTimeline migrationId={1} status="completed" />
