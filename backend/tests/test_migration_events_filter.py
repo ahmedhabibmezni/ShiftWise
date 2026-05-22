@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.api.v1.migrations import list_migration_events
@@ -22,15 +22,43 @@ from app.models.base import Base
 from app.models.migration import MigrationStatus, MigrationStrategy
 from app.models.migration_event import MigrationEventType
 from app.models.user import User
+from app.models.virtual_machine import VirtualMachine
 
 
 @pytest.fixture
 def db_session():
     engine = create_engine("sqlite:///:memory:")
+
+    # SQLite ne fait pas respecter les FK par défaut — l'activer met les
+    # tests sur le même contrat d'intégrité référentielle que PostgreSQL
+    # en prod (sinon un `Migration.vm_id` pointant sur une VM inexistante
+    # passe silencieusement).
+    @event.listens_for(engine, "connect")
+    def _fk_pragma_on_connect(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     yield session
     session.close()
+
+
+def _seed_vm(db_session, vm_id: int = 1, tenant: str = "t1") -> VirtualMachine:
+    """Crée une VM minimale pour satisfaire la FK ``migrations.vm_id``."""
+    vm = VirtualMachine(
+        id=vm_id,
+        tenant_id=tenant,
+        name=f"vm-{vm_id}",
+        cpu_cores=1,
+        memory_mb=512,
+        disk_gb=10,
+    )
+    db_session.add(vm)
+    db_session.commit()
+    db_session.refresh(vm)
+    return vm
 
 
 def _superuser() -> User:
@@ -44,10 +72,11 @@ def _superuser() -> User:
 
 
 def _seed_mixed_event_types(db_session):
+    vm = _seed_vm(db_session)
     mig = crud_migration.create_migration(
         db_session,
         data={
-            "vm_id": 1,
+            "vm_id": vm.id,
             "strategy": MigrationStrategy.AUTO,
             "target_storage_class": "nfs-client",
         },
