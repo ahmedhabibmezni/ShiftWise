@@ -178,9 +178,11 @@ class AuditEmitter:
     # The transactional variants above MUST stay fatal for
     # state_transition / classified_error — those events are the
     # operator's only window into a status the DB now contradicts. The
-    # safe variants below swallow ``SQLAlchemyError``, roll the session
-    # back so the next CRUD call does not inherit the failure state, and
-    # log a WARNING so the operator still sees the audit gap.
+    # safe variants below isolate the audit write in a SAVEPOINT
+    # (``db.begin_nested()``) so a failure only rolls back the audit
+    # row, not any uncommitted work the caller had queued on the same
+    # session. They then commit the outer transaction so the audit row
+    # — when it succeeded — is durable before the caller continues.
 
     @staticmethod
     def safe_emit_stage_event(
@@ -194,26 +196,30 @@ class AuditEmitter:
     ) -> Optional[MigrationEvent]:
         """Non-fatal :meth:`emit_stage_event` for the migrator orchestrator.
 
-        Returns ``None`` on DB failure after rolling the session back; the
-        caller continues the migration.
+        Wraps the audit write in a SQLAlchemy SAVEPOINT so a failure
+        only discards this audit row, not any uncommitted work pending
+        in the caller's outer transaction. Returns ``None`` on DB
+        failure; the caller continues the migration.
         """
         try:
-            return AuditEmitter.emit_stage_event(
-                db,
-                migration=migration,
-                message=message,
-                actor_id=actor_id,
-                actor_type=actor_type,
-                payload=payload,
-                commit=True,
-            )
+            with db.begin_nested():
+                event = AuditEmitter.emit_stage_event(
+                    db,
+                    migration=migration,
+                    message=message,
+                    actor_id=actor_id,
+                    actor_type=actor_type,
+                    payload=payload,
+                    commit=False,
+                )
+            db.commit()
+            return event
         except SQLAlchemyError:
             logger.warning(
                 "audit safe_emit_stage_event failed for migration_id=%s "
                 "(stage=%s) - continuing migration without audit row",
                 migration.id, migration.status.value, exc_info=True,
             )
-            db.rollback()
             return None
 
     @staticmethod
@@ -223,19 +229,22 @@ class AuditEmitter:
         migration: Migration,
         message: Optional[str] = None,
     ) -> Optional[MigrationEvent]:
-        """Non-fatal :meth:`emit_heartbeat`. Same rollback + log contract."""
+        """Non-fatal :meth:`emit_heartbeat`. Same SAVEPOINT contract as
+        :meth:`safe_emit_stage_event`."""
         try:
-            return AuditEmitter.emit_heartbeat(
-                db,
-                migration=migration,
-                message=message,
-                commit=True,
-            )
+            with db.begin_nested():
+                event = AuditEmitter.emit_heartbeat(
+                    db,
+                    migration=migration,
+                    message=message,
+                    commit=False,
+                )
+            db.commit()
+            return event
         except SQLAlchemyError:
             logger.warning(
                 "audit safe_emit_heartbeat failed for migration_id=%s "
                 "(stage=%s) - continuing migration without audit row",
                 migration.id, migration.status.value, exc_info=True,
             )
-            db.rollback()
             return None

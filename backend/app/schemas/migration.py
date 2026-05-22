@@ -207,12 +207,19 @@ class MigrationEventListResponse(BaseModel):
     # d'événements pour la migration. Conservé pour la rétro-compatibilité
     # des clients qui consommaient l'ancien shape avant le polling delta ;
     # les nouveaux clients doivent utiliser ``has_more`` / ``next_since_sequence_id``.
+    # ``deprecated=True`` est porté dans l'OpenAPI via ``json_schema_extra``
+    # (Pydantic 2.5 ne supporte pas encore l'arg ``Field(deprecated=...)``
+    # — ajouté en 2.7). Les clients générés voient le marqueur, les
+    # consommateurs humains voient le ``[DEPRECATED]`` en tête de description.
     total: int = Field(
         ...,
         description=(
-            "Taille de la page renvoyée (len(items)). Endpoint delta-paginé : "
-            "utilisez has_more et next_since_sequence_id pour parcourir le journal."
+            "[DEPRECATED — sera retiré dans la prochaine majeure de l'API] "
+            "Taille de la page renvoyée (len(items)), PAS le nombre total "
+            "d'événements. Endpoint delta-paginé : utilisez has_more et "
+            "next_since_sequence_id pour parcourir le journal."
         ),
+        json_schema_extra={"deprecated": True},
     )
     # Polling delta — le client repasse cette valeur en
     # `?since_sequence_id=` au prochain appel.
