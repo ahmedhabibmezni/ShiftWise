@@ -150,10 +150,43 @@ class VirtualMachine(BaseModel):
 
     @property
     def can_migrate(self) -> bool:
-        """Vérifie si la VM peut être migrée"""
+        """Vérifie si la VM peut être migrée.
+
+        Migration eligibility is driven by the Analyzer verdict
+        (``compatibility_status``), not by the lifecycle phase
+        (``status``):
+
+        * ``COMPATIBLE`` — direct migration.
+        * ``PARTIAL``   — the Converter (disk format VMDK/VHD → QCOW2)
+                          and the Adapter (guest OS / network / serial
+                          fixup) close the gap during the pipeline.
+        * ``INCOMPATIBLE`` / ``UNKNOWN`` — blocked.
+
+        ``status`` is consulted only to exclude phases that make a
+        *new* migration impossible right now: an analysis in flight,
+        a migration already running, a successful migration (no
+        re-migration without explicit reset), or an archived VM that
+        is no longer reachable on the source. ``FAILED`` is allowed
+        so a failed migration can be retried.
+
+        Using a positive whitelist on ``status`` (the previous
+        behaviour) created a footgun: when discovery reactivates a
+        VM from ``ARCHIVED`` it flips ``status`` back to
+        ``DISCOVERED`` but preserves the earlier ``compatibility_status``,
+        leaving the VM stuck as non-migratable despite being
+        Analyzer-approved.
+        """
         return (
-            self.is_compatible and
-            self.status in [VMStatus.COMPATIBLE, VMStatus.PARTIAL, VMStatus.FAILED]
+            self.compatibility_status in {
+                CompatibilityStatus.COMPATIBLE,
+                CompatibilityStatus.PARTIAL,
+            }
+            and self.status not in {
+                VMStatus.ANALYZING,
+                VMStatus.MIGRATING,
+                VMStatus.MIGRATED,
+                VMStatus.ARCHIVED,
+            }
         )
 
     def to_dict(self) -> dict:
