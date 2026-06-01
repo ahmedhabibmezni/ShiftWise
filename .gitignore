@@ -67,6 +67,8 @@ WARP.md
 *_session_handoff.md
 commit_rules.md
 start.txt
+scenario.txt
+*.rdb
 DESIGN.md
 PRODUCT.md
 screenshot.mjs
