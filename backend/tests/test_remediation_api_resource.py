@@ -77,7 +77,7 @@ def _seed_vm(db, *, tenant: str = "t1", hv_id: int = 1,
 def _seed_hypervisor(db, *, tenant: str = "t1") -> Hypervisor:
     hv = Hypervisor(
         name="hv1", tenant_id=tenant, type=HypervisorType.VMWARE_WORKSTATION,
-        host="10.0.0.10", username="u", password="p",
+        host="10.0.0.10", username="u",
         status=HypervisorStatus.ACTIVE, is_active=True,
     )
     db.add(hv)

@@ -26,6 +26,7 @@ from app.schemas.hypervisor import (
     HypervisorTestConnectionResponse
 )
 from app.services.discovery import create_discovery_service, DiscoveryError
+from app.services.credentials import get_vault
 from app.crud import hypervisor as crud_hypervisor
 from app.schemas.vm import VMResponse
 from app.models.virtual_machine import VirtualMachine, VMStatus
@@ -257,9 +258,16 @@ def test_hypervisor_connection(
         host=test_data.host,
         port=test_data.port,
         username=test_data.username,
-        password=test_data.password,
         verify_ssl=test_data.verify_ssl,
     )
+    # La colonne plaintext `password` a été dropée (migration c9e1d4f3b6a2) :
+    # le connecteur lit le credential via `password_plain`, qui déchiffre
+    # `password_ciphertext`. On chiffre donc le mot de passe de test, sans
+    # rien persister (l'objet `transient` n'est jamais ajouté à la session).
+    if test_data.password:
+        vault = get_vault()
+        transient.password_ciphertext = vault.encrypt(test_data.password)
+        transient.credential_key_version = vault.key_version
     service = create_discovery_service(db)
     result = service.test_connection(transient)
 

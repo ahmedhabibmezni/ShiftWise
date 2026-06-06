@@ -109,7 +109,6 @@ def _seed_hypervisor(db, *, name, tenant_id) -> Hypervisor:
         type=HypervisorType.KVM,
         host="10.0.0.10",
         username="root",
-        password="secret",
         tenant_id=tenant_id,
         status=HypervisorStatus.UNKNOWN,
     )
@@ -232,7 +231,7 @@ def test_b15_same_name_same_tenant_rejected(db_session):
     _seed_hypervisor(db_session, name="prod-hv", tenant_id="t1")
     dup = Hypervisor(
         name="prod-hv", type=HypervisorType.KVM, host="10.0.0.11",
-        username="root", password="x", tenant_id="t1",
+        username="root", tenant_id="t1",
         status=HypervisorStatus.UNKNOWN,
     )
     db_session.add(dup)

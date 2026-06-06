@@ -242,7 +242,7 @@ def seeded(db_session):
     db_session.add(u); db_session.commit()
     h = Hypervisor(
         name="kvm1", tenant_id=u.tenant_id, type=HypervisorType.KVM,
-        host="kvm.local", username="r", password="x",
+        host="kvm.local", username="r",
         status=HypervisorStatus.ACTIVE, total_vms_discovered=0,
     )
     db_session.add(h); db_session.commit()

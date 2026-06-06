@@ -50,7 +50,7 @@ def db_session():
 def _seed_hypervisor(db, *, name, tenant_id) -> Hypervisor:
     hv = Hypervisor(
         name=name, type=HypervisorType.KVM, host="10.0.0.10",
-        username="root", password="secret", tenant_id=tenant_id,
+        username="root", tenant_id=tenant_id,
         status=HypervisorStatus.UNKNOWN,
     )
     db.add(hv)

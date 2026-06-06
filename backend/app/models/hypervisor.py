@@ -77,12 +77,10 @@ class Hypervisor(BaseModel):
     # Authentification — US4 production-readiness :
     #   * `password_ciphertext` (Fernet) est la source de vérité pour les
     #     credentials.
-    #   * `password` (texte clair, nullable) est conservé pour la rétro-
-    #     compatibilité pendant la fenêtre de cutover ; les writes ne le
-    #     remplissent plus depuis l'introduction du vault. Une migration
-    #     Alembic ultérieure dropera la colonne.
+    #   * La colonne legacy `password` (texte clair) a été dropée par la
+    #     migration de cutover `c9e1d4f3b6a2` ; elle n'existe plus ni en
+    #     base ni dans le modèle.
     username = Column(String(255), nullable=False)
-    password = Column(Text, nullable=True)
     password_ciphertext = Column(LargeBinary, nullable=True)
     credential_key_version = Column(
         Integer, nullable=False,
@@ -144,14 +142,13 @@ class Hypervisor(BaseModel):
         Behavior matrix:
         - ``password_ciphertext`` set, decrypt succeeds -> return plaintext.
         - ``password_ciphertext`` set, decrypt fails    -> log + return
-          ``None``. We MUST NOT silently fall back to the legacy
-          ``password`` column: the ciphertext is the source of truth and a
-          decrypt failure points at a real rotation/corruption incident
-          the operator must see (constitution Principle VII).
-        - ``password_ciphertext`` NULL, legacy ``password`` set -> return
-          legacy plaintext (pre-cutover rows; will disappear once
-          c9e1d4f3b6a2 lands).
-        - both NULL                                     -> ``None``.
+          ``None``. The ciphertext is the source of truth and a decrypt
+          failure points at a real rotation/corruption incident the
+          operator must see (constitution Principle VII).
+        - ``password_ciphertext`` NULL                  -> ``None``.
+
+        The legacy plaintext ``password`` column was dropped by migration
+        ``c9e1d4f3b6a2``; there is no fallback path left.
         """
         if self.password_ciphertext:
             from cryptography.fernet import InvalidToken
@@ -163,12 +160,11 @@ class Hypervisor(BaseModel):
             except InvalidToken:
                 logger.error(
                     "vault.decrypt failed for hypervisor id=%s key_version=%s "
-                    "- ciphertext present but no key in the rotation set decrypts it; "
-                    "refusing to fall back to legacy plaintext column",
+                    "- ciphertext present but no key in the rotation set decrypts it",
                     self.id, self.credential_key_version,
                 )
                 return None
-        return self.password or None
+        return None
 
     @property
     def username_masked(self) -> str:

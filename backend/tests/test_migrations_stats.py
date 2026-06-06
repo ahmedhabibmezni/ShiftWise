@@ -58,7 +58,7 @@ def _seed_hypervisor(
 ) -> Hypervisor:
     h = Hypervisor(
         name=name, tenant_id=tenant, type=htype, host="10.0.0.1", username="root",
-        password="x", status=HypervisorStatus.ACTIVE,
+        status=HypervisorStatus.ACTIVE,
     )
     db.add(h)
     db.commit()

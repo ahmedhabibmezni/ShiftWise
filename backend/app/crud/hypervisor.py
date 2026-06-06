@@ -192,8 +192,8 @@ def create_hypervisor(db: Session, data: dict, tenant_id: str) -> Hypervisor:
         raise ValueError(f"Un hypervisor avec le nom '{data['name']}' existe déjà")
 
     # US4 — chiffrer le mot de passe avant insertion. Le plaintext n'est
-    # JAMAIS persisté ; la colonne legacy `password` reste NULL pour les
-    # nouvelles lignes et sera dropée par une migration Alembic de cutover.
+    # JAMAIS persisté ; seul `password_ciphertext` (Fernet) l'est. La colonne
+    # legacy `password` a été dropée par la migration `c9e1d4f3b6a2`.
     raw_password = data.pop("password", None)
 
     hypervisor = Hypervisor(
@@ -245,16 +245,15 @@ def update_hypervisor(
         if clash and clash.id != hypervisor.id:
             raise ValueError(f"Un hypervisor avec le nom '{new_name}' existe déjà")
 
-    # US4 — un update sur `password` chiffre la nouvelle valeur ; on ne
-    # touche jamais directement à la colonne legacy `password`.
+    # US4 — un update sur `password` chiffre la nouvelle valeur dans
+    # `password_ciphertext`. La colonne legacy `password` n'existe plus
+    # (dropée par la migration `c9e1d4f3b6a2`).
     raw_password = update_data.pop("password", None)
     if raw_password:
         vault = get_vault()
         hypervisor.password_ciphertext = vault.encrypt(raw_password)
         hypervisor.credential_key_version = vault.key_version
         hypervisor.credentials_updated_at = vault.now_utc()
-        # Force-clear le plaintext historique si la ligne en avait encore un.
-        hypervisor.password = None
 
     for field, value in update_data.items():
         if field in _HYPERVISOR_PROTECTED_FIELDS:

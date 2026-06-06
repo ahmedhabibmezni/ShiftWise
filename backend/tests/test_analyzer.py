@@ -73,7 +73,6 @@ def test_hypervisor(db_session, test_tenant):
         type=HypervisorType.KVM,
         host="qemu+ssh://root@192.168.1.100/system",
         username="root",
-        password="test",
         status=HypervisorStatus.ACTIVE,
         total_vms_discovered=0,
     )
@@ -139,7 +138,6 @@ def test_hypervisor_vmware(db_session, test_tenant):
         type=HypervisorType.VMWARE_WORKSTATION,
         host="local",
         username="user",
-        password="test",
         status=HypervisorStatus.ACTIVE,
         total_vms_discovered=0,
     )

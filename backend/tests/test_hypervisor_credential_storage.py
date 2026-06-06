@@ -2,16 +2,17 @@
 US4 — hypervisor credentials are stored encrypted, not in plaintext (T042).
 
 After create_hypervisor() lands, the row in the database has
-``password_ciphertext`` populated with Fernet bytes and the legacy
-``password`` column is NULL. Discovery / connector code reads the
-plaintext back through ``hypervisor.password_plain``.
+``password_ciphertext`` populated with Fernet bytes. The legacy plaintext
+``password`` column was dropped by migration ``c9e1d4f3b6a2`` — it no
+longer exists in the schema or the model. Discovery / connector code reads
+the plaintext back through ``hypervisor.password_plain``.
 """
 
 from __future__ import annotations
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.crud import hypervisor as crud_hypervisor
@@ -44,24 +45,24 @@ def _create(db_session, *, password: str = "super-secret-vsphere-pass"):
     )
 
 
-def test_create_stores_ciphertext_and_leaves_legacy_column_null(db_session):
+def test_create_stores_ciphertext_only(db_session):
     hv = _create(db_session, password="super-secret!")
 
     assert hv.password_ciphertext is not None
     assert isinstance(hv.password_ciphertext, (bytes, bytearray))
     assert hv.credential_key_version >= 1
 
-    # Inspect the raw row to confirm the plaintext column is NULL.
+    # The legacy plaintext column no longer exists (dropped by
+    # c9e1d4f3b6a2): only password_ciphertext is persisted.
+    columns = {c["name"] for c in inspect(db_session.bind).get_columns("hypervisors")}
+    assert "password" not in columns, (
+        "legacy plaintext column MUST NOT exist after the cutover migration"
+    )
+
     row = db_session.execute(
-        text(
-            "SELECT password, password_ciphertext "
-            "FROM hypervisors WHERE id = :id"
-        ),
+        text("SELECT password_ciphertext FROM hypervisors WHERE id = :id"),
         {"id": hv.id},
     ).first()
-    assert row.password is None, (
-        f"legacy plaintext column MUST be NULL for new rows; got {row.password!r}"
-    )
     assert row.password_ciphertext is not None
     assert b"super-secret!" not in bytes(row.password_ciphertext), (
         "ciphertext bytes contain the plaintext substring — not actually encrypted"
@@ -74,12 +75,9 @@ def test_password_plain_round_trips_via_the_vault(db_session):
     assert hv.password_plain == "round-trip-me"
 
 
-def test_update_password_re_encrypts_and_clears_legacy_column(db_session):
+def test_update_password_re_encrypts(db_session):
     hv = _create(db_session, password="initial-pass")
-
-    # Pretend a legacy migration left plaintext lying around.
-    hv.password = "legacy-plaintext"
-    db_session.commit()
+    original_ciphertext = bytes(hv.password_ciphertext)
 
     crud_hypervisor.update_hypervisor(
         db_session,
@@ -88,28 +86,28 @@ def test_update_password_re_encrypts_and_clears_legacy_column(db_session):
     )
     db_session.refresh(hv)
 
-    assert hv.password is None, "legacy column MUST be cleared on update"
+    assert bytes(hv.password_ciphertext) != original_ciphertext, (
+        "rotating the password MUST produce fresh ciphertext"
+    )
     assert hv.password_plain == "rotated-pass"
 
 
-def test_legacy_row_without_ciphertext_falls_back_to_plaintext(db_session):
-    # Simulate a historical row inserted before the vault landed.
+def test_row_without_ciphertext_yields_none(db_session):
+    # With the legacy plaintext column dropped, a row whose ciphertext is
+    # NULL has no credential to recover — password_plain returns None.
     hv = _create(db_session, password="x")
     hv.password_ciphertext = None
-    hv.password = "historical-plaintext"
     db_session.commit()
     db_session.refresh(hv)
 
-    assert hv.password_plain == "historical-plaintext"
+    assert hv.password_plain is None
 
 
-def test_undecryptable_ciphertext_returns_none_not_legacy_plaintext(
-    db_session, caplog
-):
-    """Regression: ``password_plain`` MUST NOT silently fall back to the
-    legacy plaintext column when the ciphertext is present but no key in
-    the rotation set can decrypt it. That fallback used to mask key-
-    rotation incidents with stale credentials (silent-failure-hunter P0).
+def test_undecryptable_ciphertext_returns_none(db_session, caplog):
+    """Regression: ``password_plain`` MUST return None (not raise, not
+    leak) when the ciphertext is present but no key in the rotation set can
+    decrypt it. A decrypt failure points at a real key-rotation incident
+    the operator must see (silent-failure-hunter P0).
     """
     hv = _create(db_session, password="x")
 
@@ -119,7 +117,6 @@ def test_undecryptable_ciphertext_returns_none_not_legacy_plaintext(
     foreign_key = Fernet.generate_key()
     foreign_fernet = Fernet(foreign_key)
     hv.password_ciphertext = foreign_fernet.encrypt(b"never-decryptable")
-    hv.password = "legacy-stale-plaintext"  # MUST NOT leak through
     db_session.commit()
     db_session.refresh(hv)
 
