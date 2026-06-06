@@ -168,13 +168,11 @@ describe("Hypervisors page", () => {
           hypervisor_name: "kvm-east",
           status: "success",
           message: "ok",
-          statistics: {
-            total_discovered: 12,
-            new_vms: 4,
-            updated_vms: 8,
-            archived_vms: 0,
-            errors: [],
-          },
+          total_discovered: 12,
+          new_vms: 4,
+          updated_vms: 8,
+          archived_vms: 0,
+          errors: 0,
         }),
       ),
     );

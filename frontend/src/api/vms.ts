@@ -23,10 +23,14 @@ export const COMPATIBILITY_STATUSES = [
 export type VmStatus = (typeof VM_STATUSES)[number];
 export type CompatibilityStatus = (typeof COMPATIBILITY_STATUSES)[number];
 
+// Mirrors a single rule result from the backend rules engine
+// (`compatibility_rules.py`): keyed by `id`, severity is UPPERCASE.
 export type CompatibilityRule = {
-  rule: string;
-  severity: "blocker" | "warning" | "info";
+  id: string;
+  passed: boolean;
+  severity: "BLOCKER" | "WARNING" | "INFO";
   message: string;
+  weight: number;
 };
 
 export type CompatibilityDetails = {
@@ -37,8 +41,9 @@ export type CompatibilityDetails = {
   model_grade: string | null;
   override_reason: string | null;
   rules: CompatibilityRule[];
-  blockers: CompatibilityRule[];
-  warnings: CompatibilityRule[];
+  // `aggregate()` returns these as plain message strings, not rule objects.
+  blockers: string[];
+  warnings: string[];
   analyzed_at: string;
 };
 

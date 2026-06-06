@@ -142,18 +142,17 @@ export async function testHypervisorConnection(
   return res.data;
 }
 
+// Mirrors backend `HypervisorSyncResponse` (flat fields, 202 Accepted).
 export type SyncResponse = {
   hypervisor_id: number;
   hypervisor_name: string;
   status: string;
   message: string;
-  statistics: {
-    total_discovered: number;
-    new_vms: number;
-    updated_vms: number;
-    archived_vms: number;
-    errors: string[];
-  };
+  total_discovered: number;
+  new_vms: number;
+  updated_vms: number;
+  archived_vms: number;
+  errors: number;
 };
 
 export async function syncHypervisor(id: number): Promise<SyncResponse> {

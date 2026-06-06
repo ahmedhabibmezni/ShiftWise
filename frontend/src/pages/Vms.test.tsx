@@ -204,13 +204,24 @@ describe("Vms page", () => {
         confidence: null,
         model_grade: null,
         override_reason: null,
-        rules: [],
-        blockers: [
-          { rule: "OS_NOT_SUPPORTED", severity: "blocker", message: "OS family not supported" },
+        rules: [
+          {
+            id: "OS_NOT_SUPPORTED",
+            passed: false,
+            severity: "BLOCKER",
+            message: "OS family not supported",
+            weight: 40,
+          },
+          {
+            id: "MEM_LOW",
+            passed: false,
+            severity: "WARNING",
+            message: "Memory below recommended 1GB",
+            weight: 10,
+          },
         ],
-        warnings: [
-          { rule: "MEM_LOW", severity: "warning", message: "Memory below recommended 1GB" },
-        ],
+        blockers: ["OS family not supported"],
+        warnings: ["Memory below recommended 1GB"],
         analyzed_at: "2026-05-11T01:00:00Z",
       },
     };

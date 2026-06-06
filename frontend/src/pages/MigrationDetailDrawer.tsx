@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Ban,
@@ -30,6 +30,7 @@ import {
   getMigration,
   startMigration,
   type Migration,
+  type MigrationStatus,
 } from "@/api/migrations";
 import type { Vm } from "@/api/vms";
 import { formatDuration, formatRelativeTime } from "@/lib/format";
@@ -105,6 +106,25 @@ export function MigrationDetailDrawer({
   const migrationVm = migration
     ? vms.find((v) => v.id === migration.vm_id)
     : undefined;
+
+  // Immediate alert the moment a watched migration flips to FAILED (the
+  // persistent error Callout below shows the detail; this surfaces it even
+  // before the operator scrolls). Fires only on the transition, not when a
+  // drawer is opened on an already-failed migration.
+  const prevStatusRef = useRef<MigrationStatus | null>(null);
+  useEffect(() => {
+    const status = migration?.status;
+    if (!status) return;
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (prev && prev !== status && status === "failed") {
+      const code = migration.error_code ? ` · ${migration.error_code}` : "";
+      const detail = migration.error_message ? `: ${migration.error_message}` : "";
+      toast.error(`Migration #${migration.id} failed${code}${detail}`, {
+        duration: 8_000,
+      });
+    }
+  }, [migration]);
 
   return (
     <>

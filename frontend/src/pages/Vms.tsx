@@ -42,7 +42,6 @@ import {
   analyzeVm,
   getVm,
   listVms,
-  type CompatibilityRule,
   type CompatibilityStatus,
   type Vm,
   type VmStatus,
@@ -109,7 +108,6 @@ export default function Vms() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Virtual Machines"
-        description="Discovered VMs, migration state, and KubeVirt compatibility scoring."
       />
 
       <CompatStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
@@ -637,8 +635,29 @@ const GRADE_TONE: Record<"COMPATIBLE" | "PARTIAL" | "INCOMPATIBLE", "ok" | "warn
   INCOMPATIBLE: "err",
 };
 
+/**
+ * Failed rules carry the actionable detail (id + severity + message). The
+ * backend's `blockers`/`warnings` are plain message strings, so we prefer the
+ * richer `rules` array (filtered to failures) and fall back to the strings
+ * when an older analysis lacks the per-rule breakdown.
+ */
+function failedRules(
+  details: NonNullable<Vm["compatibility_details"]>,
+  severity: "BLOCKER" | "WARNING",
+): DisplayRule[] {
+  const fromRules = (details.rules ?? [])
+    .filter((r) => !r.passed && r.severity === severity)
+    .map((r) => ({ id: r.id, severity: r.severity, message: r.message }));
+  if (fromRules.length > 0) return fromRules;
+
+  const messages = severity === "BLOCKER" ? details.blockers : details.warnings;
+  return (messages ?? []).map((message) => ({ id: null, severity, message }));
+}
+
 function CompatibilityPanel({ details }: { details: NonNullable<Vm["compatibility_details"]> }) {
   const tone = GRADE_TONE[details.grade];
+  const blockers = failedRules(details, "BLOCKER");
+  const warnings = failedRules(details, "WARNING");
   return (
     <section className="space-y-5">
       <div className="flex items-center justify-between mb-1">
@@ -667,14 +686,14 @@ function CompatibilityPanel({ details }: { details: NonNullable<Vm["compatibilit
         title="Blockers"
         Icon={X}
         color="var(--alert-critical)"
-        rules={details.blockers}
+        rules={blockers}
         emptyLabel="No blockers detected"
       />
       <RulesGroup
         title="Warnings"
         Icon={AlertTriangle}
         color="var(--alert-high)"
-        rules={details.warnings}
+        rules={warnings}
         emptyLabel="No warnings"
       />
 
@@ -684,6 +703,13 @@ function CompatibilityPanel({ details }: { details: NonNullable<Vm["compatibilit
     </section>
   );
 }
+
+/** A rule flattened for display — `id` is null when only the message survived. */
+type DisplayRule = {
+  id: string | null;
+  severity: "BLOCKER" | "WARNING";
+  message: string;
+};
 
 function RulesGroup({
   title,
@@ -695,7 +721,7 @@ function RulesGroup({
   title: string;
   Icon: typeof X;
   color: string;
-  rules: CompatibilityRule[];
+  rules: DisplayRule[];
   emptyLabel: string;
 }) {
   return (
@@ -716,7 +742,7 @@ function RulesGroup({
         <ul className="space-y-1.5">
           {rules.map((r, i) => (
             <li
-              key={`${r.rule}-${i}`}
+              key={`${r.id ?? "rule"}-${i}`}
               className="flex items-start gap-2.5 rounded-xl bg-[var(--surface-soft)] px-3.5 py-2.5"
             >
               <span
@@ -731,8 +757,12 @@ function RulesGroup({
                   {r.message}
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
-                  <span>{r.rule}</span>
-                  <span aria-hidden>·</span>
+                  {r.id && (
+                    <>
+                      <span>{r.id}</span>
+                      <span aria-hidden>·</span>
+                    </>
+                  )}
                   <span style={{ color }}>{r.severity}</span>
                 </div>
               </div>

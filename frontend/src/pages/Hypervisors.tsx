@@ -107,7 +107,6 @@ export default function Hypervisors() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Hypervisors"
-        description="Discovery sources: vSphere, VMware Workstation, KVM, Hyper-V, Proxmox VE, oVirt/RHV connectors."
         actions={
           canCreate ? (
             <Button
@@ -525,7 +524,7 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
     mutationFn: () => syncHypervisor(id!),
     onSuccess: (data) => {
       toast.success(
-        `Sync ok · ${data.statistics.total_discovered} discovered · ${data.statistics.new_vms} new`,
+        `Sync ok · ${data.total_discovered} discovered · ${data.new_vms} new`,
       );
       queryClient.invalidateQueries({ queryKey: ["hypervisors"] });
       queryClient.invalidateQueries({ queryKey: ["hypervisor", id] });
