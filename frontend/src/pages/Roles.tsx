@@ -68,7 +68,6 @@ export default function Roles() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Roles"
-        description="Role-based access control. System roles are immutable; custom roles are tenant-editable."
         actions={
           canCreate ? (
             <Button

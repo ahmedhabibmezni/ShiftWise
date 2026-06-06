@@ -1,24 +1,15 @@
 import { LiveIndicator } from "@/components/ui/LiveIndicator";
 
-export function Footer({
-  uptime = "12d 04:11:23",
-  region = "Paris, FR",
-  environment = "Production",
-  version = "2.4.1",
-}: {
-  uptime?: string;
-  region?: string;
-  environment?: string;
-  version?: string;
-}) {
+export function Footer() {
+  // Real values only: the deploy environment is derived from the Vite build
+  // mode, and the build hash is injected at build time. The previously
+  // fabricated Rev / Region / Uptime fields were removed.
+  const environment = import.meta.env.PROD ? "Production" : "Development";
   const buildHash = (typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev");
 
   const items: { label: string; value: string; tone?: "ok" | "muted" }[] = [
     { label: "Env", value: environment, tone: "ok" },
     { label: "Build", value: buildHash, tone: "muted" },
-    { label: "Rev", value: `v${version}`, tone: "muted" },
-    { label: "Region", value: region, tone: "muted" },
-    { label: "Uptime", value: uptime, tone: "muted" },
   ];
 
   return (

@@ -82,13 +82,26 @@ export function Header({
   );
 }
 
+/** Short local timezone abbreviation, e.g. "GMT+1" — resolved once. */
+const LOCAL_TZ = (() => {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, {
+      timeZoneName: "short",
+    }).formatToParts(new Date());
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    return "";
+  }
+})();
+
 function formatTime(d: Date): string {
   const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return LOCAL_TZ ? `${time} ${LOCAL_TZ}` : time;
 }
 
 /**
- * Live UTC clock. Isolated as its own component so the per-second `setState`
+ * Live local clock. Isolated as its own component so the per-second `setState`
  * tick re-renders only this `<span>`, not the whole AppLayout shell.
  */
 function Clock() {

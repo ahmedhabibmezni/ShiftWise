@@ -161,7 +161,17 @@ function ProfileSection({ user }: { user: User }) {
       // header pick it up without a hard refresh. /me is read once at boot
       // by AuthGate (no React Query), so there's nothing to invalidate —
       // the store is the authoritative source.
-      setUser(next);
+      //
+      // PUT /users/{id} responds with UserReadWithRoles, which omits the
+      // computed `permissions` map. Overwriting the store user with it
+      // verbatim would blank every permission and collapse the sidebar nav
+      // to just Dashboard + Settings until the next login. A self profile
+      // edit cannot change permissions, so preserve the existing map.
+      setUser({
+        ...user,
+        ...next,
+        permissions: next.permissions ?? user.permissions,
+      });
       queryClient.invalidateQueries({ queryKey: ["users"] });
       reset({
         email: next.email,

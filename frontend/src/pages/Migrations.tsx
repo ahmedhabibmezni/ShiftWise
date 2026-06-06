@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 import {
   ArrowRightLeft,
   CheckCircle2,
@@ -73,6 +74,7 @@ export default function Migrations() {
   const [strategyFilter, setStrategyFilter] = useState<MigrationStrategy | "">("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [showFailures, setShowFailures] = useState(false);
   const canCreate = useHasPermission("migrations", "create");
 
   const params = useMemo(
@@ -111,6 +113,41 @@ export default function Migrations() {
   const totalPages = listQuery.data ? computeTotalPages(listQuery.data) : 1;
   const items = listQuery.data?.items ?? [];
   const filtersActive = !!(statusFilter || strategyFilter);
+  const vmList = vmsQuery.data?.items ?? [];
+
+  // Most recent failures in the current view, newest first — fuels the banner.
+  const failedMigrations = useMemo(
+    () =>
+      items
+        .filter((m) => m.status === "failed")
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    [items],
+  );
+
+  // Toast on a *newly observed* failure. Prime the seen-set on first load so
+  // historical failures don't all toast at once; only subsequent transitions
+  // (a migration failing while the page is open) raise an alert.
+  const seenFailuresRef = useRef<Set<number>>(new Set());
+  const primedRef = useRef(false);
+  useEffect(() => {
+    if (!listQuery.data) return;
+    const failedNow = items.filter((m) => m.status === "failed");
+    if (!primedRef.current) {
+      failedNow.forEach((m) => seenFailuresRef.current.add(m.id));
+      primedRef.current = true;
+      return;
+    }
+    for (const m of failedNow) {
+      if (seenFailuresRef.current.has(m.id)) continue;
+      seenFailuresRef.current.add(m.id);
+      const code = m.error_code ? ` · ${m.error_code}` : "";
+      toast.error(
+        `Migration #${m.id} (${vmName(m.vm_id, vmList)}) failed${code}`,
+        { duration: 8_000 },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listQuery.data]);
 
   // Build pipeline data from current stats
   const pipelineStages: PipelineStageData[] = useMemo(() => {
@@ -186,7 +223,6 @@ export default function Migrations() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Migrations"
-        description="VM → KubeVirt pipeline: Discovery → Analyzer → Converter → Adapter → Migrator."
         actions={
           canCreate ? (
             <Button
@@ -201,6 +237,30 @@ export default function Migrations() {
       />
 
       <StatsStrip stats={statsQuery.data} isLoading={statsQuery.isPending} />
+
+      {failedMigrations.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div>
+            <Button
+              variant="secondary"
+              size="sm"
+              leadingIcon={<Icon icon={XCircle} size={14} />}
+              onClick={() => setShowFailures((s) => !s)}
+            >
+              {showFailures
+                ? "Hide failure causes"
+                : `View failure causes (${failedMigrations.length})`}
+            </Button>
+          </div>
+          {showFailures && (
+            <FailureBanner
+              migrations={failedMigrations}
+              vms={vmList}
+              onSelect={setSelectedId}
+            />
+          )}
+        </div>
+      )}
 
       <Panel
         title="Migration Pipeline"
@@ -273,6 +333,69 @@ export default function Migrations() {
         onClose={() => setCreateOpen(false)}
       />
     </div>
+  );
+}
+
+/* ------------------------------ failure banner ---------------------------- */
+
+/**
+ * Surfaces the main issue behind failed migrations directly on the list page,
+ * so an operator sees *why* a migration failed (error code + message) without
+ * opening the drawer. Shows the most recent failures; each row opens its
+ * migration. Pairs with the transition toast above for immediate awareness.
+ */
+function FailureBanner({
+  migrations,
+  vms,
+  onSelect,
+}: {
+  migrations: Migration[];
+  vms: Vm[];
+  onSelect: (id: number) => void;
+}) {
+  const MAX_SHOWN = 3;
+  const shown = migrations.slice(0, MAX_SHOWN);
+  const extra = migrations.length - shown.length;
+
+  return (
+    <Callout
+      tone="err"
+      role="alert"
+      kicker={
+        migrations.length === 1
+          ? "Migration failed"
+          : `${migrations.length} migrations failed`
+      }
+    >
+      <ul className="space-y-2">
+        {shown.map((m) => (
+          <li key={m.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(m.id)}
+              className="text-left w-full hover:opacity-80 transition-opacity duration-150"
+            >
+              <span className="font-bold">
+                #{m.id} · {vmName(m.vm_id, vms)}
+              </span>
+              {m.error_code && (
+                <span className="ml-2 text-[11px] uppercase tracking-[0.04em] font-bold opacity-80">
+                  {m.error_code}
+                </span>
+              )}
+              <span className="block text-[12px] opacity-90 break-words">
+                {m.error_message ?? "No diagnostic message was recorded."}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {extra > 0 && (
+        <div className="mt-2 text-[11px] uppercase tracking-[0.04em] font-bold opacity-80">
+          + {extra} more failed
+        </div>
+      )}
+    </Callout>
   );
 }
 

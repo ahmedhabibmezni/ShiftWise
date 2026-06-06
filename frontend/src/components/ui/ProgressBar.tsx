@@ -55,7 +55,7 @@ export function ProgressBar({
               variant === "white" ? "rgba(255,255,255,0.95)" : "var(--text-primary)",
           }}
         >
-          {v}%
+          {Number(v.toFixed(2))}%
         </span>
       )}
     </div>

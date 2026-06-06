@@ -74,7 +74,6 @@ export default function Users() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Users"
-        description="Operator accounts. Each user belongs to a tenant and inherits permissions from one or more roles."
         actions={
           canCreate ? (
             <Button

@@ -76,7 +76,6 @@ export default function Reports() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Reports"
-        description="Historical migration outcomes for audit, SLA review, and capacity planning."
         actions={
           <div className="flex gap-2">
             <Button
