@@ -158,9 +158,16 @@ class ConverterService:
         crud_conversion.update_job(db, job.id, {"attempts": attempt_no})
 
         try:
-            self._stage(db, job)
-            self._convert(db, job)
-            self._verify(db, job)
+            if settings.CONVERTER_SOURCE_CONVERT_SFTP:
+                # Dev/demo bridge: convert+compress on the source node and
+                # upload the small qcow2 to the cluster NFS over SFTP. Replaces
+                # the local-stage + in-cluster qemu-img Job (which assumes the
+                # worker shares the NFS mount — false on the laptop topology).
+                self._source_convert_sftp(db, job)
+            else:
+                self._stage(db, job)
+                self._convert(db, job)
+                self._verify(db, job)
             crud_conversion.set_job_status(
                 db, job.id, ConversionStatus.READY, progress_pct=100,
             )
@@ -180,6 +187,93 @@ class ConverterService:
         # Recompute the parent group state.
         crud_conversion.recompute_group_status(db, job.group_id)
         return ConversionStatus.READY
+
+    # --- Convert-on-source SFTP bridge (dev/demo) ---------------------------
+
+    def _source_convert_sftp(self, db: Session, job: ConversionJob) -> None:
+        """Convert on the source node, upload the qcow2 to the cluster NFS.
+
+        Single-stage replacement for stage+convert+verify when the worker
+        cannot reach the NFS directly (laptop topology). Leaves the job ready
+        for the in-cluster Adapter/Migrator, which read the uploaded qcow2 from
+        the transit PVC at ``{tenant}/outputs/{group_uuid}/{disk}.qcow2``.
+        """
+        from app.models.hypervisor import HypervisorType
+        from app.services.converter.connectors.proxmox import ProxmoxPuller
+        from app.services.converter.remote_transit import RemoteTransit
+
+        crud_conversion.set_job_status(db, job.id, ConversionStatus.STAGING, progress_pct=0)
+        crud_conversion.set_group_status(db, job.group_id, ConversionGroupStatus.IN_PROGRESS)
+
+        vm = crud_vm.get_vm(db, job.vm_id)
+        if vm is None or vm.source_hypervisor is None:
+            raise ConversionError("ERR_VM_NOT_FOUND", f"VM {job.vm_id} or its hypervisor is gone")
+        if vm.source_hypervisor.type != HypervisorType.PROXMOX:
+            raise ConversionError(
+                "ERR_INTERNAL",
+                "CONVERTER_SOURCE_CONVERT_SFTP currently supports Proxmox sources only",
+            )
+        group = crud_conversion.get_group(db, job.group_id)
+        if group is None:
+            raise ConversionError("ERR_INTERNAL", "group disappeared mid-flight")
+
+        scratch = Path(settings.CONVERTER_LOCAL_SCRATCH) / group.group_uuid
+        scratch.mkdir(parents=True, exist_ok=True)
+        local_qcow2 = scratch / f"{job.disk_index}.qcow2"
+
+        descriptor = DiskDescriptor(
+            disk_index=job.disk_index,
+            source_format=job.source_format,
+            size_bytes=job.source_size_bytes or 0,
+            locator=job.source_path or "",
+        )
+        cold = bool((group.pull_config or {}).get("cold", True))
+
+        def stage_cb(done: int, total: int) -> None:
+            pct = int(min(49, (done / max(total, 1)) * 50))  # pull = 0..50%
+            crud_conversion.set_job_status(db, job.id, ConversionStatus.STAGING, progress_pct=pct)
+
+        result = ProxmoxPuller().convert_on_source(
+            vm.source_hypervisor, vm, descriptor, local_qcow2,
+            target_format="qcow2", cold=cold, progress_cb=stage_cb,
+        )
+        crud_conversion.update_job(
+            db, job.id,
+            {"staged_path": str(local_qcow2), "sha256": result.sha256},
+        )
+
+        # Upload the small qcow2 to the cluster NFS (over the bastion jump).
+        crud_conversion.set_job_status(db, job.id, ConversionStatus.CONVERTING, progress_pct=50)
+        rel = f"{group.tenant_id}/outputs/{group.group_uuid}/{job.disk_index}.qcow2"
+
+        def upload_cb(done: int, total: int) -> None:
+            pct = int(50 + min(45, (done / max(total, 1)) * 45))  # upload = 50..95%
+            crud_conversion.set_job_status(db, job.id, ConversionStatus.CONVERTING, progress_pct=pct)
+
+        with RemoteTransit.from_settings() as rt:
+            need = int(local_qcow2.stat().st_size * 1.2)
+            if rt.free_bytes() < need:
+                raise ConversionError(
+                    "ERR_NFS_INSUFFICIENT_SPACE",
+                    f"NFS transit needs ~{need} bytes, has {rt.free_bytes()}",
+                )
+            rt.put_file(local_qcow2, rel, progress_cb=upload_cb)
+            remote_size = rt.size(rel)
+        if remote_size <= 0:
+            raise ConversionError("ERR_OUTPUT_INVALID", f"uploaded qcow2 missing on NFS: {rel}")
+
+        # Logical path the in-cluster Jobs see (POSIX, mounted transit root).
+        logical_out = f"{settings.CONVERTER_TRANSIT_ROOT.rstrip('/')}/{rel}"
+        crud_conversion.update_job(
+            db, job.id,
+            {"output_path": logical_out, "output_size_bytes": remote_size},
+        )
+        crud_conversion.set_job_status(db, job.id, ConversionStatus.VERIFYING, progress_pct=95)
+
+        try:
+            local_qcow2.unlink()
+        except OSError:
+            logger.debug("could not remove local scratch %s", local_qcow2, exc_info=True)
 
     # --- Pipeline stages ----------------------------------------------------
 

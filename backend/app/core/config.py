@@ -318,11 +318,47 @@ class Settings(BaseSettings):
     # pour découvrir le NFS (transit_discovery.discover_transit_nfs).
     CONVERTER_K8S_NAMESPACE: str = "shiftwise"
 
-    # Image conteneur pour les Jobs de conversion
-    CONVERTER_CONTAINER_IMAGE: str = "quay.io/shiftwise/converter:latest"
+    # Image conteneur pour les Jobs de conversion.
+    # Doit embarquer qemu-img — c'est l'image worker ShiftWise (Dockerfile.worker),
+    # PAS l'image API slim (qui n'a pas le guest-tooling depuis le split G12).
+    # Surchargeable via shiftwise-config (clé CONVERTER_CONTAINER_IMAGE).
+    CONVERTER_CONTAINER_IMAGE: str = "docker.io/dida1609/shiftwise-backend-worker:latest"
 
     # PVC RWX backed par NFS, monté dans les Jobs
     CONVERTER_TRANSIT_PVC: str = "transit-pvc"
+
+    # ============================================
+    # CONVERTER — CONVERT-ON-SOURCE + SFTP TRANSIT (dev/demo bridge)
+    # ============================================
+    # Topologie dev où le worker (laptop) voit la source Proxmox mais PAS le
+    # NFS du cluster (pare-feu + lien VPN lent ~0.1 MB/s). Au lieu de pousser
+    # le disque RAW (8 GB → infaisable), on convertit+compresse sur le NŒUD
+    # SOURCE (qemu-img -c → ~quelques centaines de Mo), on rapatrie le petit
+    # qcow2 sur le worker, puis on l'upload sur le NFS export via SFTP (jump
+    # bastion). L'adapter + le migrator (Jobs in-cluster) lisent ensuite ce
+    # qcow2 sur le NFS, inchangés.
+    #
+    # Désactivé par défaut (False) : le chemin de production (worker in-cluster,
+    # conversion in-cluster) reste strictement inchangé.
+    CONVERTER_SOURCE_CONVERT_SFTP: bool = False
+
+    # Répertoire scratch local du worker pour le qcow2 rapatrié avant upload.
+    CONVERTER_LOCAL_SCRATCH: str = "./.shiftwise-scratch"
+
+    # Hôte NFS cible (où réside l'export monté par la transit-pvc) + creds SSH.
+    CONVERTER_SFTP_TARGET_HOST: str = ""
+    CONVERTER_SFTP_TARGET_PORT: int = 22
+    CONVERTER_SFTP_TARGET_USER: str = "root"
+    CONVERTER_SFTP_TARGET_PASSWORD: str = ""
+    # Chemin de l'export NFS sur l'hôte cible (= PV.spec.nfs.path de la
+    # transit-pvc). Les fichiers y sont écrits sous {tenant}/outputs/...
+    CONVERTER_SFTP_TARGET_EXPORT: str = ""
+
+    # Jump host (bastion) optionnel — vide = connexion directe à la cible.
+    CONVERTER_SFTP_JUMP_HOST: str = ""
+    CONVERTER_SFTP_JUMP_PORT: int = 22
+    CONVERTER_SFTP_JUMP_USER: str = "root"
+    CONVERTER_SFTP_JUMP_PASSWORD: str = ""
 
     # ============================================
     # MIGRATOR CONFIGURATION
@@ -332,8 +368,9 @@ class Settings(BaseSettings):
     MIGRATOR_TARGET_STORAGE_CLASS: str = "nfs-client"
 
     # Image conteneur du populator Job (doit contenir qemu-img >= 6.0).
-    # Par défaut : la même image que le converter, qui embarque déjà qemu-img.
-    MIGRATOR_POPULATOR_IMAGE: str = "quay.io/shiftwise/converter:latest"
+    # Par défaut : l'image worker ShiftWise (Dockerfile.worker), qui embarque
+    # qemu-img. Surchargeable via shiftwise-config (clé MIGRATOR_POPULATOR_IMAGE).
+    MIGRATOR_POPULATOR_IMAGE: str = "docker.io/dida1609/shiftwise-backend-worker:latest"
 
     # ServiceAccount avec lequel le populator Job est lancé dans le namespace
     # tenant. Par défaut, le SA "default" du namespace.
@@ -386,9 +423,11 @@ class Settings(BaseSettings):
     # ============================================
 
     # Image conteneur du Job adapter. Doit fournir libguestfs-tools
-    # (virt-customize, virt-inspector, virt-ls). Par défaut on utilise la
-    # même image que le backend, qui inclut libguestfs depuis le Dockerfile.
-    ADAPTER_IMAGE: str = "docker.io/dida1609/shiftwise-backend:latest"
+    # (virt-customize, virt-inspector, virt-ls). C'est l'image worker
+    # ShiftWise (Dockerfile.worker) qui embarque libguestfs depuis le split
+    # G12 — l'image API slim ne l'a PAS. Surchargeable via shiftwise-config
+    # (clé ADAPTER_IMAGE).
+    ADAPTER_IMAGE: str = "docker.io/dida1609/shiftwise-backend-worker:latest"
 
     # Timeout d'attente du Job adapter (secondes). virt-customize sur 5 GB
     # avec KVM = ~30 s ; sans KVM (TCG) jusqu'à 5 min.

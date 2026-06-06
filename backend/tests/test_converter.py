@@ -66,7 +66,7 @@ def tenant_id(db_session):
 def hv(db_session, tenant_id):
     h = Hypervisor(
         name="kvm1", tenant_id=tenant_id, type=HypervisorType.KVM,
-        host="kvm.local", username="r", password="x",
+        host="kvm.local", username="r",
         status=HypervisorStatus.ACTIVE, total_vms_discovered=0,
     )
     db_session.add(h); db_session.commit()
@@ -341,3 +341,72 @@ class TestServiceOrchestration:
         # Audit log should have one row with the same code.
         assert len(job.attempt_log) == 1
         assert job.attempt_log[0].error_code == "ERR_NFS_TIMEOUT"
+
+
+# --- Proxmox disk-key enumeration (regression: scsihw treated as a disk) ------
+
+class TestProxmoxDiskKeyMatching:
+    """`scsihw: virtio-scsi-single` is a controller, not a disk.
+
+    Regression for the converter spawning a bogus `disk_index 1` that failed
+    every Proxmox migration with `ERR_DISK_NOT_FOUND` (pvesm path
+    virtio-scsi-single → 'invalid format - unable to parse volume ID').
+    """
+
+    def test_real_disk_keys_match(self):
+        from app.services.converter.connectors.proxmox import _is_disk_key
+        assert _is_disk_key("scsi0")
+        assert _is_disk_key("virtio0")
+        assert _is_disk_key("sata1")
+        assert _is_disk_key("ide0")
+        assert _is_disk_key("scsi15")
+
+    def test_controller_and_feature_keys_excluded(self):
+        from app.services.converter.connectors.proxmox import _is_disk_key
+        # The bug: `scsihw` starts with "scsi" but is the controller model.
+        assert not _is_disk_key("scsihw")
+        # `virtiofs0` starts with "virtio" but is a directory share, not a disk.
+        assert not _is_disk_key("virtiofs0")
+        # Unrelated config keys must never match.
+        for k in ("name", "net0", "boot", "ostype", "smbios1", "memory", "cores"):
+            assert not _is_disk_key(k)
+
+
+# --- RemoteTransit path mapping + traversal guard (convert-on-source bridge) ---
+
+class TestRemoteTransitPathMapping:
+    """``_abs`` maps a POSIX-relative transit path onto the NFS export root and
+    refuses traversal — it builds remote shell paths, so traversal would be a
+    write-outside-export bug."""
+
+    def _rt(self):
+        from app.services.converter.remote_transit import RemoteTransit
+        # No connection is opened; we only exercise pure path logic.
+        return RemoteTransit(
+            target_host="nfs.example", target_port=22, target_user="root",
+            target_password="x", export_root="/nfs-storage/export",
+        )
+
+    def test_abs_joins_export_root(self):
+        rt = self._rt()
+        assert rt._abs("nextstep/outputs/abc/0.qcow2") == \
+            "/nfs-storage/export/nextstep/outputs/abc/0.qcow2"
+        # leading slash on the rel path is tolerated (treated as relative)
+        assert rt._abs("/nextstep/x") == "/nfs-storage/export/nextstep/x"
+
+    def test_abs_rejects_traversal(self):
+        from app.services.converter.errors import ConversionError
+        rt = self._rt()
+        for bad in ("../etc/passwd", "nextstep/../../etc", "a/../../b"):
+            with pytest.raises(ConversionError):
+                rt._abs(bad)
+
+    def test_requires_target_and_export(self):
+        from app.services.converter.remote_transit import RemoteTransit
+        from app.services.converter.errors import ConversionError
+        with pytest.raises(ConversionError):
+            RemoteTransit(target_host="", target_port=22, target_user="root",
+                          target_password="x", export_root="/x")
+        with pytest.raises(ConversionError):
+            RemoteTransit(target_host="h", target_port=22, target_user="root",
+                          target_password="x", export_root="")

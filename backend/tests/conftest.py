@@ -29,6 +29,25 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 
+@pytest.fixture(autouse=True)
+def _disable_source_convert_sftp_bridge():
+    """Force the dev/demo convert-on-source SFTP bridge OFF for all tests.
+
+    A developer's ``.env`` may enable ``CONVERTER_SOURCE_CONVERT_SFTP`` to run
+    the laptop→bastion→NFS transit bridge against the live cluster. That flag
+    must never leak into the unit suite, which exercises the default in-cluster
+    conversion path with fake pullers. Restore the original value afterwards.
+    """
+    from app.core.config import settings
+
+    original = settings.CONVERTER_SOURCE_CONVERT_SFTP
+    settings.CONVERTER_SOURCE_CONVERT_SFTP = False
+    try:
+        yield
+    finally:
+        settings.CONVERTER_SOURCE_CONVERT_SFTP = original
+
+
 @pytest.fixture(scope="session")
 def test_model_path(tmp_path_factory):
     """
