@@ -69,8 +69,11 @@ Converts source disks (VMDK / VHD → QCOW2) by submitting `qemu-img` Kubernetes
 | `k8s_jobs.py` | Kubernetes Job manifests for `qemu-img` |
 | `paths.py` | NFS transit-zone path resolution |
 | `protocol.py` | Connector interface protocol |
-| `service.py` | Conversion orchestration |
+| `remote_transit.py` | Dev/demo only — bastion-jump SFTP upload of a converted qcow2 to the transit NFS (`CONVERTER_SOURCE_CONVERT_SFTP`) |
+| `service.py` | Conversion orchestration (in-cluster `qemu-img` Job, or the gated convert-on-source SFTP path) |
 | `errors.py` | Conversion error catalog |
+
+> **Convert-on-source mode** (`CONVERTER_SOURCE_CONVERT_SFTP=True`, default off): for local development where the worker reaches the source hypervisor but not the cluster NFS, the Proxmox connector runs `qemu-img convert -c` on the source node and the worker uploads the small qcow2 to the transit NFS over SSH. Production keeps the in-cluster `qemu-img` Job path.
 
 ---
 
@@ -79,10 +82,12 @@ Converts source disks (VMDK / VHD → QCOW2) by submitting `qemu-img` Kubernetes
 Sits between the Converter and the Migrator. Submits a Kubernetes Job per disk that runs `virt-customize` (libguestfs) on the converted QCOW2 in place:
 
 - 4 parallel DHCP configurations (systemd-networkd, ifupdown, NetworkManager keyfile, netplan)
-- serial-console enablement (`serial-getty@ttyS0` + GRUB serial redirect)
+- serial-console enablement (`serial-getty@ttyS0` + GRUB serial redirect) — note: the `systemctl` enable is a no-op on non-systemd guests (Alpine/OpenRC), which then have no `ttyS0` login; use the graphical console
 - SELinux relabel
 
 Required because KubeVirt exposes a virtio NIC (`enp1s0`/`ens2`) while the source guest is configured for the VMware NIC (`ens33`/`eth0`).
+
+Runs in a **privileged** pod (`ADAPTER_PRIVILEGED=True`) and forces the libguestfs **TCG** backend (the nodes expose no usable in-pod KVM acceleration). The Job runs as the per-tenant `shiftwise-populator` SA, which carries the `nfs`-volume SCC.
 
 | Module | Responsibility |
 |--------|----------------|
@@ -99,7 +104,7 @@ The final stage — populates the target PVC and creates the KubeVirt VirtualMac
 | Module | Responsibility |
 |--------|----------------|
 | `transit_discovery.py` | Auto-discovers the NFS transit server/path from the bound transit PV |
-| `namespace.py` | Idempotent tenant-namespace creation (+ opt-in `ResourceQuota`) |
+| `namespace.py` | Idempotent tenant-namespace creation (+ opt-in `ResourceQuota`) + per-tenant `shiftwise-populator` SA & SCC grant (`ensure_populator_scc`) |
 | `pvc.py` | Target PVC sizing and creation |
 | `populator_job.py` | NFS-direct `qemu-img` populate Job |
 | `vm_manifest.py` | KubeVirt `VirtualMachine` manifest builder |

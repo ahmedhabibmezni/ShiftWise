@@ -69,7 +69,7 @@ Superusers may omit `tenant_id` to operate across tenants. `Role` has no tenant;
 | `create_role(db, role: RoleCreate)` | Create a custom (non-system) role |
 | `update_role(db, role_id, role_update)` | Update role (system roles rejected) |
 | `delete_role(db, role_id)` | Delete a custom role (rejected if users still assigned) |
-| `create_system_roles(db)` | Seed the 4 system roles if not present |
+| `create_system_roles(db)` | Seed the 4 system roles if absent; **reconcile** the `permissions` of existing system roles to the `ROLE_PERMISSIONS` matrix (so a matrix change propagates to deployments seeded earlier) |
 | `get_role_users_count(db, role_id)` | Count users assigned to a role |
 
 ### `hypervisor.py`
@@ -105,7 +105,7 @@ Superusers may omit `tenant_id` to operate across tenants. `Role` has no tenant;
 | `get_migrations_count(db, …)` | Count matching migrations |
 | `create_migration(db, data, tenant_id, target_namespace)` | Create migration (initial `PENDING`) |
 | `update_migration(db, migration_id, update_data, tenant_id=…)` | Partial update (`status` / `target_namespace` protected) |
-| `delete_migration(db, migration_id, tenant_id=…)` | Delete migration (rejected while active) |
+| `delete_migration(db, migration_id, tenant_id=…)` | Delete migration. Rejected while active (`ValueError`→400); rejected with `MigrationHasAuditTrail`→409 when audit events reference it (append-only retention — the FK blocks the delete). Succeeds (204) only for a migration with no events. |
 | `set_migration_status(db, migration_id, status)` | Worker status setter (auto-stamps timing/outcome) |
 | `update_migration_progress(db, migration_id, …)` | Update progress fields |
 | `fail_migration(db, migration_id, …)` | Stamp error code/message |

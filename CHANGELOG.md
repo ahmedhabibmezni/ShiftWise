@@ -35,6 +35,19 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 - Brute-force protection on `/auth/login` — sliding-window throttle, per email and per source IP.
 
+### 🐛 Fixed
+
+- **Proxmox disk enumeration** — the converter matched config keys by prefix, so the `scsihw` controller (`virtio-scsi-single`) and `virtiofs0` were parsed as disks, spawning a phantom disk that failed every Proxmox migration with `ERR_DISK_NOT_FOUND`. Now matched by a bus+index pattern (`scsi0`, `virtio1`, …).
+- **`DELETE /migrations/{id}` returned HTTP 500** when audit events referenced the migration — the ORM tried to nullify the NOT-NULL `migration_events.migration_id` and hit the append-only trigger. Now returns a clean **409** (audit retention; the trail is preserved); a migration with no events still deletes (204).
+- **System-role permissions not reconciled** — `create_system_roles` only created roles when absent, so deployments seeded before the permission-matrix update kept stale grants (`user`/`viewer` could not read hypervisors). It now reconciles `permissions` for existing system roles on startup.
+- **Adapter Job created before the tenant namespace existed** (404) — the orchestrator now ensures the tenant namespace before the Adapter stage (idempotent).
+- **Adapter pod rejected by SCC** — the `nfs`-volume `shiftwise-populator` SCC was bound only to the control-plane SA; tenant namespaces now get a dedicated `shiftwise-populator` SA + SCC grant provisioned automatically.
+- **Adapter `guestfs_launch failed`** — the libguestfs appliance could not start on the nodes; the fixup now forces the TCG software-emulation backend, requires a privileged pod, and makes the staged qcow2 writable for the arbitrary OpenShift UID.
+
+### 🧪 Dev / Demo
+
+- **Convert-on-source SFTP transit bridge** (`CONVERTER_SOURCE_CONVERT_SFTP`, default **off**) — for local development where the worker can reach the source hypervisor but not the cluster NFS: converts and compresses the disk on the source node, then uploads the small qcow2 to the transit NFS over SSH (optionally via a bastion jump). The production in-cluster conversion path is unchanged.
+
 ### 🚧 In Development
 
 - **Frontend SPA** — remaining integration and polish work.
