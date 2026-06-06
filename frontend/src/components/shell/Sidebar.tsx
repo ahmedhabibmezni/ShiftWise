@@ -9,13 +9,13 @@ import {
   Users as UsersIcon,
   LogOut,
   LifeBuoy,
-  Layers,
   ExternalLink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { NavLink } from "react-router-dom";
 import { Icon } from "@/components/ui/Icon";
+import { BrandLogo } from "@/components/ui/Logo";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/store/auth";
@@ -128,21 +128,8 @@ export function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       {/* ---------- Brand ---------- */}
-      <div className="relative z-[1] flex items-center gap-3 px-5 pt-6 pb-4">
-        <span
-          aria-hidden
-          className="icon-container icon-container--accent w-10 h-10 rounded-xl shrink-0"
-        >
-          <Icon icon={Layers} size={20} strokeWidth={2} />
-        </span>
-        <div className="min-w-0 leading-tight">
-          <div className="text-[15px] font-bold tracking-[-0.01em] text-[var(--text-primary)] truncate">
-            ShiftWise
-          </div>
-          <div className="text-[10px] font-bold tracking-[0.08em] text-[var(--text-muted)] uppercase mt-0.5">
-            VM Migration Console
-          </div>
-        </div>
+      <div className="relative z-[1] flex items-center px-4 pt-6 pb-4">
+        <BrandLogo className="h-16" />
       </div>
 
       <div className="relative z-[1] mx-5 border-b border-[var(--hairline)]" />

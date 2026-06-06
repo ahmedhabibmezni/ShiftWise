@@ -6,11 +6,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { AxiosError } from "axios";
 import { z } from "zod";
-import { ArrowRight, Layers, LockKeyhole, Shield } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
-import { LiveIndicator } from "@/components/ui/LiveIndicator";
+import { BrandLogo, BrandMark } from "@/components/ui/Logo";
 import { Callout } from "@/components/ui/Callout";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { login as loginRequest, fetchCurrentUser } from "@/api/auth";
@@ -100,19 +100,10 @@ export default function Login() {
         </div>
         <div className="glass-card w-full max-w-[440px] p-8">
           <header className="mb-7">
-            <span
-              aria-hidden
-              className="icon-container icon-container--accent w-12 h-12 rounded-2xl mb-5"
-            >
-              <Layers size={22} strokeWidth={2} />
-            </span>
-            <div className="kicker mb-2">Console · Authentication</div>
+            <BrandMark className="w-20 h-20 mb-5" />
             <h1 className="text-[28px] font-bold tracking-[-0.02em] leading-[1.1] text-[var(--text-primary)]">
               Welcome back
             </h1>
-            <p className="mt-2 text-[13px] text-[var(--text-secondary)] leading-relaxed">
-              Operator access · audit logged · HttpOnly cookie with rotating refresh token.
-            </p>
           </header>
 
           <form
@@ -156,15 +147,6 @@ export default function Login() {
               Sign in
             </Button>
           </form>
-
-          <footer className="mt-7 flex items-center justify-between gap-4 pt-5 border-t border-[var(--hairline)]">
-            <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
-              <Icon icon={LockKeyhole} size={12} /> TLS 1.3 · HSTS
-            </span>
-            <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.04em] font-bold text-[var(--text-muted)]">
-              <Icon icon={Shield} size={12} /> OAuth 2.1 BCP
-            </span>
-          </footer>
         </div>
       </section>
     </div>
@@ -225,24 +207,10 @@ function BrandPanel() {
       {/* Decorative orbital SVG, top-right */}
 
       <header className="relative flex items-center gap-3">
-        <span
-          aria-hidden
-          className="icon-container icon-container--accent w-11 h-11 rounded-xl"
-        >
-          <Layers size={22} strokeWidth={2} />
-        </span>
-        <div className="flex flex-col leading-none gap-1">
-          <span className="text-[14px] font-bold tracking-[0.02em] text-[var(--text-primary)]">
-            ShiftWise
-          </span>
-          <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--text-muted)]">
-            VM Migration Platform · v2.4.1
-          </span>
-        </div>
+        <BrandLogo className="h-20" />
       </header>
 
       <div className="relative max-w-[44ch]">
-        <div className="kicker mb-3">Manifesto · 01</div>
         <p
           className="text-[40px] font-bold leading-[1.05] tracking-[-0.025em] text-[var(--text-primary)]"
           style={{ textWrap: "balance" } as React.CSSProperties}
@@ -253,16 +221,9 @@ function BrandPanel() {
           <br />
           A pipeline to orchestrate.
         </p>
-        <p className="mt-6 text-[13px] text-[var(--text-secondary)] max-w-[52ch] leading-relaxed">
-          Discovery · Analyzer · Converter · Adapter · Migrator · Reporting. Every VM transits six stages before landing on OpenShift Virtualization.
-        </p>
       </div>
 
-      <footer className="relative flex items-center justify-between text-[12px] text-[var(--text-secondary)]">
-        <div className="flex items-center gap-2">
-          <LiveIndicator label={null} srLabel="Cluster online" tone="ok" />
-          <span>Cluster OK · 3 masters · KubeVirt v1.4.1</span>
-        </div>
+      <footer className="relative flex items-center justify-end text-[12px] text-[var(--text-secondary)]">
         <span className="text-[var(--text-muted)]">© 2026 · NextStep-IT</span>
       </footer>
     </aside>

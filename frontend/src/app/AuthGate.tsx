@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Layers } from "lucide-react";
+import { BrandMark } from "@/components/ui/Logo";
 import { bootstrapAuth } from "@/lib/axios";
 import { fetchCurrentUser } from "@/api/auth";
 import { useAuthStore } from "@/store/auth";
@@ -37,13 +37,10 @@ export function AuthGate({ children }: Props) {
 function BootSplash() {
   return (
     <div className="min-h-[100dvh] flex flex-col items-center justify-center gap-4">
-      <span
-        aria-hidden
-        className="icon-container icon-container--accent w-14 h-14 rounded-2xl"
+      <BrandMark
+        className="w-24 h-24"
         style={{ animation: "shiftwise-pulse 1.6s var(--ease-out) infinite" }}
-      >
-        <Layers size={28} strokeWidth={2} />
-      </span>
+      />
       <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)]">
         ShiftWise · Initializing
       </div>
