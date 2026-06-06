@@ -59,3 +59,17 @@ celery_app.conf.update(
 
     result_expires=24 * 3600,
 )
+
+# Make this the process-wide default Celery app.
+#
+# Tasks are declared with ``@shared_task`` (app-agnostic), which resolves its
+# app via Celery's thread-local ``current_app`` at call time. ``current_app``
+# is only populated on threads that have entered the app context — notably the
+# main thread. FastAPI runs sync endpoints in an anyio worker thread, where
+# ``current_app`` falls back to Celery's built-in default app whose broker is
+# ``amqp://localhost:5672`` (RabbitMQ). Calling ``run_migration.delay()`` from
+# such a thread would then publish to 5672 instead of our Redis broker and fail
+# with a connection-refused after ``broker_connection_timeout`` (→ /start 503).
+# Registering this app as the default makes ``current_app`` resolve to it on
+# every thread, so ``shared_task`` publishes to the configured Redis broker.
+celery_app.set_default()
