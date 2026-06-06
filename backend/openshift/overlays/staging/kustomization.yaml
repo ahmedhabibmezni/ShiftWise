@@ -7,16 +7,18 @@
 #
 # The credential-vault Secret is created out-of-band by the operator
 # before the first deploy (see credential-key-secret.yaml in this
-# directory for the template). The Deployment in the base overlay
-# already references the Secret via `envFrom`, so applying this overlay
-# is enough once the Secret exists.
+# directory for the template). The base Deployments / db-init Job
+# already reference the Secret via `envFrom` (B-1), so applying this
+# overlay is enough once the Secret exists.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 namespace: shiftwise-staging
 
+# Canonical base/overlays layout (B-3) — base is a sibling directory, not
+# an ancestor (kustomize v5 rejects an ancestor base with "cycle detected").
 resources:
-  - ../
+  - ../../base
 # NOTE: credential-key-secret.yaml is INTENTIONALLY NOT in this resources
 # list. It is a template only — applying it would create a Secret with an
 # empty SHIFTWISE_FERNET_KEY, which crashes the backend at boot because

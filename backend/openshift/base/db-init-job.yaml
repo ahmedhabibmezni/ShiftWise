@@ -67,6 +67,10 @@ spec:
           envFrom:
             - secretRef:    {name: shiftwise-secrets}
             - configMapRef: {name: shiftwise-config}
+            # B-1 — bootstrap.py importe app.core.config, qui instancie
+            # Settings() au niveau module. SHIFTWISE_FERNET_KEY étant requis
+            # sans défaut, le Job db-init crashe au boot sans cet envFrom.
+            - secretRef:    {name: shiftwise-credential-key}
           env:
             - {name: DATABASE_HOST, value: postgresql}
           # securityContext conteneur (G16). alembic + seed n'écrivent rien

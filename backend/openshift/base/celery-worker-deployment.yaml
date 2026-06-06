@@ -58,6 +58,10 @@ spec:
           envFrom:
             - secretRef: {name: shiftwise-secrets}
             - configMapRef: {name: shiftwise-config}
+            # B-1 — clé du vault Fernet (SHIFTWISE_FERNET_KEY, champ Settings
+            # requis sans défaut). Le worker chiffre/déchiffre les credentials
+            # hyperviseur au runtime ; sans cet envFrom le pod crashe au boot.
+            - secretRef: {name: shiftwise-credential-key}
           env:
             # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
             # (ils embarquent le mot de passe Redis — durcissement G20).

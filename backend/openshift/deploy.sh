@@ -42,13 +42,28 @@ if ! oc get configmap shiftwise-config -n "$NAMESPACE" >/dev/null 2>&1; then
   echo "       It is defined alongside the Secret in secrets.example.yaml." >&2
   exit 1
 fi
+# B-1 — la clé du vault Fernet vit dans son propre Secret, référencé par
+# envFrom dans backend / celery-worker / db-init. SHIFTWISE_FERNET_KEY étant
+# un champ Settings requis sans défaut, son absence fait crasher TOUS les pods
+# au boot (ValidationError). On échoue vite ici plutôt que sur un CrashLoop.
+if ! oc get secret shiftwise-credential-key -n "$NAMESPACE" >/dev/null 2>&1; then
+  echo "ERROR: Secret 'shiftwise-credential-key' missing in namespace '$NAMESPACE'." >&2
+  echo "       FERNET_KEY=\$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >&2
+  echo "       oc -n $NAMESPACE create secret generic shiftwise-credential-key \\" >&2
+  echo "         --from-literal=SHIFTWISE_FERNET_KEY=\"\$FERNET_KEY\"" >&2
+  echo "       (see secrets.example.yaml — do NOT commit the real key)" >&2
+  exit 1
+fi
 
 echo "==> [1/6] Applying kustomization to namespace '$NAMESPACE'"
-oc apply -k .
+# Layout canonique base/overlays (B-3) — la base est dans base/. Pour un
+# déploiement avec vérification TLS K8s activée, utiliser plutôt l'overlay :
+#   oc apply -k overlays/production
+oc apply -k base
 
 if $NO_WAIT; then
   echo "==> --no-wait set; skipping rollout waits."
-  echo "    Run 'oc apply -f db-init-job.yaml -n $NAMESPACE' once postgres is Ready."
+  echo "    Run 'oc apply -f base/db-init-job.yaml -n $NAMESPACE' once postgres is Ready."
   exit 0
 fi
 
@@ -57,7 +72,7 @@ oc rollout status deployment/postgresql -n "$NAMESPACE" --timeout="$TIMEOUT_DEPL
 
 echo "==> [3/6] Running db-init Job (delete prior run if any)"
 oc delete job db-init -n "$NAMESPACE" --ignore-not-found
-oc apply -f db-init-job.yaml
+oc apply -f base/db-init-job.yaml
 oc wait --for=condition=complete job/db-init -n "$NAMESPACE" --timeout="$TIMEOUT_DBINIT"
 
 echo "==> [4/6] Waiting for Redis"

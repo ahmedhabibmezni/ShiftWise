@@ -4,8 +4,10 @@
 # Exposé via Route TLS edge.
 #
 # Le ServiceAccount est différent du worker : l'API ne crée pas de Jobs K8s
-# elle-même (c'est le worker qui le fait). Elle a juste besoin de lire les
-# VMs/Migrations dans `shiftwise-converter` pour le statut.
+# elle-même (c'est le worker qui le fait). Elle a juste besoin de lire le
+# statut des Jobs de conversion. H-1 — ces Jobs tournent dans le namespace
+# `shiftwise` (CONVERTER_K8S_NAMESPACE="shiftwise"), pas dans un namespace
+# `shiftwise-converter` désormais inexistant.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -17,7 +19,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: api-reader
-  namespace: shiftwise-converter
+  namespace: shiftwise
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
@@ -30,7 +32,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: api-can-read-jobs
-  namespace: shiftwise-converter
+  namespace: shiftwise
 subjects:
   - kind: ServiceAccount
     name: shiftwise-api
@@ -79,6 +81,13 @@ spec:
           envFrom:
             - secretRef:    {name: shiftwise-secrets}
             - configMapRef: {name: shiftwise-config}
+            # B-1 — la clé du vault de credentials (Fernet) vit dans son propre
+            # Secret hors-Git. SHIFTWISE_FERNET_KEY est un champ Settings SANS
+            # défaut : sans cet envFrom, `Settings()` lève une ValidationError
+            # à l'import et le pod crashe au boot. Créé par l'opérateur :
+            #   oc -n shiftwise create secret generic shiftwise-credential-key \
+            #     --from-literal=SHIFTWISE_FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+            - secretRef:    {name: shiftwise-credential-key}
           env:
             - {name: DATABASE_HOST,         value: postgresql}
             # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret

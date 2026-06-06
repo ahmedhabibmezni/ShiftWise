@@ -220,7 +220,7 @@ jobs:
           delay=30
           while true; do
             set +e
-            apply_log=$(oc apply -k backend/openshift/staging/ 2>&1)
+            apply_log=$(oc apply -k backend/openshift/overlays/staging/ 2>&1)
             rc=$?
             set -e
             echo "$apply_log"

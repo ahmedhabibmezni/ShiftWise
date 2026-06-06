@@ -2,11 +2,15 @@
 #
 #   ./deploy.sh
 #
-# Le script enchaîne : oc apply -k . → wait postgres → db-init Job →
+# Le script enchaîne : oc apply -k base → wait postgres → db-init Job →
 # wait db-init → wait backend/worker/flower. Idempotent.
 #
-# Si tu préfères piloter à la main : `oc apply -k .` puis `oc apply -f
-# db-init-job.yaml` une fois Postgres prêt. db-init n'est PAS dans la
+# Layout canonique (B-3) : cette kustomization de base vit dans
+# openshift/base/ ; les overlays env-spécifiques sont dans
+# openshift/overlays/{production,staging}/ et référencent ../../base.
+#
+# Si tu préfères piloter à la main : `oc apply -k base` puis `oc apply -f
+# base/db-init-job.yaml` une fois Postgres prêt. db-init n'est PAS dans la
 # kustomization parce qu'un Job est immutable et casserait au re-apply.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
