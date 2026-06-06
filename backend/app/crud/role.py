@@ -287,6 +287,16 @@ def create_system_roles(db: Session) -> List[Role]:
         existing_role = get_role_by_name(db, role_name)
 
         if existing_role:
+            # Réconciliation de la dérive de permissions : ROLE_PERMISSIONS est
+            # la source de vérité pour les rôles système. Sans cette mise à
+            # jour, un déploiement initialisé AVANT un changement de matrice
+            # conserve indéfiniment d'anciennes permissions (créer-si-absent ne
+            # suffit pas). On ne touche qu'aux rôles système, champ permissions.
+            if (
+                existing_role.is_system_role
+                and existing_role.permissions != permissions
+            ):
+                existing_role.permissions = permissions
             created_roles.append(existing_role)
             continue
 

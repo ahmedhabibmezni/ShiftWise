@@ -41,7 +41,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from app.models.base import BaseModel
 
@@ -170,7 +170,17 @@ class MigrationEvent(BaseModel):
         ),
     )
 
-    migration = relationship("Migration", backref="events")
+    # ``passive_deletes=True`` : ne PAS émettre d'``UPDATE migration_events
+    # SET migration_id=NULL`` quand la migration parent est supprimée. La
+    # colonne est ``NOT NULL`` et la table est append-only (trigger DB) — la
+    # tentative de nullify échouait en 500. On laisse la contrainte FK
+    # ``ON DELETE NO ACTION`` parler : si des événements existent, le DELETE
+    # parent lève une ``IntegrityError`` propre (rétention de l'audit), gérée
+    # en 409 par la couche CRUD/API.
+    migration = relationship(
+        "Migration",
+        backref=backref("events", passive_deletes=True),
+    )
     actor = relationship("User", foreign_keys=[actor_id])
 
     def __repr__(self) -> str:

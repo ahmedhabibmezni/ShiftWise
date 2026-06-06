@@ -28,6 +28,7 @@ from app.models.conversion import ConversionGroupStatus, ConversionStatus
 from app.models.migration import MigrationStatus
 from app.services.adapter.errors import AdapterError
 from app.services.adapter.service import AdapterService
+from app.services.audit_log import AuditEmitter
 from app.services.converter.errors import ConversionError
 from app.services.converter.service import ConverterService
 from app.services.migrator.errors import MigratorError
@@ -84,8 +85,28 @@ def run_migration(self, migration_id: int) -> str:
 
         try:
             _validate(db, migration)
+            _emit_stage(db, migration_id, "Validation passed — VM is eligible for migration")
+
             group_id = _prepare_conversions(db, migration)
+            _emit_stage(
+                db, migration_id,
+                "Conversion jobs enqueued — transferring and converting source disks",
+            )
+
             _wait_for_conversions(db, migration, group_id)
+            _emit_stage(db, migration_id, "Disk conversion complete — all QCOW2 images ready")
+
+            # The tenant namespace must exist BEFORE the Adapter submits its
+            # Job into it. The Adapter runs ahead of the Migrator, which is the
+            # canonical namespace creator (ensure_tenant_namespace, idempotent),
+            # so without this the first migration into a brand-new tenant
+            # namespace fails the Adapter Job create with a 404. Calling it here
+            # and again in the Migrator is safe (idempotent).
+            _ensure_tenant_namespace(migration)
+            _emit_stage(
+                db, migration_id,
+                f"Tenant namespace {migration.target_namespace} ready",
+            )
 
             # Adapter — guest OS fixup on each qcow2 in place.
             crud_migration.update_migration_progress(
@@ -94,7 +115,12 @@ def run_migration(self, migration_id: int) -> str:
                 current_step="Adapting guest OS (network, console, GRUB)",
                 step_number=4,
             )
+            _emit_stage(
+                db, migration_id,
+                "Adapting guest OS — DHCP, serial console, GRUB redirect, SELinux relabel",
+            )
             AdapterService().run(db, migration_id)
+            _emit_stage(db, migration_id, "Guest OS adaptation complete")
 
             # Hand off to the Migrator: PVC populate + KubeVirt VM create + verify.
             crud_migration.update_migration_progress(
@@ -104,6 +130,10 @@ def run_migration(self, migration_id: int) -> str:
                 step_number=5,
             )
             _set_status(db, migration_id, MigrationStatus.CONFIGURING)
+            _emit_stage(
+                db, migration_id,
+                "Handing off to migrator — PVC populate and KubeVirt VM create",
+            )
             terminal = MigratorService().run(db, migration_id)
             return terminal.value
 
@@ -128,6 +158,23 @@ def run_migration(self, migration_id: int) -> str:
 
 
 # --- stages ----------------------------------------------------------------
+
+def _ensure_tenant_namespace(migration) -> None:
+    """Create the tenant OpenShift namespace if absent (idempotent).
+
+    Precondition for the Adapter stage, which submits a Job into
+    ``migration.target_namespace``. Raises MigratorError (classified by HTTP
+    status) on failure — caught by the orchestrator's MigratorError handler.
+    """
+    from app.core.kubevirt_client import get_kubevirt_client
+    from app.services.migrator.namespace import ensure_tenant_namespace
+
+    ensure_tenant_namespace(
+        get_kubevirt_client(),
+        migration.target_namespace,
+        migration.tenant_id,
+    )
+
 
 def _validate(db, migration) -> None:
     _set_status(db, migration.id, MigrationStatus.VALIDATING)
@@ -255,6 +302,19 @@ def _wait_for_conversions(db, migration, group_id: int) -> None:
 
 
 # --- helpers ---------------------------------------------------------------
+
+def _emit_stage(db, migration_id: int, message: str) -> None:
+    """Best-effort human-readable stage_event for the audit timeline.
+
+    Non-fatal (SAVEPOINT-isolated via ``safe_emit_stage_event``): a failed
+    audit write degrades the timeline but never fails the migration. The
+    caller's prior progress/status writes are already committed by their
+    own CRUD helpers, so the safe emit's outer commit has nothing pending.
+    """
+    migration = crud_migration.get_migration(db, migration_id)
+    if migration is not None:
+        AuditEmitter.safe_emit_stage_event(db, migration=migration, message=message)
+
 
 def _set_status(db, migration_id: int, status: MigrationStatus) -> None:
     crud_migration.set_migration_status(db, migration_id, status)

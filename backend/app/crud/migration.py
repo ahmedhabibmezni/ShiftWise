@@ -10,11 +10,19 @@ Filtrage multi-tenancy via tenant_id optionnel.
 
 from datetime import datetime, timezone
 from typing import Optional, List
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.migration import Migration, MigrationStatus, MigrationStrategy
 from app.models.migration_event import MigrationEvent, MigrationEventType
 from app.services.audit_log import AuditEmitter
+
+
+class MigrationHasAuditTrail(Exception):
+    """Levée quand une migration ne peut être supprimée car son journal
+    d'audit (``migration_events``) la référence. Le journal est conservé de
+    façon indépendante (FK ``ON DELETE NO ACTION`` + table append-only) ;
+    mappée en HTTP 409 par la couche API."""
 
 
 def get_migration(
@@ -221,6 +229,8 @@ def delete_migration(
 
     Raises:
         ValueError: Si la migration est en cours (is_active)
+        MigrationHasAuditTrail: Si des événements d'audit la référencent
+            (rétention append-only — la suppression est refusée proprement).
     """
     migration = get_migration(db, migration_id, tenant_id=tenant_id)
     if not migration:
@@ -230,7 +240,18 @@ def delete_migration(
         raise ValueError("Impossible de supprimer une migration en cours")
 
     db.delete(migration)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        # La FK ``migration_events.migration_id`` est ``ON DELETE NO ACTION`` :
+        # si le journal d'audit référence cette migration, le DELETE parent
+        # est refusé par la base. C'est la garantie de rétention de l'audit,
+        # pas une erreur serveur — on remonte une exception métier dédiée.
+        db.rollback()
+        raise MigrationHasAuditTrail(
+            "Cette migration possède un journal d'audit conservé "
+            "(migration_events, append-only) et ne peut pas être supprimée."
+        ) from e
 
     return True
 

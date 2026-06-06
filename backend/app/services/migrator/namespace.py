@@ -32,6 +32,21 @@ _LABEL_MANAGED_BY = "app.kubernetes.io/managed-by"
 _LABEL_TENANT = "app.shiftwise.io/tenant"
 _LABEL_PURPOSE = "app.shiftwise.io/purpose"
 
+# The populator/adapter Jobs mount the transit NFS via a built-in ``nfs``
+# volume, which no stock SCC allows except ``privileged``. The custom
+# ``shiftwise-populator`` SCC (openshift/base/populator-scc.yaml) clones
+# restricted-v2 + ``nfs``, and is bound to a DEDICATED SA (never ``default``)
+# so the privileged-nfs grant has a tight blast radius. The committed SCC only
+# lists the control-plane SA (``shiftwise:shiftwise-populator``); each tenant
+# namespace needs its own SA provisioned + added to the SCC users at runtime
+# (see the populator-scc.yaml header note). That is what
+# ``ensure_populator_scc`` does.
+_POPULATOR_SCC = "shiftwise-populator"
+_POPULATOR_SA = "shiftwise-populator"
+_SCC_GROUP = "security.openshift.io"
+_SCC_VERSION = "v1"
+_SCC_PLURAL = "securitycontextconstraints"
+
 # Single quota object per tenant namespace. Fixed name so an operator
 # tweaking quotas by hand can find it in one place.
 _QUOTA_NAME = "shiftwise-default-quota"
@@ -155,6 +170,46 @@ def apply_default_resource_quota(
         _raise_classified(e, action="create-quota", name=namespace)
 
 
+def ensure_populator_scc(kv_client: "KubeVirtClient", namespace: str) -> None:
+    """Provision the dedicated populator SA in ``namespace`` and grant it the
+    ``shiftwise-populator`` SCC (which permits the direct ``nfs`` volume the
+    adapter/populator Jobs mount).
+
+    Idempotent: the SA create swallows 409, and the SCC ``users`` list is only
+    patched when the tenant SA is absent from it. Without this the adapter pod
+    in a freshly auto-created tenant namespace is rejected by SCC admission
+    (``nfs volumes are not allowed``).
+    """
+    sa_body = k8s_client.V1ServiceAccount(
+        metadata=k8s_client.V1ObjectMeta(
+            name=_POPULATOR_SA,
+            labels={_LABEL_MANAGED_BY: "shiftwise"},
+        ),
+    )
+    try:
+        kv_client.core_api.create_namespaced_service_account(namespace, sa_body)
+        logger.info("Created populator SA %r in %r", _POPULATOR_SA, namespace)
+    except ApiException as e:
+        if e.status != 409:
+            _raise_classified(e, action="create-sa", name=namespace)
+
+    sa_user = f"system:serviceaccount:{namespace}:{_POPULATOR_SA}"
+    try:
+        scc = kv_client.api.get_cluster_custom_object(
+            _SCC_GROUP, _SCC_VERSION, _SCC_PLURAL, _POPULATOR_SCC,
+        )
+        users = list(scc.get("users") or [])
+        if sa_user not in users:
+            users.append(sa_user)
+            kv_client.api.patch_cluster_custom_object(
+                _SCC_GROUP, _SCC_VERSION, _SCC_PLURAL, _POPULATOR_SCC,
+                {"users": users},
+            )
+            logger.info("Granted SCC %r to %r", _POPULATOR_SCC, sa_user)
+    except ApiException as e:
+        _raise_classified(e, action="grant-scc", name=namespace)
+
+
 def ensure_tenant_namespace(
     kv_client: "KubeVirtClient",
     name: str,
@@ -178,6 +233,7 @@ def ensure_tenant_namespace(
         kv_client.core_api.read_namespace(name=name)
         logger.debug("Tenant namespace %r already exists", name)
         apply_default_resource_quota(kv_client, name, tenant_id)
+        ensure_populator_scc(kv_client, name)
         return
     except ApiException as e:
         if e.status != 404:
@@ -200,7 +256,9 @@ def ensure_tenant_namespace(
             # Race: another worker created it between our read and write.
             logger.debug("Tenant namespace %r created concurrently — OK", name)
             apply_default_resource_quota(kv_client, name, tenant_id)
+            ensure_populator_scc(kv_client, name)
             return
         _raise_classified(e, action="create", name=name)
 
     apply_default_resource_quota(kv_client, name, tenant_id)
+    ensure_populator_scc(kv_client, name)

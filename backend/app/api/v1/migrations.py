@@ -415,6 +415,11 @@ def delete_migration(
 
     try:
         deleted = crud_migration.delete_migration(db, migration_id, tenant_id=tenant_id)
+    except crud_migration.MigrationHasAuditTrail as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        ) from None
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -489,6 +494,13 @@ def start_migration(
     try:
         async_result = run_migration.delay(migration.id)
     except (BrokerOperationalError, ConnectionError, OSError) as exc:
+        # Surface the real broker error — operators need the root cause
+        # (host/port, timeout, refused) to distinguish "Redis down" from
+        # "wrong broker URL" or a transport-layer failure.
+        logger.exception(
+            "run_migration.delay failed for migration_id=%s broker=%s",
+            migration.id, settings.CELERY_BROKER_URL,
+        )
         migration.status = MigrationStatus.PENDING
         db.commit()
         raise HTTPException(

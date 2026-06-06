@@ -135,6 +135,15 @@ network:
       dhcp4: true
 EOF
 
+# libguestfs backend: even a privileged adapter pod on these nodes cannot use
+# KVM acceleration (no usable nested virt exposed to the pod), so the default
+# backend makes guestfs_launch fail ("appliance failed to start"). Force the
+# direct/TCG backend (software emulation) — slower, but it reliably boots the
+# appliance. On a node with working /dev/kvm this can be relaxed for ~5x speed.
+export LIBGUESTFS_BACKEND=direct
+export LIBGUESTFS_BACKEND_SETTINGS=force_tcg
+echo ">>> libguestfs backend=direct force_tcg (software emulation)"
+
 echo ">>> Running virt-customize"
 # --mkdir avant chaque --upload : les dossiers /etc/NetworkManager,
 # /etc/systemd/network, /etc/netplan n'existent que si la stack
