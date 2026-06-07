@@ -14,6 +14,7 @@ Database access layer implementing Create, Read, Update, Delete operations for a
 | `vm.py` | `VirtualMachine` | VM inventory operations |
 | `migration.py` | `Migration` | Migration lifecycle operations |
 | `conversion.py` | `ConversionGroup` / `ConversionJob` / `ConversionAttempt` | Disk conversion tracking |
+| `cluster_config.py` | `ClusterConnectionConfig` / `ClusterConfigEvent` | Per-tenant cluster connection config — sole reader/writer of the Fernet-encrypted `*_ciphertext` columns; scope resolution + append-only audit (feature 002) |
 
 ---
 

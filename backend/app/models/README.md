@@ -15,6 +15,7 @@ SQLAlchemy ORM models representing the ShiftWise data layer. All models inherit 
 | `virtual_machine.py` | `VirtualMachine`, `VMStatus`, `CompatibilityStatus`, `OSType` | VM inventory records |
 | `migration.py` | `Migration`, `MigrationStatus`, `MigrationStrategy` | Migration lifecycle tracking |
 | `conversion.py` | `ConversionGroup`, `ConversionJob`, `ConversionAttempt` + status/format enums | Disk conversion tracking |
+| `cluster_config.py` | `ClusterConnectionConfig`, `ClusterConfigEvent`, `ClusterScopeType`, `ClusterMode`, `ClusterHealthStatus` | Per-tenant cluster connection config + append-only audit (feature 002) |
 
 ---
 

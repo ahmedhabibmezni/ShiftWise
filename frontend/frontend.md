@@ -174,10 +174,12 @@ Dark mode:
 
 **P8. `/settings`** — Three tabs (1px-bordered tab strip, no rounded corners): "PROFIL" (current user info, change password), "UTILISATEURS" (table, admin only, CRUD), "RÔLES" (table, system roles read-only marked, custom roles editable). If RBAC permission missing, show panel with mono message `INSUFFICIENT PERMISSIONS — REQUIRES role.users.manage`.
 
+**P9. `/infrastructure`** (feature 002, Administration) — Per-tenant cluster connection config. Scope selector (platform-default + tenant overrides). Mode editor (`kubeconfig` / `incluster` / `custom`): `kubeconfig` → file upload, `custom` → `api_url` + bearer token + `verify_ssl`, `incluster` → no input (valid only for platform-default). `[TESTER LA CONNEXION]` runs a live probe and renders a cluster-details panel (server version, platform, node/namespace counts, API URL) or the failure reason. Secrets are write-only — the read model never returns a kubeconfig/token, only `has_credentials`. RBAC: superadmin any scope, tenant admin own scope only; missing `infrastructure` permission hides the page.
+
 ## App shell
 
 - **Header** (48px, 1px bottom border): left = SHIFTWISE wordmark in mono 14px + version, right = theme toggle (sun/moon lucide, 16px) + user menu (initials in 24px square, click → slide-in with profile/logout).
-- **Sidebar** (56px, icon-only, 1px right border): Dashboard / Hyperviseurs / VMs / Migrations / Settings. Active = signal-color 2px left bar + signal icon. Tooltip on hover (mono 11px, bg-elev, 1px border, 120ms delay).
+- **Sidebar** (56px, icon-only, 1px right border): Dashboard / Hyperviseurs / VMs / Migrations / Settings / Infrastructure (Administration, RBAC-gated). Active = signal-color 2px left bar + signal icon. Tooltip on hover (mono 11px, bg-elev, 1px border, 120ms delay).
 - **Main**: 24px padding, 1440px max-width centered.
 - **Top progress bar** when route is loading or any global query is fetching.
 

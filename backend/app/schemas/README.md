@@ -16,6 +16,7 @@ Pydantic **v2** models defining request/response data contracts for the ShiftWis
 | `migration.py` | Migration create / update / response + progress schemas |
 | `conversion.py` | Disk conversion request / response schemas |
 | `kubevirt.py` | Direct KubeVirt VM-creation schema |
+| `cluster_config.py` | Per-tenant cluster connection config — upsert / secret-free read / scope-list / connection-test schemas (feature 002) |
 
 ---
 

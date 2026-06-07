@@ -19,7 +19,8 @@ api/
     ├── hypervisors.py      # Hypervisor connection + sync endpoints
     ├── migrations.py       # Migration lifecycle endpoints
     ├── kubevirt.py         # KubeVirt / OpenShift operations
-    └── conversions.py      # Disk conversion tracking
+    ├── conversions.py      # Disk conversion tracking
+    └── infrastructure.py   # Per-tenant cluster connection config
 ```
 
 ---
@@ -67,7 +68,7 @@ Dependencies use the `Annotated[Type, Depends(...)]` syntax (SonarQube rule S841
 
 ## 📡 API v1 Routers
 
-Eight routers, all mounted under `/api/v1`:
+Nine routers, all mounted under `/api/v1`:
 
 | Router | Prefix | Responsibility |
 |--------|--------|----------------|
@@ -79,6 +80,7 @@ Eight routers, all mounted under `/api/v1`:
 | `migrations` | `/api/v1/migrations` | Migration lifecycle (create, start, cancel) |
 | `kubevirt` | `/api/v1/kubevirt` | Direct KubeVirt / OpenShift cluster operations |
 | `conversions` | `/api/v1/conversions` | Disk conversion job tracking |
+| `infrastructure` | `/api/v1/infrastructure` | Per-tenant cluster connection config (mode, kubeconfig upload, live test) |
 
 The full endpoint inventory is in [`../../README.md`](../../README.md); request/response detail is in [`../../../docs/api-reference.md`](../../../docs/api-reference.md).
 

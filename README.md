@@ -1,5 +1,11 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/Horizontal_Dark_Mode.png">
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/Horizontal_Light_Mode.png">
+  <img src="frontend/public/Horizontal_Light_Mode.png" alt="ShiftWise" width="420">
+</picture>
+
 # 🔄 ShiftWise
 
 ### Intelligent VM-to-OpenShift Migration Platform
@@ -220,7 +226,8 @@ ShiftWise/
 │   │   │       ├── hypervisors.py    # Hypervisor connections + sync
 │   │   │       ├── migrations.py     # Migration lifecycle + start/cancel
 │   │   │       ├── kubevirt.py       # KubeVirt/OpenShift operations
-│   │   │       └── conversions.py    # Disk conversion tracking
+│   │   │       ├── conversions.py    # Disk conversion tracking
+│   │   │       └── infrastructure.py # Per-tenant cluster connection config
 │   │   ├── core/
 │   │   │   ├── config.py             # Pydantic Settings
 │   │   │   ├── database.py           # SQLAlchemy engine & session
@@ -248,7 +255,8 @@ ShiftWise/
 │   │   │   ├── feature_extractor.py
 │   │   │   ├── converter/        # Disk conversion (qemu-img K8s Jobs)
 │   │   │   ├── adapter/          # Guest-OS fixup (libguestfs)
-│   │   │   └── migrator/         # PVC populate + KubeVirt VM create
+│   │   │   ├── migrator/         # PVC populate + KubeVirt VM create
+│   │   │   └── cluster/          # Effective-config resolver + client cache + connection probe
 │   │   ├── tasks/                # Celery tasks (migration, conversion)
 │   │   ├── ml/                   # ML training scripts + model artifacts
 │   │   └── main.py               # FastAPI application entry point
@@ -375,6 +383,7 @@ curl http://localhost:8000/health
 | **User Management** | ✅ Complete | Full CRUD with multi-tenancy and tenant isolation |
 | **RBAC System** | ✅ Complete | 4 system roles (`super_admin`, `admin`, `user`, `viewer`) + custom roles, permission matrix |
 | **KubeVirt Client** | ✅ Complete | 3 connection modes: `kubeconfig`, `incluster`, `custom` |
+| **Cluster Connectivity** | ✅ Complete | DB-backed per-tenant cluster connection config (Infrastructure page) — dynamic kubeconfig upload / mode switch / live test, replacing the static `scp` + restart workflow |
 | **Discovery** | ✅ Complete | Real connectors for VMware Workstation, Hyper-V, KVM, Proxmox VE, oVirt/RHV (vSphere: stub) |
 | **Analyzer** | ✅ Complete | Hybrid rule engine + scikit-learn classifier, 0–100% compatibility score |
 | **Converter** | ✅ Complete | VMDK/VHD → QCOW2 via qemu-img Kubernetes Jobs on NFS transit |
@@ -383,7 +392,7 @@ curl http://localhost:8000/health
 | **Celery Orchestration** | ✅ Complete | Redis-backed asynchronous migration pipeline |
 | **OpenShift Deployment** | ✅ Complete | One-command deploy (`backend/openshift/deploy.sh`) |
 | **Test Suite** | ✅ Complete | ~85% coverage across the backend test suite |
-| **Frontend** | 🚧 In Progress | React 19 SPA — core pages built (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings) |
+| **Frontend** | 🚧 In Progress | React 19 SPA — core pages built (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, infrastructure) |
 | **Reporting** | 🚧 In Progress | Stats endpoints + migration-history page with CSV export; dedicated audit-log table pending |
 
 ---
@@ -418,6 +427,7 @@ The refresh token is delivered as an `HttpOnly` cookie (not a body field) and is
 | `/api/v1/migrations` | Migrations | Migration lifecycle (create, start, cancel) |
 | `/api/v1/kubevirt` | KubeVirt / OpenShift | Direct KubeVirt cluster operations |
 | `/api/v1/conversions` | Conversions | Disk conversion job tracking |
+| `/api/v1/infrastructure` | Infrastructure | Per-tenant cluster connection config (mode, kubeconfig upload, live connection test) |
 
 ### RBAC Permission Matrix
 
@@ -430,6 +440,7 @@ The refresh token is delivered as an `HttpOnly` cookie (not a body field) and is
 | Migrations | `*` (all) | `*` (all) | read, create | read |
 | Conversions | `*` (all) | `*` (all) | read, create | read |
 | Reports | `*` (all) | `*` (all) | read | read |
+| Infrastructure | `*` (all) | read, update (own tenant) | — | — |
 | Settings | `*` (all) | — | — | — |
 
 Superusers bypass all permission checks. Every non-superuser request is scoped to the user's `tenant_id`.
@@ -482,6 +493,7 @@ Superusers bypass all permission checks. Every non-superuser request is scoped t
 - **Multi-Tenancy:** Data isolation between tenant organizations enforced on every query
 - **CORS:** Explicit origin / method / header allowlists (no wildcards), `allow_credentials=True`
 - **Kubernetes Auth:** Supports `kubeconfig`, `incluster` ServiceAccount, and `custom` token modes
+- **Cluster Connection Config:** Per-tenant cluster connectivity is DB-backed; uploaded kubeconfigs and custom bearer tokens are Fernet-encrypted at rest (read schemas are secret-free), SSRF-guarded on custom `api_url`/`cluster.server`, and changes are recorded in an append-only `cluster_config_events` audit table
 
 📖 Security policy: [`SECURITY.md`](SECURITY.md)
 

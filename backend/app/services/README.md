@@ -25,6 +25,7 @@ The Converter, Adapter, and Migrator stages are orchestrated asynchronously by C
 | `converter/` | Disk format conversion (package) |
 | `adapter/` | Guest-OS fixup (package) |
 | `migrator/` | PVC populate + KubeVirt VM creation (package) |
+| `cluster/` | Effective cluster-config resolver + `(scope_key, config_version)` client cache + connection probe (feature 002) |
 
 ---
 

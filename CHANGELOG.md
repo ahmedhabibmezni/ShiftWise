@@ -20,7 +20,8 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 - **Migrator Module** — PVC populate (NFS-direct `qemu-img` Job) and KubeVirt VirtualMachine creation, start, and verification; tenant namespace auto-creation; opt-in per-tenant ResourceQuota.
 - **Celery + Redis orchestration** — asynchronous, durable migration pipeline wired to `POST /api/v1/migrations/{id}/start`.
 - **OpenShift deployment** — `backend/openshift/` manifests (PostgreSQL, Redis, transit PVC, backend, Celery workers, Flower, RBAC, SCC) and a one-command idempotent `deploy.sh`.
-- **Frontend SPA** *(in progress)* — React 19 + Vite + TypeScript + Tailwind; login, dashboard, hypervisors, VMs, migrations, reports, users, roles, and settings pages.
+- **Frontend SPA** *(in progress)* — React 19 + Vite + TypeScript + Tailwind; login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, and infrastructure pages.
+- **Cluster Connectivity Management (feature 002)** — DB-backed per-tenant cluster connection configuration replacing the static `scp kubeconfig` + restart workflow. New Administration **Infrastructure** page (`/api/v1/infrastructure`) lets a superadmin (or a tenant admin scoped to their own tenant) choose the connection mode (`kubeconfig` / `incluster` / `custom`), upload a kubeconfig, run a bounded live connection test, and view cluster details — without a backend restart. Adds the `cluster_connection_config` and append-only `cluster_config_events` tables (migration `f2a7c4e9b1d3`), an effective-config resolver caching one client per `(scope_key, config_version)`, and the `infrastructure` RBAC resource. The `KUBERNETES_*` env vars become a bootstrap fallback seeded into the platform-default scope.
 - Login audit trail — `last_login_at` and `last_login_ip` recorded on every successful authentication.
 
 ### 🔄 Changed
@@ -34,6 +35,7 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 ### 🔒 Security
 
 - Brute-force protection on `/auth/login` — sliding-window throttle, per email and per source IP.
+- **Cluster credential encryption** — uploaded kubeconfig contents and custom bearer tokens (feature 002) are Fernet-encrypted at rest via the existing credential vault; read schemas are secret-free (`has_credentials: bool`). Custom `api_url` and kubeconfig `cluster.server` URLs are SSRF-validated, and every config change is recorded in the append-only `cluster_config_events` audit table.
 
 ### 🐛 Fixed
 
