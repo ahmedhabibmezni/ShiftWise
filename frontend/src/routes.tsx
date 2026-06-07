@@ -9,6 +9,7 @@ import Reports from "@/pages/Reports";
 import Roles from "@/pages/Roles";
 import Settings from "@/pages/Settings";
 import Users from "@/pages/Users";
+import Infrastructure from "@/pages/Infrastructure";
 import NotFound from "@/pages/NotFound";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import { PublicOnlyRoute } from "@/routes/PublicOnlyRoute";
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
           { path: "/reports", element: <Reports /> },
           { path: "/users", element: <Users /> },
           { path: "/roles", element: <Roles /> },
+          { path: "/infrastructure", element: <Infrastructure /> },
           { path: "/settings", element: <Settings /> },
         ],
       },

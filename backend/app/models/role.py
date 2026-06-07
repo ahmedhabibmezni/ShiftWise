@@ -119,6 +119,9 @@ ROLE_PERMISSIONS = {
         "conversions": ["*"],
         "reports": ["*"],
         "settings": ["*"],
+        # Feature 002 — connectivité cluster (le superuser bypasse de toute
+        # façon ; listé pour cohérence et pour un super_admin non-superuser).
+        "infrastructure": ["*"],
     },
     "admin": {
         # Gestion complète de son tenant
@@ -129,6 +132,9 @@ ROLE_PERMISSIONS = {
         "migrations": ["*"],
         "conversions": ["*"],
         "reports": ["*"],
+        # Feature 002 — un tenant admin gère la connectivité de SON tenant
+        # (le scoping tenant est appliqué dans le handler).
+        "infrastructure": ["read", "update"],
     },
     "user": {
         # Accès aux ressources assignées

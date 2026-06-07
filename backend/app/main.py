@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db, init_db
-from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions, reports
+from app.api.v1 import auth, users, roles, vms, hypervisors, migrations, kubevirt, conversions, reports, infrastructure
 
 logger = logging.getLogger("shiftwise")
 
@@ -56,6 +56,18 @@ async def lifespan(_app: FastAPI):
     print(f"📊 Base de données : {settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_NAME}")
     init_db()
     print("✅ Base de données initialisée")
+
+    # Feature 002 — amorce la config cluster défaut plateforme depuis l'env
+    # au premier démarrage (idempotent). Les KUBERNETES_* deviennent ensuite
+    # un simple fallback ; la source de vérité est la table en base.
+    try:
+        from app.core.database import SessionLocal
+        from app.crud import cluster_config as crud_cluster
+
+        with SessionLocal() as seed_db:
+            crud_cluster.seed_platform_default_from_env(seed_db)
+    except Exception as exc:  # NOSONAR — l'amorçage ne doit pas bloquer le boot
+        logger.warning("cluster config seed skipped: %s", exc)
     print(
         "📖 Documentation disponible sur : "
         f"http://{settings.SERVER_HOST}:{settings.SERVER_PORT}/docs"
@@ -324,6 +336,12 @@ app.include_router(
     reports.router,
     prefix=f"{settings.API_V1_PREFIX}/reports",
     tags=["Reports"],
+)
+
+app.include_router(
+    infrastructure.router,
+    prefix=f"{settings.API_V1_PREFIX}/infrastructure",
+    tags=["Infrastructure / Cluster Connectivity"],
 )
 
 

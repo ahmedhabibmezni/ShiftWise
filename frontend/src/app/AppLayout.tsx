@@ -15,6 +15,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/users": "Users",
   "/roles": "Roles",
   "/settings": "Settings",
+  "/infrastructure": "Infrastructure",
   "/styleguide": "Styleguide",
 };
 
@@ -29,6 +30,7 @@ const PARENT_PATH: Record<string, string> = {
   "/users": "Administration",
   "/roles": "Administration",
   "/settings": "Administration",
+  "/infrastructure": "Administration",
   "/styleguide": "Pages",
 };
 

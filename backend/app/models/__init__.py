@@ -40,6 +40,15 @@ from app.models.migration_event import (
     MigrationEventType,
 )
 
+# 5c. ClusterConnectionConfig (feature 002 — connectivité cluster, indépendant)
+from app.models.cluster_config import (
+    ClusterConnectionConfig,
+    ClusterConfigEvent,
+    ClusterScopeType,
+    ClusterMode,
+    ClusterHealthStatus,
+)
+
 # 6. Conversion (dépend de VirtualMachine et Migration)
 from app.models.conversion import (
     ConversionGroup,
@@ -78,6 +87,12 @@ __all__ = [
     # MigrationEvent (audit log)
     "MigrationEvent",
     "MigrationEventType",
+    # ClusterConnectionConfig (feature 002)
+    "ClusterConnectionConfig",
+    "ClusterConfigEvent",
+    "ClusterScopeType",
+    "ClusterMode",
+    "ClusterHealthStatus",
     # Conversion
     "ConversionGroup",
     "ConversionJob",

@@ -110,7 +110,9 @@ class MigratorService:
 
         # Ensure the tenant namespace exists before anything else.
         # Creates shiftwise-{tenant_id} with standard labels if absent.
-        kv = get_kubevirt_client()
+        # Feature 002 — resolve the client against the tenant's effective
+        # cluster config (its own override → platform default → env bootstrap).
+        kv = get_kubevirt_client(db, tenant_id=migration.tenant_id)
         ensure_tenant_namespace(kv, target_namespace, migration.tenant_id)
 
         # Cache the resolved VM name on the row so the UI sees it.

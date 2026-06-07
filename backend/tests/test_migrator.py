@@ -320,7 +320,7 @@ def _patch_k8s_layer(monkeypatch):
     fake_kv.create_vm_from_manifest.side_effect = captured["create_vm"]
     fake_kv.set_vm_run_strategy.side_effect = captured["set_run_strategy"]
     fake_kv.wait_vmi_running.side_effect = captured["wait_vmi_running"]
-    monkeypatch.setattr(svc_mod, "get_kubevirt_client", lambda: fake_kv)
+    monkeypatch.setattr(svc_mod, "get_kubevirt_client", lambda *a, **k: fake_kv)
 
     return captured
 

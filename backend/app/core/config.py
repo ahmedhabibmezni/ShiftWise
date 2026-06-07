@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # Namespace par défaut pour les VMs
     KUBERNETES_DEFAULT_NAMESPACE: str = "default"
 
+    # Cluster connectivity management (feature 002).
+    # Taille max d'un kubeconfig uploadé (octets) — 1 MiB par défaut.
+    CLUSTER_KUBECONFIG_MAX_BYTES: int = 1_048_576
+    # Timeout client-side (s) d'une sonde de connectivité "test connection".
+    CLUSTER_CONNECTION_TEST_TIMEOUT_SECONDS: int = 30
+
     @field_validator("KUBERNETES_MODE")
     @classmethod
     def validate_kubernetes_mode(cls, v: str) -> str:

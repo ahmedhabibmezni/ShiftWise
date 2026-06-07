@@ -60,20 +60,29 @@ class KubeVirtClient:
     VM_PLURAL = "virtualmachines"
     VMI_PLURAL = "virtualmachineinstances"
 
-    def __init__(self):
+    def __init__(self, config_spec: Dict[str, Any] | None = None):
         """
         Initialise le client KubeVirt.
 
-        La méthode de connexion est déterminée automatiquement selon :
-        1. Si KUBERNETES_SERVICE_HOST existe → Mode incluster
-        2. Sinon, utilise le mode configuré dans settings.KUBERNETES_MODE
+        Deux chemins de construction :
+
+        1. ``config_spec`` fourni (feature 002) → construction depuis une
+           configuration explicite résolue en base (par scope/tenant). Le
+           dict porte ``mode`` ('kubeconfig' | 'incluster' | 'custom') et la
+           charge utile déchiffrée (``kubeconfig_str``, ``api_url``,
+           ``token``, ``verify_ssl``).
+        2. ``config_spec`` absent → chemin d'amorçage historique basé sur
+           ``settings`` (variables d'environnement).
 
         Raises:
             KubeVirtClientError: Si la connexion échoue
         """
         try:
+            if config_spec is not None:
+                self._load_from_spec(config_spec)
+
             # Détecter automatiquement si on est dans un cluster
-            if settings.is_kubernetes_incluster and settings.USE_IN_CLUSTER:
+            elif settings.is_kubernetes_incluster and settings.USE_IN_CLUSTER:
                 self._load_incluster_config()
 
             elif settings.KUBERNETES_MODE == "custom":
@@ -139,6 +148,76 @@ class KubeVirtClient:
         config.load_kube_config(config_file=kube_path)
         self._api_client = client.ApiClient()
         logger.info(f"🔧 Loaded kubeconfig from: {kube_path}")
+
+    # ------------------------------------------------------------------
+    # Feature 002 — construction depuis une config explicite (par scope)
+    # ------------------------------------------------------------------
+
+    def _load_from_spec(self, spec: Dict[str, Any]) -> None:
+        """Dispatch de construction selon ``spec['mode']`` (feature 002)."""
+        mode = spec.get("mode")
+        if mode == "incluster":
+            self._load_incluster_config()
+        elif mode == "custom":
+            self._load_custom_from_spec(spec)
+        elif mode == "kubeconfig":
+            self._load_kubeconfig_from_spec(spec)
+        else:
+            raise KubeVirtClientError(f"Unknown cluster connection mode: {mode!r}")
+
+    def _load_custom_from_spec(self, spec: Dict[str, Any]) -> None:
+        """Construit un client custom depuis une URL + token résolus."""
+        api_url = spec.get("api_url")
+        token = spec.get("token")
+        if not api_url or not token:
+            raise KubeVirtClientError(
+                "custom mode requires both api_url and token"
+            )
+        configuration = client.Configuration()
+        configuration.host = api_url
+        configuration.api_key["authorization"] = token
+        configuration.api_key_prefix["authorization"] = "Bearer"
+        configuration.verify_ssl = bool(spec.get("verify_ssl", False))
+        self._api_client = client.ApiClient(configuration)
+        logger.info(f"🔧 Loaded CUSTOM config from spec (API: {api_url})")
+
+    def _load_kubeconfig_from_spec(self, spec: Dict[str, Any]) -> None:
+        """Construit un client depuis un kubeconfig en mémoire (chiffré en base).
+
+        Privilégie ``load_kube_config_from_dict`` (pas de fichier sur disque) ;
+        repli sur un fichier temporaire ``0600`` immédiatement supprimé si le
+        client épinglé ne l'expose pas.
+        """
+        import yaml
+
+        contents = spec.get("kubeconfig_str")
+        if not contents:
+            raise KubeVirtClientError("kubeconfig mode requires kubeconfig_str")
+
+        doc = yaml.safe_load(contents)
+        loader = getattr(config, "load_kube_config_from_dict", None)
+        if loader is not None:
+            loader(config_dict=doc)
+            self._api_client = client.ApiClient()
+            logger.info("🔧 Loaded kubeconfig from spec (in-memory dict)")
+            return
+
+        # Repli : fichier temporaire 0600, chargé puis supprimé aussitôt.
+        import tempfile
+
+        fd, tmp_path = tempfile.mkstemp(prefix="shiftwise-kubeconfig-")
+        try:
+            os.write(fd, contents.encode("utf-8"))
+            os.close(fd)
+            os.chmod(tmp_path, 0o600)
+            config.load_kube_config(config_file=tmp_path)
+            self._api_client = client.ApiClient()
+            logger.info("🔧 Loaded kubeconfig from spec (transient file)")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                logger.warning("could not remove transient kubeconfig %s", tmp_path)
 
     # GESTION DES VIRTUALMACHINES
 
@@ -751,13 +830,26 @@ class KubeVirtClient:
 _kubevirt_client_instance: KubeVirtClient | None = None
 
 
-def get_kubevirt_client() -> KubeVirtClient:
+def get_kubevirt_client(db=None, tenant_id=None) -> KubeVirtClient:
     """
-    Retourne l'instance singleton du KubeVirtClient.
+    Retourne un KubeVirtClient.
 
-    L'instance est créée à la première invocation et réutilisée ensuite.
-    À injecter via FastAPI Depends() dans les routes kubevirt.
+    Deux comportements (feature 002) :
+
+    - **Sans ``db``** (appel historique, zéro argument) : retourne l'instance
+      singleton construite depuis les variables d'environnement. Chemin
+      d'amorçage / compatibilité ascendante (tests, code sans session).
+    - **Avec ``db``** : délègue au resolver qui résout la configuration
+      effective du tenant (override tenant → défaut plateforme → amorçage env)
+      et met le client en cache par ``(scope, config_version)``.
+
+    L'import du resolver est tardif pour éviter un cycle d'import
+    (resolver → core.kubevirt_client).
     """
+    if db is not None:
+        from app.services.cluster.resolver import get_client_for_tenant
+        return get_client_for_tenant(db, tenant_id)
+
     global _kubevirt_client_instance
     if _kubevirt_client_instance is None:
         _kubevirt_client_instance = KubeVirtClient()

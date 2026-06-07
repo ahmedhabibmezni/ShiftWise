@@ -6,10 +6,14 @@ import { AxiosError } from "axios";
  */
 type FastApiValidationError = { msg?: unknown };
 
-/** Body shape of an error response: either `{detail: string}` or, for a 422,
- *  `{detail: ValidationError[]}`. */
+/** Structured error detail emitted by some routers (feature 002 infrastructure):
+ *  `{ detail: { code, message } }`. Only `message` is surfaced to the user. */
+type StructuredErrorDetail = { code?: unknown; message?: unknown };
+
+/** Body shape of an error response: `{detail: string}`, a 422
+ *  `{detail: ValidationError[]}`, or `{detail: {code, message}}`. */
 type ErrorBody = {
-  detail?: string | FastApiValidationError[];
+  detail?: string | FastApiValidationError[] | StructuredErrorDetail;
 };
 
 /**
@@ -36,6 +40,14 @@ export function describeErrorOrNull(err: unknown): string | null {
     const first = detail[0];
     if (first && typeof first.msg === "string" && first.msg.length > 0) {
       return first.msg;
+    }
+  }
+
+  // Structured `{code, message}` detail (feature 002 infrastructure router).
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const message = (detail as StructuredErrorDetail).message;
+    if (typeof message === "string" && message.length > 0) {
+      return message;
     }
   }
 
