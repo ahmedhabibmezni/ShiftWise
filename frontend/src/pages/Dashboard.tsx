@@ -4,14 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
-  Cpu,
-  Plug,
-  RefreshCw,
   Rocket,
   ScanSearch,
 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
+import { useHasPermission } from "@/lib/permissions";
 import { Panel } from "@/components/ui/Panel";
+import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { CountUp } from "@/components/ui/CountUp";
 import { KPIPrimary } from "@/components/ui/KPIPrimary";
 import { Gauge } from "@/components/ui/Gauge";
@@ -20,6 +19,7 @@ import {
   PipelineStrip,
   type PipelineStageData,
 } from "@/components/PipelineStrip";
+import { buildMigrationPipelineStages } from "@/lib/migrationPipeline";
 import { Callout } from "@/components/ui/Callout";
 import { Skeleton } from "@/components/ui/Skeleton";
 import {
@@ -46,8 +46,23 @@ import {
   type Migration,
   type MigrationListResponse,
 } from "@/api/migrations";
+import {
+  listScopes,
+  type ClusterConfigRead,
+  type ClusterConfigScopeList,
+  type ClusterHealthStatus,
+} from "@/api/infrastructure";
 
 const REFETCH_INTERVAL_MS = 30_000;
+
+const CLUSTER_HEALTH_TONE: Record<ClusterHealthStatus, BadgeVariant> = {
+  healthy: "ok",
+  degraded: "warn",
+  unreachable: "critical",
+  auth_failed: "critical",
+  invalid: "critical",
+  unknown: "neutral",
+};
 
 function formatNumber(n: number | undefined | null): string {
   if (n === undefined || n === null || Number.isNaN(n)) return "—";
@@ -90,6 +105,16 @@ export default function Dashboard() {
     queryFn: () => listMigrations({ limit: 6 }),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
+  // Target OpenShift cluster connectivity — only queried for users who can
+  // read the infrastructure scopes (superadmin / tenant admin). Others never
+  // hit the endpoint, so no 403 noise.
+  const canReadInfra = useHasPermission("infrastructure", "read");
+  const clusterScopesQ = useQuery<ClusterConfigScopeList>({
+    queryKey: ["dashboard", "cluster-scopes"],
+    queryFn: listScopes,
+    enabled: canReadInfra,
+    refetchInterval: REFETCH_INTERVAL_MS,
+  });
 
   const hyp = hypervisorsQ.data;
   const vm = vmsQ.data;
@@ -101,83 +126,32 @@ export default function Dashboard() {
   const activeMigs = mig?.in_progress ?? 0;
   const migratedVms = vm?.by_status.MIGRATED ?? 0;
 
-  // Build pipeline stage data from live counts
-  const pipelineStages: PipelineStageData[] = useMemo(() => {
-    const discovered = totalVms;
-    const analysed =
-      compatible +
-      (vm?.by_compatibility.PARTIAL ?? 0) +
-      (vm?.by_compatibility.INCOMPATIBLE ?? 0);
-    const migrating = activeMigs + (mig?.pending ?? 0);
-    const adapted = mig?.in_progress ?? 0;
-    const migrated = migratedVms;
-    return [
-      {
-        key: "discover",
-        label: "Discovery",
-        icon: ScanSearch,
-        count: formatNumber(discovered),
-        meta: discovered > 0 ? "Active" : "Idle",
-        progress: discovered > 0 ? 100 : 0,
-        state: discovered > 0 ? "done" : "pending",
-      },
-      {
-        key: "analyze",
-        label: "Analyzer",
-        icon: Cpu,
-        count: formatNumber(analysed),
-        meta:
-          discovered > 0
-            ? `${Math.round((analysed / discovered) * 100)}% analysed`
-            : "—",
-        progress: discovered > 0 ? (analysed / discovered) * 100 : 0,
-        state:
-          analysed === discovered && discovered > 0
-            ? "done"
-            : analysed > 0
-              ? "active"
-              : "pending",
-      },
-      {
-        key: "convert",
-        label: "Converter",
-        icon: RefreshCw,
-        count: formatNumber(migrating),
-        meta:
-          discovered > 0
-            ? `${Math.round((migrating / Math.max(1, discovered)) * 100)}% converted`
-            : "—",
-        progress: discovered > 0 ? (migrating / Math.max(1, discovered)) * 100 : 0,
-        state: migrating > 0 ? "active" : "pending",
-      },
-      {
-        key: "adapt",
-        label: "Adapter",
-        icon: Plug,
-        count: formatNumber(adapted),
-        meta:
-          discovered > 0
-            ? `${Math.round((adapted / Math.max(1, discovered)) * 100)}% adapted`
-            : "—",
-        progress: discovered > 0 ? (adapted / Math.max(1, discovered)) * 100 : 0,
-        state: adapted > 0 ? "active" : "pending",
-      },
-      {
-        key: "migrate",
-        label: "Migrator",
-        icon: Rocket,
-        count: formatNumber(migrated),
-        meta:
-          discovered > 0
-            ? `${Math.round((migrated / Math.max(1, discovered)) * 100)}% migrated`
-            : "—",
-        progress: discovered > 0 ? (migrated / Math.max(1, discovered)) * 100 : 0,
-        state: migrated > 0 ? "active" : "pending",
-      },
-    ];
-  }, [totalVms, compatible, vm, mig, activeMigs, migratedVms]);
+  // Migration pipeline — built from the same shared builder as the Migrations
+  // page, off migration stats, so the two pipeline strips are identical.
+  const pipelineStages: PipelineStageData[] = useMemo(
+    () => (mig ? buildMigrationPipelineStages(mig) : []),
+    [mig],
+  );
 
   const adoptionPct = adoptionPercent(totalVms, migratedVms);
+
+  // Effective target cluster for this user: the tenant's own scope if it
+  // resolves to a config, otherwise the platform default. The read schema is
+  // secret-free by design — never carries kubeconfig/token content.
+  const effectiveCluster: ClusterConfigRead | null = useMemo(() => {
+    const items = clusterScopesQ.data?.items ?? [];
+    if (items.length === 0) return null;
+    const tenantId = user?.tenant_id ?? null;
+    const tenantEntry = tenantId
+      ? items.find((e) => e.scope_type === "tenant" && e.tenant_id === tenantId)
+      : undefined;
+    const platformEntry = items.find(
+      (e) => e.scope_type === "platform_default",
+    );
+    return (
+      tenantEntry?.config ?? platformEntry?.config ?? items[0]?.config ?? null
+    );
+  }, [clusterScopesQ.data, user?.tenant_id]);
 
   const queries = [
     hypervisorsQ,
@@ -287,12 +261,21 @@ export default function Dashboard() {
         title="Migration Pipeline"
         hint={`${hyp?.total ?? 0} hypervisors in scope`}
       >
-        {migrationsQ.isPending || vmsQ.isPending ? (
+        {migrationsQ.isPending || pipelineStages.length === 0 ? (
           <Skeleton className="h-[120px] w-full" />
         ) : (
           <PipelineStrip stages={pipelineStages} />
         )}
       </Panel>
+
+      {/* ===== TARGET CLUSTER (infra readers only) ===== */}
+      {canReadInfra && (
+        <ClusterCard
+          cluster={effectiveCluster}
+          isPending={clusterScopesQ.isPending}
+          isError={clusterScopesQ.isError}
+        />
+      )}
 
       {/* ===== ROW 4: HYPERVISORS TABLE + ACTIVITY ===== */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -504,6 +487,85 @@ function HypervisorsCard({
             })}
           </tbody>
         </Table>
+      )}
+    </Panel>
+  );
+}
+
+/* =================================================================== */
+/*                          TARGET CLUSTER CARD                        */
+/* =================================================================== */
+
+function ClusterFact({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="bg-[var(--surface-soft)] rounded-2xl px-4 py-3">
+      <div className="text-[11px] text-[var(--text-secondary)] font-medium uppercase tracking-[0.04em]">
+        {label}
+      </div>
+      <div className="text-[13px] font-bold text-[var(--text-primary)] mt-1 break-all">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ClusterCard({
+  cluster,
+  isPending,
+  isError,
+}: {
+  cluster: ClusterConfigRead | null;
+  isPending: boolean;
+  isError: boolean;
+}) {
+  return (
+    <Panel
+      title="Target Cluster"
+      hint="OpenShift Virtualization connectivity"
+      action={
+        cluster ? (
+          <Badge variant={CLUSTER_HEALTH_TONE[cluster.health_status]} dot>
+            {cluster.health_status.replace(/_/g, " ")}
+          </Badge>
+        ) : undefined
+      }
+    >
+      {isPending ? (
+        <Skeleton className="h-[96px] w-full mt-4" />
+      ) : isError ? (
+        <div className="py-6 text-center text-[13px] text-[var(--text-muted)]">
+          Could not load cluster connectivity.
+        </div>
+      ) : !cluster ? (
+        <div className="py-6 text-center text-[13px] text-[var(--text-muted)]">
+          No cluster connection is configured yet. Set one in Infrastructure.
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
+          <ClusterFact
+            label="API Server"
+            value={cluster.api_url ?? "In-cluster"}
+          />
+          <ClusterFact label="Mode" value={cluster.mode} />
+          <ClusterFact label="Namespace" value={cluster.default_namespace} />
+          <ClusterFact
+            label="TLS Verify"
+            value={cluster.verify_ssl ? "On" : "Off"}
+          />
+          <ClusterFact
+            label="Last Checked"
+            value={
+              cluster.health_checked_at
+                ? formatRelativeTime(cluster.health_checked_at)
+                : "Never"
+            }
+          />
+        </div>
+      )}
+      {cluster?.health_reason && (
+        <div className="mt-3 text-[12px] text-[var(--text-secondary)] break-words">
+          {cluster.health_reason}
+        </div>
       )}
     </Panel>
   );

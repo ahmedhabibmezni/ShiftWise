@@ -8,13 +8,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Cpu,
   Monitor,
-  Plug,
   Plus,
-  RefreshCw,
   Rocket,
-  ScanSearch,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -32,6 +28,7 @@ import {
   PipelineStrip,
   type PipelineStageData,
 } from "@/components/PipelineStrip";
+import { buildMigrationPipelineStages } from "@/lib/migrationPipeline";
 import {
   MigrationStatusBadge,
   type MigrationStatusKey,
@@ -57,16 +54,6 @@ import { MigrationDetailDrawer } from "./MigrationDetailDrawer";
 const PAGE_SIZE = 25;
 const REFETCH_IDLE_MS = 30_000;
 const REFETCH_ACTIVE_MS = 5_000;
-
-// One-line description of each pipeline stage, shown in the strip before any
-// migration has run so the empty pipeline reads as a diagram, not dead tiles.
-const STAGE_BLURB: Record<string, string> = {
-  discover: "Scans hypervisors for VMs",
-  analyze: "Scores OpenShift fit",
-  convert: "Disks to QCOW2",
-  adapt: "Guest OS fixups",
-  migrate: "Boots on KubeVirt",
-};
 
 export default function Migrations() {
   const [page, setPage] = useState(1);
@@ -149,75 +136,13 @@ export default function Migrations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listQuery.data]);
 
-  // Build pipeline data from current stats
-  const pipelineStages: PipelineStageData[] = useMemo(() => {
-    const s = statsQuery.data;
-    if (!s) {
-      return [];
-    }
-    const total = s.total_migrations;
-    const completed = s.completed;
-    const inProgress = s.in_progress;
-    const pending = s.pending;
-    const failed = s.failed;
-    const succeededOrInflight = completed + inProgress;
-    return [
-      {
-        key: "discover",
-        label: "Discovery",
-        icon: ScanSearch,
-        count: formatNumber(total),
-        meta: total > 0 ? "100% scanned" : STAGE_BLURB.discover,
-        progress: total > 0 ? 100 : 0,
-        state: total > 0 ? "done" : "pending",
-      },
-      {
-        key: "analyze",
-        label: "Analyzer",
-        icon: Cpu,
-        count: formatNumber(succeededOrInflight + pending),
-        meta: total > 0 ? "100% analyzed" : STAGE_BLURB.analyze,
-        progress: total > 0 ? 100 : 0,
-        state: total > 0 ? "done" : "pending",
-      },
-      {
-        key: "convert",
-        label: "Converter",
-        icon: RefreshCw,
-        count: formatNumber(succeededOrInflight),
-        meta:
-          total > 0
-            ? `${Math.round((succeededOrInflight / total) * 100)}% converted`
-            : STAGE_BLURB.convert,
-        progress: total > 0 ? (succeededOrInflight / total) * 100 : 0,
-        state: succeededOrInflight > 0 ? "active" : "pending",
-      },
-      {
-        key: "adapt",
-        label: "Adapter",
-        icon: Plug,
-        count: formatNumber(inProgress),
-        meta:
-          total > 0
-            ? `${Math.round((inProgress / total) * 100)}% adapted`
-            : STAGE_BLURB.adapt,
-        progress: total > 0 ? (inProgress / total) * 100 : 0,
-        state: inProgress > 0 ? "active" : "pending",
-      },
-      {
-        key: "migrate",
-        label: "Migrator",
-        icon: Rocket,
-        count: formatNumber(completed),
-        meta:
-          total > 0
-            ? `${Math.round((completed / total) * 100)}% migrated`
-            : STAGE_BLURB.migrate,
-        progress: total > 0 ? (completed / total) * 100 : 0,
-        state: completed > 0 && failed === 0 ? "done" : completed > 0 ? "active" : "pending",
-      },
-    ];
-  }, [statsQuery.data]);
+  // Build pipeline data from current stats — shared with the Dashboard via a
+  // single builder so the two pipeline strips can never drift.
+  const pipelineStages: PipelineStageData[] = useMemo(
+    () =>
+      statsQuery.data ? buildMigrationPipelineStages(statsQuery.data) : [],
+    [statsQuery.data],
+  );
 
   return (
     <div className="flex flex-col gap-6">
