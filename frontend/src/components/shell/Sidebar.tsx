@@ -137,7 +137,7 @@ export function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
     <>
       {/* ---------- Brand ---------- */}
       <div className="relative z-[1] flex items-center px-4 pt-6 pb-4">
-        <BrandLogo className="h-16" />
+        <BrandLogo className="h-24" />
       </div>
 
       <div className="relative z-[1] mx-5 border-b border-[var(--hairline)]" />
