@@ -410,3 +410,458 @@ class TestRemoteTransitPathMapping:
         with pytest.raises(ConversionError):
             RemoteTransit(target_host="h", target_port=22, target_user="root",
                           target_password="x", export_root="")
+
+
+# ---------------------------------------------------------------------------
+# VMware Workstation connector
+# ---------------------------------------------------------------------------
+
+class _StubVM:
+    """Minimal VirtualMachine-shaped stub for connector unit tests."""
+    def __init__(self, name, custom_metadata):
+        self.name = name
+        self.custom_metadata = custom_metadata
+        self.source_uuid = "u1"
+
+
+def _write_vmx(tmp_path, body: str) -> str:
+    vmx = tmp_path / "Proxmox" / "Proxmox.vmx"
+    vmx.parent.mkdir(parents=True, exist_ok=True)
+    vmx.write_text(body, encoding="utf-8")
+    return str(vmx)
+
+
+class TestVmwareWorkstationConnector:
+    def test_extract_disk_files_filters_cdrom_and_controllers(self, tmp_path):
+        from app.services.converter.connectors.vmware_workstation import (
+            _extract_disk_files,
+            _parse_vmx_file,
+        )
+        # Create the backing vmdk so absolute resolution is sane.
+        (tmp_path / "Proxmox").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "Proxmox" / "Proxmox.vmdk").write_bytes(b"x" * 1024)
+        vmx = _write_vmx(
+            tmp_path,
+            'displayName = "Proxmox"\n'
+            'scsi0.present = "TRUE"\n'
+            'scsi0.virtualDev = "lsilogic"\n'           # controller, not a disk
+            'scsi0:0.present = "TRUE"\n'
+            'scsi0:0.fileName = "Proxmox.vmdk"\n'
+            'scsi0:0.deviceType = "scsi-hardDisk"\n'
+            'sata0:1.present = "TRUE"\n'
+            'sata0:1.fileName = "linux.iso"\n'          # not a vmdk -> skip
+            'sata0:1.deviceType = "cdrom-image"\n'
+            'ide1:0.present = "TRUE"\n'
+            'ide1:0.fileName = "ubuntu.iso"\n'
+            'ide1:0.deviceType = "cdrom-image"\n',
+        )
+        config = _parse_vmx_file(vmx)
+        disks = _extract_disk_files(vmx, config)
+        assert len(disks) == 1
+        device, path = disks[0]
+        assert device == "scsi0:0"
+        assert path.endswith("Proxmox.vmdk")
+
+    def test_list_disks_returns_vmdk_descriptor(self, tmp_path):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors.vmware_workstation import (
+            VmwareWorkstationPuller,
+        )
+        (tmp_path / "Proxmox").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "Proxmox" / "Proxmox.vmdk").write_bytes(b"x" * (4 * 1024))
+        vmx = _write_vmx(
+            tmp_path,
+            'scsi0:0.fileName = "Proxmox.vmdk"\n'
+            'scsi0:0.deviceType = "scsi-hardDisk"\n',
+        )
+        vm = _StubVM("Proxmox", {"vmx_path": vmx})
+        descriptors = VmwareWorkstationPuller().list_disks(None, vm)
+        assert len(descriptors) == 1
+        d = descriptors[0]
+        assert d.disk_index == 0
+        assert d.source_format == SourceFormat.VMDK
+        assert d.size_bytes == 4 * 1024
+        assert d.locator.endswith("Proxmox.vmdk")
+
+    def test_list_disks_without_vmx_path_raises(self):
+        from app.services.converter.connectors.vmware_workstation import (
+            VmwareWorkstationPuller,
+        )
+        vm = _StubVM("Proxmox", {})
+        with pytest.raises(ConversionError) as ei:
+            VmwareWorkstationPuller().list_disks(None, vm)
+        assert ei.value.code == "ERR_DISK_NOT_FOUND"
+
+    def test_convert_on_source_produces_qcow2(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import vmware_workstation as ws
+        from app.services.converter.connectors.vmware_workstation import (
+            VmwareWorkstationPuller,
+        )
+        (tmp_path / "Proxmox").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "Proxmox" / "Proxmox.vmdk").write_bytes(b"x" * (8 * 1024))
+        vmx = _write_vmx(
+            tmp_path,
+            'scsi0:0.fileName = "Proxmox.vmdk"\n'
+            'scsi0:0.deviceType = "scsi-hardDisk"\n',
+        )
+        vm = _StubVM("Proxmox", {"vmx_path": vmx})
+
+        # VM is not running -> no vmrun stop/start.
+        monkeypatch.setattr(ws, "_is_running", lambda _p: False)
+
+        # Fake qemu-img: write the compressed output where the real tool would.
+        def fake_convert(src, dest, target_format):
+            Path(dest).write_bytes(b"QCOW2-compressed")
+        monkeypatch.setattr(
+            VmwareWorkstationPuller, "_run_qemu_img_convert",
+            staticmethod(fake_convert),
+        )
+
+        puller = VmwareWorkstationPuller()
+        desc = puller.list_disks(None, vm)[0]
+        dest = tmp_path / "scratch" / "0.qcow2"
+        result = puller.convert_on_source(None, vm, desc, dest, cold=True)
+        assert dest.is_file()
+        assert dest.read_bytes() == b"QCOW2-compressed"
+        assert result.source_format == SourceFormat.QCOW2
+        assert result.sha256 is not None
+
+    def test_convert_on_source_cold_stops_and_restarts_running_vm(
+        self, tmp_path, monkeypatch,
+    ):
+        from app.services.converter.connectors import vmware_workstation as ws
+        from app.services.converter.connectors.vmware_workstation import (
+            VmwareWorkstationPuller,
+        )
+        (tmp_path / "Proxmox").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "Proxmox" / "Proxmox.vmdk").write_bytes(b"x" * 1024)
+        vmx = _write_vmx(
+            tmp_path,
+            'scsi0:0.fileName = "Proxmox.vmdk"\n'
+            'scsi0:0.deviceType = "scsi-hardDisk"\n',
+        )
+        vm = _StubVM("Proxmox", {"vmx_path": vmx})
+
+        monkeypatch.setattr(ws, "_is_running", lambda _p: True)
+        calls = []
+        monkeypatch.setattr(ws, "_vmrun", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(
+            VmwareWorkstationPuller, "_run_qemu_img_convert",
+            staticmethod(lambda src, dest, fmt: Path(dest).write_bytes(b"Q")),
+        )
+        puller = VmwareWorkstationPuller()
+        desc = puller.list_disks(None, vm)[0]
+        puller.convert_on_source(
+            None, vm, desc, tmp_path / "s" / "0.qcow2", cold=True,
+        )
+        # Stopped then started.
+        assert calls[0][0] == "stop"
+        assert calls[-1][0] == "start"
+
+    def test_service_local_dispatch_rejects_unsupported_type(self):
+        from app.models.hypervisor import HypervisorType
+        from app.services.converter.protocol import DiskDescriptor
+        from app.services.converter.service import ConverterService
+
+        # VIRTUALBOX has no registered converter connector — the registry
+        # raises ERR_UNSUPPORTED_HYPERVISOR before any convert_on_source call.
+        class _HV:
+            type = HypervisorType.VIRTUALBOX
+
+        class _VM:
+            source_hypervisor = _HV()
+
+        desc = DiskDescriptor(
+            disk_index=0, source_format=SourceFormat.VMDK,
+            size_bytes=0, locator="x",
+        )
+        with pytest.raises(ConversionError) as ei:
+            ConverterService._convert_on_source_local(
+                _VM(), desc, Path("/tmp/x.qcow2"),
+                cold=True, progress_cb=lambda d, t: None,
+            )
+        assert ei.value.code == "ERR_UNSUPPORTED_HYPERVISOR"
+
+
+# ---------------------------------------------------------------------------
+# Shared connector stubs + base helpers
+# ---------------------------------------------------------------------------
+
+class _HVStub:
+    """Minimal Hypervisor-shaped stub for connector unit tests."""
+    def __init__(self, **kw):
+        self.host = kw.get("host", "hv.example.com")
+        self.port = kw.get("port")
+        self.username = kw.get("username", "root")
+        self.password_plain = kw.get("password_plain", "secret")
+        self.verify_ssl = kw.get("verify_ssl", False)
+        self.ssl_cert_path = kw.get("ssl_cert_path")
+        self.connection_config = kw.get("connection_config", {})
+
+
+class _VMStub2:
+    def __init__(self, name="vm1", source_uuid="abc-123"):
+        self.name = name
+        self.source_uuid = source_uuid
+
+
+class _DummySSH:
+    def close(self):
+        pass
+
+
+class TestBaseHelpers:
+    def test_local_qemu_img_convert_success(self, tmp_path, monkeypatch):
+        from app.services.converter.connectors import base
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        recorded = {}
+
+        def fake_run(cmd, **kw):
+            recorded["cmd"] = cmd
+            Path(cmd[-1]).write_bytes(b"QCOW2")
+            return _R()
+
+        monkeypatch.setattr(base.subprocess, "run", fake_run)
+        src = tmp_path / "in.raw"
+        src.write_bytes(b"x" * 16)
+        dest = tmp_path / "out.qcow2"
+        base.local_qemu_img_convert(src, dest, "qcow2")
+        assert dest.read_bytes() == b"QCOW2"
+        assert "-c" in recorded["cmd"]
+
+    def test_local_qemu_img_convert_failure_maps_error(self, tmp_path, monkeypatch):
+        from app.services.converter.connectors import base
+
+        class _R:
+            returncode = 1
+            stdout = ""
+            stderr = "boom"
+
+        monkeypatch.setattr(base.subprocess, "run", lambda *a, **k: _R())
+        with pytest.raises(ConversionError) as ei:
+            base.local_qemu_img_convert(tmp_path / "a", tmp_path / "b", "qcow2")
+        assert ei.value.code == "ERR_OUTPUT_INVALID"
+
+    def test_sha256_file_matches_hashlib(self, tmp_path):
+        import hashlib
+        from app.services.converter.connectors.base import sha256_file
+
+        f = tmp_path / "f.bin"
+        f.write_bytes(b"hello world" * 100)
+        assert sha256_file(f) == hashlib.sha256(b"hello world" * 100).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# KVM connector — convert_on_source
+# ---------------------------------------------------------------------------
+
+class TestKvmConnector:
+    def test_convert_on_source_stops_converts_pulls_restarts(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import kvm
+        from app.services.converter.connectors.kvm import KvmPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        monkeypatch.setattr(kvm, "_ssh_connect", lambda hv: _DummySSH())
+        calls = []
+
+        def fake_exec(ssh, cmd, *, timeout=60, expect_rc0=False):
+            calls.append(cmd)
+            return "4096" if "stat -c %s" in cmd else ""
+
+        monkeypatch.setattr(KvmPuller, "_exec", staticmethod(fake_exec))
+        monkeypatch.setattr(
+            KvmPuller, "_stop_domain_if_running",
+            classmethod(lambda cls, ssh, name: True),
+        )
+
+        def fake_pull(ssh, *, remote_path, dest_path, expected_size, host, progress_cb):
+            Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest_path).write_bytes(b"QCOW2-kvm")
+            return "kvmsha"
+
+        monkeypatch.setattr(KvmPuller, "_sftp_pull", staticmethod(fake_pull))
+
+        desc = DiskDescriptor(
+            disk_index=0, source_format=SourceFormat.RAW,
+            size_bytes=4096, locator="/var/lib/libvirt/images/vm1.qcow2",
+        )
+        dest = tmp_path / "0.qcow2"
+        result = KvmPuller().convert_on_source(
+            _HVStub(), _VMStub2("vm1"), desc, dest, cold=True,
+        )
+        assert dest.read_bytes() == b"QCOW2-kvm"
+        assert result.source_format == SourceFormat.QCOW2
+        assert result.sha256 == "kvmsha"
+        # qemu-img convert ran, then the temp was removed and the domain restarted.
+        assert any("qemu-img convert" in c for c in calls)
+        assert any(c.startswith("rm -f") for c in calls)
+        assert any("virsh" in c and "start" in c for c in calls)
+
+    def test_exec_nonzero_raises(self):
+        from app.services.converter.connectors.kvm import KvmPuller
+
+        class _Chan:
+            def recv_exit_status(self):
+                return 2
+
+        class _Stream:
+            def __init__(self, data=b""):
+                self._data = data
+                self.channel = _Chan()
+
+            def read(self):
+                return self._data
+
+        class _SSH:
+            def exec_command(self, cmd, timeout=60):
+                return None, _Stream(b""), _Stream(b"bad")
+
+        with pytest.raises(ConversionError) as ei:
+            KvmPuller._exec(_SSH(), "false", expect_rc0=True)
+        assert ei.value.code == "ERR_OUTPUT_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# oVirt connector
+# ---------------------------------------------------------------------------
+
+class TestOvirtConnector:
+    def test_normalise_uuid(self):
+        from app.services.converter.connectors.ovirt import _normalise_uuid
+        assert _normalise_uuid("AB-cd-12") == "abcd12"
+
+    def test_convert_on_source_downloads_then_compresses(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import ovirt
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        monkeypatch.setattr(ovirt, "_connect", lambda hv: _DummySSH())
+        monkeypatch.setattr(ovirt, "_close", lambda c: None)
+
+        def fake_download(cls, connection, *, disk_id, dest_path, expected_size, hv, progress_cb):
+            Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest_path).write_bytes(b"RAW-DATA")
+            return "rawsha"
+
+        monkeypatch.setattr(OvirtPuller, "_download_disk", classmethod(fake_download))
+        monkeypatch.setattr(
+            ovirt, "local_qemu_img_convert",
+            lambda src, dest, fmt: Path(dest).write_bytes(b"QCOW2-ovirt"),
+        )
+
+        desc = DiskDescriptor(
+            disk_index=0, source_format=SourceFormat.QCOW2,
+            size_bytes=8, locator="disk-uuid-1",
+        )
+        dest = tmp_path / "0.qcow2"
+        result = OvirtPuller().convert_on_source(_HVStub(), _VMStub2(), desc, dest, cold=True)
+        assert dest.read_bytes() == b"QCOW2-ovirt"
+        assert result.source_format == SourceFormat.QCOW2
+        # The intermediate download file is cleaned up.
+        assert not (dest.with_suffix(dest.suffix + ".download")).exists()
+
+    def test_pull_disk_live_requires_cold(self):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        desc = DiskDescriptor(0, SourceFormat.RAW, 0, "d")
+        with pytest.raises(ConversionError) as ei:
+            OvirtPuller().pull_disk(
+                _HVStub(), _VMStub2(), desc, Path("/tmp/x"), cold=False,
+            )
+        assert ei.value.code == "ERR_VM_RUNNING_NEEDS_COLD"
+
+
+# ---------------------------------------------------------------------------
+# Hyper-V connector
+# ---------------------------------------------------------------------------
+
+class TestHyperVConnector:
+    def test_ps_lit_escapes_quotes(self):
+        from app.services.converter.connectors.hyperv import _ps_lit
+        assert _ps_lit("a'b") == "'a''b'"
+
+    def test_to_unc_maps_drive_to_admin_share(self):
+        from app.services.converter.connectors.hyperv import _to_unc
+        assert _to_unc("host1", r"C:\VMs\d.vhdx") == r"\\host1\C$\VMs\d.vhdx"
+
+    def test_to_unc_passthrough_unc(self):
+        from app.services.converter.connectors.hyperv import _to_unc
+        assert _to_unc("h", r"\\srv\share\d.vhdx") == r"\\srv\share\d.vhdx"
+
+    def test_vhd_format_mapping(self):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors.hyperv import _vhd_format
+        assert _vhd_format("VHDX") == SourceFormat.VHDX
+        assert _vhd_format("vhd") == SourceFormat.VHD
+
+    def test_list_disks_parses_ps_json(self, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import hyperv
+        from app.services.converter.connectors.hyperv import HyperVPuller
+
+        payload = (
+            '[{"path":"C:\\\\VMs\\\\a.vhdx","size":4096,"filesize":1024,'
+            '"format":"VHDX"}]'
+        )
+        monkeypatch.setattr(hyperv, "_run_ps", lambda hv, script, timeout=120: payload)
+        descs = HyperVPuller().list_disks(_HVStub(), _VMStub2())
+        assert len(descs) == 1
+        assert descs[0].source_format == SourceFormat.VHDX
+        assert descs[0].size_bytes == 4096
+        assert descs[0].locator.endswith("a.vhdx")
+
+    def test_convert_on_source_local(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import hyperv
+        from app.services.converter.connectors.hyperv import HyperVPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        src = tmp_path / "a.vhdx"
+        src.write_bytes(b"x" * 32)
+        monkeypatch.setattr(HyperVPuller, "_stop_vm_if_running", staticmethod(lambda hv, vm: False))
+        monkeypatch.setattr(
+            hyperv, "local_qemu_img_convert",
+            lambda s, dest, fmt: Path(dest).write_bytes(b"QCOW2-hv"),
+        )
+        desc = DiskDescriptor(0, SourceFormat.VHDX, 32, str(src))
+        dest = tmp_path / "0.qcow2"
+        # auth_mode defaults to local -> qemu-img on the local file.
+        result = HyperVPuller().convert_on_source(
+            _HVStub(connection_config={"auth_mode": "local"}),
+            _VMStub2(), desc, dest, cold=True,
+        )
+        assert dest.read_bytes() == b"QCOW2-hv"
+        assert result.source_format == SourceFormat.QCOW2
+
+
+# ---------------------------------------------------------------------------
+# vSphere connector
+# ---------------------------------------------------------------------------
+
+class TestVsphereConnector:
+    def test_flat_extent_path(self):
+        from app.services.converter.connectors.vsphere import _flat_extent_path
+        assert _flat_extent_path("[ds1] vm/d.vmdk") == "[ds1] vm/d-flat.vmdk"
+        assert _flat_extent_path("[ds1] vm/d-flat.vmdk") == "[ds1] vm/d-flat.vmdk"
+
+    def test_split_ds_path(self):
+        from app.services.converter.connectors.vsphere import _split_ds_path
+        ds, rel = _split_ds_path("[datastore1] folder/d-flat.vmdk")
+        assert ds == "datastore1"
+        assert rel == "folder/d-flat.vmdk"
+
+    def test_split_ds_path_rejects_bad(self):
+        from app.services.converter.connectors.vsphere import _split_ds_path
+        with pytest.raises(ConversionError) as ei:
+            _split_ds_path("no-brackets.vmdk")
+        assert ei.value.code == "ERR_DISK_NOT_FOUND"

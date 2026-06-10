@@ -76,3 +76,30 @@ class DiskPuller(Protocol):
         responsible for the eventual move into ``outputs/``.
         """
         ...
+
+    def convert_on_source(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        target_format: str = "qcow2",
+        cold: bool = True,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> PullResult:
+        """Convert+compress the disk near the source, landing a small qcow2.
+
+        Used by the convert-on-source SFTP transit bridge
+        (``CONVERTER_SOURCE_CONVERT_SFTP=True``): instead of staging the full
+        source disk onto NFS and converting in-cluster, the connector produces a
+        compressed ``dest_path`` (qcow2) in the worker scratch — either by
+        running ``qemu-img convert -c`` where the data lives (Proxmox/KVM nodes)
+        or by pulling the disk to the worker and converting locally (VMware
+        Workstation, Hyper-V, oVirt, vSphere). ``ConverterService`` then uploads
+        the result to the cluster NFS.
+
+        ``cold`` semantics match :meth:`pull_disk`. Returns a ``PullResult``
+        whose ``source_format`` reflects the produced (target) format.
+        """
+        ...

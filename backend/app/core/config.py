@@ -351,6 +351,14 @@ class Settings(BaseSettings):
     # Répertoire scratch local du worker pour le qcow2 rapatrié avant upload.
     CONVERTER_LOCAL_SCRATCH: str = "./.shiftwise-scratch"
 
+    # Binaire qemu-img local du worker — utilisé par le connecteur VMware
+    # Workstation en mode convert-on-source : le disque VMDK est local sur le
+    # poste (le worker tourne sur le même hôte que Workstation), donc la
+    # conversion+compression qcow2 se fait localement avant l'upload SFTP.
+    # Sur Windows, pointer vers qemu-img.exe (ex.
+    # "C:\\Program Files\\qemu\\qemu-img.exe") ; sur PATH, "qemu-img" suffit.
+    CONVERTER_LOCAL_QEMU_IMG: str = "qemu-img"
+
     # Hôte NFS cible (où réside l'export monté par la transit-pvc) + creds SSH.
     CONVERTER_SFTP_TARGET_HOST: str = ""
     CONVERTER_SFTP_TARGET_PORT: int = 22

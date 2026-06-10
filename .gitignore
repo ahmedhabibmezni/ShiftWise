@@ -68,6 +68,7 @@ WARP.md
 commit_rules.md
 start.txt
 scenario.txt
+security_vulnerabilities.md
 *.rdb
 DESIGN.md
 PRODUCT.md
@@ -98,3 +99,6 @@ docs/
 *.canvas
 *.canvas~
 .obsidian.vimrc
+# Converter worker scratch zone (large staged qcow2 disks — never commit)
+backend/.shiftwise-scratch/
+.shiftwise-scratch/

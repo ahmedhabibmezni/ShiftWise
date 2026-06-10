@@ -158,51 +158,189 @@ class KvmPuller:
                 "Live blockcopy not implemented yet — power VM off",
             )
 
-        import hashlib
         ssh = _ssh_connect(hv)
         try:
-            sftp = ssh.open_sftp()
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            partial = dest_path.with_suffix(dest_path.suffix + ".partial")
-            h = hashlib.sha256()
-            try:
-                with sftp.open(descriptor.locator, "rb") as fin, open(partial, "wb") as fout:
-                    fin.prefetch()
-                    bytes_done = 0
-                    chunk = 1024 * 1024
-                    while True:
-                        buf = fin.read(chunk)
-                        if not buf:
-                            break
-                        fout.write(buf)
-                        h.update(buf)
-                        bytes_done += len(buf)
-                        if progress_cb is not None:
-                            try:
-                                progress_cb(bytes_done, descriptor.size_bytes or bytes_done)
-                            except Exception:  # NOSONAR
-                                logger.debug("progress_cb raised", exc_info=True)
-                partial.replace(dest_path)
-            except Exception as e:  # NOSONAR
-                if partial.exists():
-                    partial.unlink(missing_ok=True)
-                raise ConversionError(
-                    "ERR_NETWORK_TIMEOUT",
-                    f"SFTP pull from {hv.host}:{descriptor.locator} failed: {e}",
-                    cause=e,
-                ) from e
-            finally:
-                sftp.close()
+            sha256 = self._sftp_pull(
+                ssh,
+                remote_path=descriptor.locator,
+                dest_path=dest_path,
+                expected_size=descriptor.size_bytes,
+                host=hv.host,
+                progress_cb=progress_cb,
+            )
         finally:
             ssh.close()
 
-        size = dest_path.stat().st_size
         return PullResult(
             staged_path=dest_path,
             source_format=descriptor.source_format,
-            size_bytes=size,
-            sha256=h.hexdigest(),
+            size_bytes=dest_path.stat().st_size,
+            sha256=sha256,
         )
+
+    def convert_on_source(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        target_format: str = "qcow2",
+        cold: bool = True,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> PullResult:
+        """Convert+compress the disk ON the libvirt host, then pull the qcow2.
+
+        Mirrors :meth:`ProxmoxPuller.convert_on_source`: a KVM/libvirt host has
+        ``qemu-img`` locally, so we run ``qemu-img convert -c`` where the backing
+        file lives and transfer only the small compressed result. For a cold
+        migration the domain is shut down (graceful, then destroy) before the
+        read so the guest filesystem is quiescent, then restarted.
+        """
+        import shlex
+
+        safe_name = re.sub(r"[^A-Za-z0-9_.\-]", "", vm.name)
+        if not safe_name:
+            raise ConversionError("ERR_VM_NOT_FOUND", f"unsafe VM name {vm.name!r}")
+        src = descriptor.locator
+        remote_tmp = (
+            f"/tmp/shiftwise-kvm-{safe_name}-d{int(descriptor.disk_index)}.{target_format}"
+        )
+
+        ssh = _ssh_connect(hv)
+        stopped_here = False
+        try:
+            if cold:
+                stopped_here = self._stop_domain_if_running(ssh, safe_name)
+            self._exec(
+                ssh,
+                f"qemu-img convert -O {target_format} -c "
+                f"{shlex.quote(src)} {shlex.quote(remote_tmp)}",
+                timeout=6 * 3600,
+                expect_rc0=True,
+            )
+            remote_size = int(
+                self._exec(ssh, f"stat -c %s {shlex.quote(remote_tmp)}") or 0
+            )
+        finally:
+            if stopped_here:
+                try:
+                    self._exec(
+                        ssh,
+                        f"virsh --connect qemu:///system start {safe_name}",
+                        timeout=120,
+                    )
+                except Exception:  # NOSONAR — restart failure must not mask result
+                    logger.warning("could not restart domain %s after convert", safe_name)
+            ssh.close()
+
+        pull_ssh = _ssh_connect(hv)
+        try:
+            sha256 = self._sftp_pull(
+                pull_ssh,
+                remote_path=remote_tmp,
+                dest_path=dest_path,
+                expected_size=remote_size,
+                host=hv.host,
+                progress_cb=progress_cb,
+            )
+            try:
+                self._exec(pull_ssh, f"rm -f {shlex.quote(remote_tmp)}", timeout=30)
+            except Exception:  # NOSONAR — leftover /tmp file is harmless
+                logger.debug("could not remove host temp %s", remote_tmp, exc_info=True)
+        finally:
+            pull_ssh.close()
+
+        out_fmt = SourceFormat.QCOW2 if target_format == "qcow2" else SourceFormat.RAW
+        return PullResult(
+            staged_path=dest_path,
+            source_format=out_fmt,
+            size_bytes=dest_path.stat().st_size,
+            sha256=sha256,
+        )
+
+    @staticmethod
+    def _exec(ssh, cmd: str, *, timeout: int = 60, expect_rc0: bool = False) -> str:
+        _in, out, err = ssh.exec_command(cmd, timeout=timeout)
+        stdout = out.read().decode("utf-8", "replace").strip()
+        stderr = err.read().decode("utf-8", "replace").strip()
+        rc = out.channel.recv_exit_status()
+        if expect_rc0 and rc != 0:
+            raise ConversionError(
+                "ERR_OUTPUT_INVALID",
+                f"command failed (rc={rc}): {cmd!r} :: {stderr or stdout or 'no output'}",
+            )
+        return stdout
+
+    @classmethod
+    def _stop_domain_if_running(cls, ssh, safe_name: str) -> bool:
+        """Shut the domain down if running; returns True if we stopped it.
+
+        Tries a graceful ``virsh shutdown`` first (needs guest ACPI), then falls
+        back to ``virsh destroy`` (immediate power-off, analog of ``qm stop``) —
+        a journaled guest filesystem recovers cleanly on next boot.
+        """
+        import time
+
+        virsh = "virsh --connect qemu:///system"
+        state = cls._exec(ssh, f"{virsh} domstate {safe_name}", timeout=30)
+        if "running" not in state:
+            return False
+        cls._exec(ssh, f"{virsh} shutdown {safe_name}", timeout=30)
+        for _ in range(15):
+            time.sleep(2)
+            if "shut off" in cls._exec(ssh, f"{virsh} domstate {safe_name}", timeout=30):
+                return True
+        # Graceful shutdown did not complete — force off.
+        cls._exec(ssh, f"{virsh} destroy {safe_name}", timeout=60)
+        return True
+
+    @staticmethod
+    def _sftp_pull(
+        ssh,
+        *,
+        remote_path: str,
+        dest_path: Path,
+        expected_size: int,
+        host: Optional[str],
+        progress_cb: Optional[ProgressCallback],
+    ) -> str:
+        """Stream ``remote_path`` over an open SSH session into ``dest_path``."""
+        import hashlib
+
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        partial = dest_path.with_suffix(dest_path.suffix + ".partial")
+        h = hashlib.sha256()
+        sftp = ssh.open_sftp()
+        try:
+            with sftp.open(remote_path, "rb") as fin, open(partial, "wb") as fout:
+                fin.prefetch()
+                bytes_done = 0
+                chunk = 1024 * 1024
+                while True:
+                    buf = fin.read(chunk)
+                    if not buf:
+                        break
+                    fout.write(buf)
+                    h.update(buf)
+                    bytes_done += len(buf)
+                    if progress_cb is not None:
+                        try:
+                            progress_cb(bytes_done, expected_size or bytes_done)
+                        except Exception:  # NOSONAR
+                            logger.debug("progress_cb raised", exc_info=True)
+            partial.replace(dest_path)
+        except Exception as e:  # NOSONAR
+            if partial.exists():
+                partial.unlink(missing_ok=True)
+            raise ConversionError(
+                "ERR_NETWORK_TIMEOUT",
+                f"SFTP pull from {host}:{remote_path} failed: {e}",
+                cause=e,
+            ) from e
+        finally:
+            sftp.close()
+        return h.hexdigest()
 
     @staticmethod
     def _remote_size(ssh, path: str) -> int:
@@ -216,3 +354,7 @@ class KvmPuller:
             return int(out)
         except ValueError:
             return 0
+
+
+# Structural conformance check (Protocol) — kept explicit for readers.
+_: DiskPuller = KvmPuller()

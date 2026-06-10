@@ -11,9 +11,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
+from app.core.config import settings
 from app.services.converter.errors import ConversionError
 from app.services.converter.protocol import ProgressCallback
 
@@ -75,6 +77,85 @@ def stream_copy(
             f"copy failed: {e}",
             cause=e,
         ) from e
+
+
+def sha256_file(path: Path, progress_cb: Optional[ProgressCallback] = None) -> str:
+    """Return hex SHA-256 of ``path``, streaming in 1 MiB chunks with progress.
+
+    Shared by connectors that convert on/near the source and then need to
+    fingerprint the local result before uploading it to the transit NFS.
+    """
+    h = hashlib.sha256()
+    total = 0
+    try:
+        total = path.stat().st_size
+    except OSError:
+        total = 0
+    done = 0
+    with open(path, "rb") as fin:
+        while True:
+            buf = fin.read(_HASH_CHUNK)
+            if not buf:
+                break
+            h.update(buf)
+            done += len(buf)
+            if progress_cb is not None:
+                try:
+                    progress_cb(done, total or done)
+                except Exception:  # NOSONAR — a callback must never abort hashing
+                    logger.debug("progress_cb raised", exc_info=True)
+    return h.hexdigest()
+
+
+def local_qemu_img_convert(
+    src: Path,
+    dest: Path,
+    target_format: str,
+    *,
+    timeout: int = 6 * 3600,
+) -> None:
+    """Convert+compress ``src`` into ``dest`` with the worker-local ``qemu-img``.
+
+    Used by every connector whose ``convert_on_source`` lands the disk on the
+    worker first (oVirt ImageTransfer download, Hyper-V SMB pull, vSphere
+    datastore download). ``-c`` sparse-compresses the output so only the small
+    qcow2 crosses the slow uplink afterwards. The caller owns ``dest`` placement
+    (``.partial`` / atomic rename). Raises ``ConversionError`` mapped to the
+    standard buckets — symmetric with
+    :meth:`VmwareWorkstationPuller._run_qemu_img_convert`.
+    """
+    qemu_img = settings.CONVERTER_LOCAL_QEMU_IMG
+    cmd = [
+        qemu_img, "convert", "-p", "-O", target_format, "-c",
+        str(src), str(dest),
+    ]
+    logger.info("qemu-img convert: %s -> %s (%s)", src, dest, target_format)
+    try:
+        result = subprocess.run(  # NOSONAR — local trusted tool, fixed argv
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise ConversionError(
+            "ERR_TOOL_NOT_FOUND",
+            f"qemu-img not found at {qemu_img!r}; set CONVERTER_LOCAL_QEMU_IMG",
+            cause=e,
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise ConversionError(
+            "ERR_NETWORK_TIMEOUT",
+            f"qemu-img convert timed out for {src}",
+            cause=e,
+        ) from e
+    if result.returncode != 0:
+        raise ConversionError(
+            "ERR_OUTPUT_INVALID",
+            f"qemu-img convert failed (rc={result.returncode}): "
+            f"{(result.stderr or result.stdout or 'no output').strip()}",
+        )
 
 
 def free_space_bytes(path: Path) -> int:

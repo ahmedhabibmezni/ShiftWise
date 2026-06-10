@@ -48,6 +48,12 @@ proxmoxer==2.0.1
 requests==2.32.3
 # oVirt / RHV engine SDK
 ovirt-engine-sdk-python==4.6.3
+# Hyper-V remote (Linux in-cluster worker): WinRM for PowerShell control +
+# SMB for pulling the VHD(X) from the host admin share. Only the remote
+# (auth_mode != "local") Hyper-V converter path imports these; the local
+# Windows-worker path uses powershell.exe + a filesystem copy instead.
+pypsrp==0.8.1
+smbprotocol==1.12.0
 
 # Kubernetes & OpenShift (for future implementation)
 kubernetes==28.1.0

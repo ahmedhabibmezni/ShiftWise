@@ -13,6 +13,7 @@ purpose — Celery handles concurrency.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from datetime import datetime, timezone
@@ -43,6 +44,15 @@ from app.services.converter.plan import plan_conversion
 from app.services.converter.protocol import DiskDescriptor, ProgressCallback
 
 logger = logging.getLogger(__name__)
+
+
+def _sha256_file(path: Path, chunk: int = 1024 * 1024) -> str:
+    """Return the hex SHA-256 of ``path`` (streamed, 1 MiB chunks)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 _TARGET_EXTENSION = {
@@ -198,8 +208,6 @@ class ConverterService:
         for the in-cluster Adapter/Migrator, which read the uploaded qcow2 from
         the transit PVC at ``{tenant}/outputs/{group_uuid}/{disk}.qcow2``.
         """
-        from app.models.hypervisor import HypervisorType
-        from app.services.converter.connectors.proxmox import ProxmoxPuller
         from app.services.converter.remote_transit import RemoteTransit
 
         crud_conversion.set_job_status(db, job.id, ConversionStatus.STAGING, progress_pct=0)
@@ -208,11 +216,6 @@ class ConverterService:
         vm = crud_vm.get_vm(db, job.vm_id)
         if vm is None or vm.source_hypervisor is None:
             raise ConversionError("ERR_VM_NOT_FOUND", f"VM {job.vm_id} or its hypervisor is gone")
-        if vm.source_hypervisor.type != HypervisorType.PROXMOX:
-            raise ConversionError(
-                "ERR_INTERNAL",
-                "CONVERTER_SOURCE_CONVERT_SFTP currently supports Proxmox sources only",
-            )
         group = crud_conversion.get_group(db, job.group_id)
         if group is None:
             raise ConversionError("ERR_INTERNAL", "group disappeared mid-flight")
@@ -233,13 +236,26 @@ class ConverterService:
             pct = int(min(49, (done / max(total, 1)) * 50))  # pull = 0..50%
             crud_conversion.set_job_status(db, job.id, ConversionStatus.STAGING, progress_pct=pct)
 
-        result = ProxmoxPuller().convert_on_source(
-            vm.source_hypervisor, vm, descriptor, local_qcow2,
-            target_format="qcow2", cold=cold, progress_cb=stage_cb,
-        )
+        # Reuse an already-converted, hash-verified staged qcow2 from a prior
+        # attempt instead of re-running the (slow) convert. This is what makes a
+        # resumed upload safe: the NFS ``.partial`` was produced from these exact
+        # bytes, so a byte-identical local file lets the upload append correctly.
+        # A missing or mismatched file falls through to a fresh convert.
+        staged_sha: Optional[str] = None
+        if job.sha256 and local_qcow2.is_file():
+            if _sha256_file(local_qcow2) == job.sha256:
+                logger.info(
+                    "reusing verified staged qcow2 %s (skip re-convert)", local_qcow2,
+                )
+                staged_sha = job.sha256
+        if staged_sha is None:
+            result = self._convert_on_source_local(
+                vm, descriptor, local_qcow2, cold=cold, progress_cb=stage_cb,
+            )
+            staged_sha = result.sha256
         crud_conversion.update_job(
             db, job.id,
-            {"staged_path": str(local_qcow2), "sha256": result.sha256},
+            {"staged_path": str(local_qcow2), "sha256": staged_sha},
         )
 
         # Upload the small qcow2 to the cluster NFS (over the bastion jump).
@@ -274,6 +290,37 @@ class ConverterService:
             local_qcow2.unlink()
         except OSError:
             logger.debug("could not remove local scratch %s", local_qcow2, exc_info=True)
+
+    @staticmethod
+    def _convert_on_source_local(
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        cold: bool,
+        progress_cb: ProgressCallback,
+    ):
+        """Produce a local qcow2 from the source, dispatched by hypervisor type.
+
+        Each connector converts+compresses where the data lives and lands a
+        single small qcow2 in the worker scratch; the shared upload step in
+        :meth:`_source_convert_sftp` then ships it to the cluster NFS. Dispatch
+        goes through the connector registry — Proxmox/KVM convert on the source
+        node over SSH; VMware Workstation, Hyper-V, oVirt and vSphere pull the
+        disk to the worker and convert locally.
+        """
+        hv = vm.source_hypervisor
+        puller = get_puller(hv.type)
+        convert = getattr(puller, "convert_on_source", None)
+        if convert is None:
+            raise ConversionError(
+                "ERR_UNSUPPORTED_HYPERVISOR",
+                f"connector for {hv.type.value} does not implement convert_on_source",
+            )
+        return convert(
+            hv, vm, descriptor, dest_path,
+            target_format="qcow2", cold=cold, progress_cb=progress_cb,
+        )
 
     # --- Pipeline stages ----------------------------------------------------
 

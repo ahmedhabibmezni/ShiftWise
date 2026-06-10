@@ -42,6 +42,17 @@ logger = logging.getLogger(__name__)
 
 _CONNECT_RETRIES = 6
 _CONNECT_BACKOFF_SECONDS = 2
+# SSH transport keepalive — probes the peer so a dropped VPN surfaces quickly.
+_KEEPALIVE_SECONDS = 15
+# Hard ceiling on a single blocking SFTP write/read; a stalled chunk raises
+# socket.timeout instead of hanging the upload thread indefinitely.
+_SFTP_CHANNEL_TIMEOUT_SECONDS = 180
+# How many times the upload reconnects and resumes from the partial before
+# giving up. Sized for a flaky VPN where a multi-hour transfer drops many times;
+# the real ceiling is the migration's conversion-wait watchdog, not this count.
+# Even if exhausted, the raised ERR_NETWORK_TIMEOUT is retryable, so the Celery
+# job re-runs and resumes from the same persisted partial.
+_UPLOAD_RESUME_ATTEMPTS = 500
 
 
 def _ssh_client():
@@ -165,6 +176,14 @@ class RemoteTransit:
             timeout=20, banner_timeout=30, auth_timeout=30,
             allow_agent=False, look_for_keys=False,
         )
+        # Keepalive on both hops so a silently-dropped VPN is detected within
+        # seconds and an in-flight transfer fails fast (instead of a half-open
+        # TCP wedging the upload thread forever — observed on the laptop VPN).
+        for cli in (self._bastion, self._client):
+            if cli is not None:
+                tr = cli.get_transport()
+                if tr is not None:
+                    tr.set_keepalive(_KEEPALIVE_SECONDS)
         self._sftp = self._client.open_sftp()
 
     def close(self) -> None:
@@ -221,26 +240,31 @@ class RemoteTransit:
             return 0
         return int(out)
 
-    def put_file(
+    def _stream_from_offset(
         self,
         local_src: Path,
-        rel_dst: str,
-        *,
-        progress_cb: Optional[ProgressCallback] = None,
+        partial_abs: str,
+        offset: int,
+        total: int,
+        progress_cb: Optional[ProgressCallback],
     ) -> int:
-        """Upload ``local_src`` to ``{export}/{rel_dst}``. Returns bytes sent.
+        """Append ``local_src[offset:]`` to the remote partial. Returns total bytes.
 
-        Atomic publish: write to ``<dst>.partial`` then rename. The SFTP write
-        is pipelined for throughput over the high-latency link.
+        Opens the remote partial in append mode when resuming (``offset > 0``),
+        else truncating write mode. Raises on any transport error so the caller
+        can reconnect and resume. The SFTP channel carries a hard timeout so a
+        silently-dropped VPN surfaces as ``socket.timeout`` rather than a hang.
         """
-        total = local_src.stat().st_size
-        dst = self._abs(rel_dst)
-        partial = dst + ".partial"
-        self.ensure_dir(posixpath.dirname(rel_dst))
-        sent = 0
         chunk = 1024 * 1024
-        with self._sftp.open(partial, "wb") as fout, open(local_src, "rb") as fin:
+        chan = self._sftp.get_channel()
+        if chan is not None:
+            chan.settimeout(_SFTP_CHANNEL_TIMEOUT_SECONDS)
+        mode = "ab" if offset > 0 else "wb"
+        sent = offset
+        with self._sftp.open(partial_abs, mode) as fout, open(local_src, "rb") as fin:
             fout.set_pipelined(True)
+            if offset:
+                fin.seek(offset)
             while True:
                 buf = fin.read(chunk)
                 if not buf:
@@ -252,6 +276,79 @@ class RemoteTransit:
                         progress_cb(sent, total or sent)
                     except Exception:  # NOSONAR — progress must never abort upload
                         logger.debug("progress_cb raised", exc_info=True)
+        return sent
+
+    def put_file(
+        self,
+        local_src: Path,
+        rel_dst: str,
+        *,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> int:
+        """Upload ``local_src`` to ``{export}/{rel_dst}``. Returns bytes sent.
+
+        Atomic publish: write to ``<dst>.partial`` then rename. The transfer is
+        resumable — on a transport drop it reconnects and continues from the
+        bytes already persisted, so a flaky VPN does not force a restart.
+        """
+        total = local_src.stat().st_size
+        dst = self._abs(rel_dst)
+        partial = dst + ".partial"
+        self.ensure_dir(posixpath.dirname(rel_dst))
+
+        # Resumable transfer: on a high-latency / flaky VPN a single 2 GB+ upload
+        # almost never survives end-to-end. Instead of failing the whole job on a
+        # drop (which would restart from zero), we reconnect and CONTINUE from the
+        # bytes already persisted in ``<dst>.partial``. Each blip costs a reconnect,
+        # not the whole transfer. ``local_src`` is byte-stable across attempts
+        # (a finished qcow2), so appending is safe.
+        last_err: Optional[Exception] = None
+        rel_partial = rel_dst + ".partial"
+        for attempt in range(1, _UPLOAD_RESUME_ATTEMPTS + 1):
+            # The whole attempt — the partial-size probe AND the stream — is
+            # inside the guard: probing size runs ``exec_command`` over the SSH
+            # session, which itself raises ``SSH session not active`` if the VPN
+            # died between attempts. Keeping it outside would let that escape and
+            # fail the job instead of triggering a reconnect+resume.
+            try:
+                offset = self.size(rel_partial)
+                if offset > total:  # corrupt/oversized partial — restart clean
+                    self.remove(rel_partial)
+                    offset = 0
+                sent = self._stream_from_offset(
+                    local_src, partial, offset, total, progress_cb,
+                )
+                if sent >= total:
+                    break
+                last_err = ConversionError(
+                    "ERR_NETWORK_TIMEOUT",
+                    f"upload ended short ({sent}/{total}) on attempt {attempt}",
+                )
+            except Exception as e:  # NOSONAR — any transport error → reconnect+resume
+                last_err = e
+                logger.warning(
+                    "upload attempt %d/%d interrupted: %s — reconnecting to resume",
+                    attempt, _UPLOAD_RESUME_ATTEMPTS, e,
+                )
+            # Rebuild the SSH/SFTP session before the next resume. connect()
+            # already retries internally; if it still fails, back off and let the
+            # next loop iteration try again (until attempts are exhausted).
+            try:
+                self.close()
+                self.connect()
+            except Exception:  # NOSONAR — transient; next iteration retries
+                logger.warning(
+                    "reconnect after attempt %d failed; backing off", attempt,
+                )
+                time.sleep(_CONNECT_BACKOFF_SECONDS)
+        else:
+            raise ConversionError(
+                "ERR_NETWORK_TIMEOUT",
+                f"upload of {dst} did not complete after "
+                f"{_UPLOAD_RESUME_ATTEMPTS} resume attempts: {last_err}",
+                cause=last_err,
+            )
+
         rc, _o, e = self._run(f"mv -f {_shq(partial)} {_shq(dst)}")
         if rc != 0:
             raise ConversionError(
