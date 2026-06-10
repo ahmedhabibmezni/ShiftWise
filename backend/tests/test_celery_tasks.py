@@ -186,3 +186,54 @@ class TestConversionTaskEager:
         assert refreshed.status == ConversionStatus.READY
         assert refreshed.celery_task_id is not None
         assert Path(refreshed.output_path).exists()
+
+
+class TestFailGuard:
+    """Audit E4 hardening — _fail must not overwrite a successful terminal row."""
+
+    def _make_migration(self, db, seeded, status):
+        from app.models.migration import Migration, MigrationStatus, MigrationStrategy
+
+        m = Migration(
+            tenant_id=seeded["tenant_id"],
+            vm_id=seeded["vm"].id,
+            status=status,
+            strategy=MigrationStrategy.AUTO,
+            target_namespace="shiftwise-tnt1",
+            success=(status == MigrationStatus.COMPLETED),
+        )
+        db.add(m)
+        db.commit()
+        return m
+
+    def test_fail_refuses_to_overwrite_completed(self, db_session, seeded):
+        from app.models.migration import MigrationStatus
+        from app.tasks import migration as task_mod
+
+        m = self._make_migration(db_session, seeded, MigrationStatus.COMPLETED)
+        task_mod._fail(db_session, m.id, "ERR_INTERNAL", "stop")
+        db_session.refresh(m)
+        assert m.status == MigrationStatus.COMPLETED
+        assert m.success is True
+        assert m.error_message is None
+
+    def test_fail_refuses_to_overwrite_cancelled(self, db_session, seeded):
+        from app.models.migration import MigrationStatus
+        from app.tasks import migration as task_mod
+
+        m = self._make_migration(db_session, seeded, MigrationStatus.CANCELLED)
+        task_mod._fail(db_session, m.id, "ERR_INTERNAL", "stop")
+        db_session.refresh(m)
+        assert m.status == MigrationStatus.CANCELLED
+
+    def test_fail_marks_non_terminal_migration_failed(self, db_session, seeded):
+        from app.models.migration import MigrationStatus
+        from app.tasks import migration as task_mod
+
+        m = self._make_migration(db_session, seeded, MigrationStatus.VALIDATING)
+        task_mod._fail(db_session, m.id, "ERR_INTERNAL", "boom")
+        db_session.refresh(m)
+        assert m.status == MigrationStatus.FAILED
+        assert m.success is False
+        assert m.error_code == "ERR_INTERNAL"
+        assert m.error_message == "boom"

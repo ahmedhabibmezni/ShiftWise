@@ -25,7 +25,7 @@ from app.crud import conversion as crud_conversion
 from app.crud import migration as crud_migration
 from app.crud import vm as crud_vm
 from app.models.conversion import ConversionGroupStatus, ConversionStatus
-from app.models.migration import MigrationStatus
+from app.models.migration import Migration, MigrationStatus
 from app.services.adapter.errors import AdapterError
 from app.services.adapter.service import AdapterService
 from app.services.audit_log import AuditEmitter
@@ -51,6 +51,17 @@ _FAILED_GROUP_STATES = {
 _TERMINAL_MIGRATION_STATES = {
     MigrationStatus.COMPLETED,
     MigrationStatus.FAILED,
+    MigrationStatus.CANCELLED,
+    MigrationStatus.ROLLED_BACK,
+}
+
+# Audit E4 (hardening) — terminal states a failure write must NEVER overwrite.
+# A re-delivered / duplicate orchestrator task that crashes must not flip a
+# migration that already SUCCEEDED (or was deliberately cancelled / rolled
+# back) to FAILED. FAILED is intentionally excluded: re-stamping a failure is
+# harmless and may refresh the error message.
+_PROTECTED_TERMINAL_STATES = {
+    MigrationStatus.COMPLETED,
     MigrationStatus.CANCELLED,
     MigrationStatus.ROLLED_BACK,
 }
@@ -321,6 +332,28 @@ def _set_status(db, migration_id: int, status: MigrationStatus) -> None:
 
 
 def _fail(db, migration_id: int, code: str, message: str) -> None:
+    # Audit E4 (hardening) — re-read the row under a pessimistic lock right
+    # before stamping the failure. A re-delivered or duplicate orchestrator
+    # task (broker at-least-once delivery, a worker restart redelivering an
+    # un-acked task) can crash on an already-finished migration; without this
+    # guard its catch-all would overwrite a COMPLETED migration with FAILED.
+    # The top-of-task terminal guard catches the common case, but this closes
+    # the window where the row finished after the task started (or where the
+    # worker is running stale code without that guard).
+    locked = (
+        db.query(Migration)
+        .filter(Migration.id == migration_id)
+        .with_for_update()
+        .first()
+    )
+    if locked is not None and locked.status in _PROTECTED_TERMINAL_STATES:
+        logger.warning(
+            "Refusing to fail migration %s — already terminal (%s); "
+            "ignoring spurious failure %s: %s",
+            migration_id, locked.status.value, code, message,
+        )
+        db.commit()  # release the row lock
+        return
     crud_migration.fail_migration(db, migration_id, error_code=code, error_message=message)
     crud_migration.set_migration_status(db, migration_id, MigrationStatus.FAILED)
     db.commit()
