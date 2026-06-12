@@ -29,9 +29,22 @@ def apply_host_key_policy(client) -> None:
     client.load_system_host_keys()
 
     if settings.SSH_AUTO_ADD_HOST_KEYS:
+        # SV-010 — le « trust on first use » (AutoAddPolicy) accepte n'importe
+        # quelle clé d'hôte au premier contact : un MITM capture alors le mot
+        # de passe SSH en clair (hyperviseur / bastion). C'est tolérable en
+        # dev / POC, jamais en production. On refuse FRANCHEMENT le drapeau
+        # hors DEBUG plutôt que de le laisser silencieusement affaiblir la
+        # sécurité d'un déploiement de prod.
+        if not settings.DEBUG:
+            raise RuntimeError(
+                "SSH_AUTO_ADD_HOST_KEYS=True est interdit en production "
+                "(DEBUG=False) : il désactive la vérification des clés d'hôte "
+                "SSH (MITM). Pré-provisionner un known_hosts et laisser le "
+                "drapeau à False."
+            )
         logger.warning(
             "SSH_AUTO_ADD_HOST_KEYS actif — les clés d'hôte SSH ne sont PAS "
-            "vérifiées (risque d'interception). À désactiver en production."
+            "vérifiées (risque d'interception). Dev/POC uniquement."
         )
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     else:

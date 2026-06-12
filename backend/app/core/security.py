@@ -9,14 +9,17 @@ Ce module gère :
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-# Context pour le hashing des mots de passe avec bcrypt
-# bcrypt est recommandé pour les mots de passe (lent = plus sécurisé contre brute force)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# SV-022 — hashing bcrypt via la bibliothèque ``bcrypt`` directement, sans
+# passlib. passlib 1.7.4 est abandonné et incompatible avec bcrypt >= 4.1
+# (il lit le shim retiré ``bcrypt.__about__``), ce qui figeait la stack sur
+# bcrypt 4.0.1 et empêchait de prendre les futurs correctifs de sécurité. Le
+# format de hash reste ``$2b$`` : les hashes existants restent valides
+# (``bcrypt.checkpw`` les vérifie), seules les internes changent.
 
 # Bcrypt has a maximum password length of 72 bytes
 MAX_PASSWORD_LENGTH = 72
@@ -65,7 +68,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     # Audit A16 — un mot de passe trop long ne peut pas correspondre : il
     # n'aurait jamais pu être haché. On rejette au lieu de tronquer.
     _reject_over_length(plain_password)
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8"),
+        )
+    except (ValueError, TypeError):
+        # Hash malformé / non-bcrypt en base — traité comme non-correspondance
+        # plutôt que de propager une exception au point d'authentification.
+        return False
 
 
 def get_password_hash(password: str) -> str:
@@ -91,7 +102,7 @@ def get_password_hash(password: str) -> str:
     # Audit A16 — refuser un mot de passe au-delà de la limite bcrypt
     # plutôt que de le tronquer silencieusement.
     _reject_over_length(password)
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(
@@ -201,7 +212,15 @@ def decode_token(token: str) -> Optional[dict]:
         payload = jwt.decode(
             token,
             settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
+            algorithms=[settings.ALGORITHM],
+            # SV-003 — `settings.ALGORITHM` is allowlisted to HS256/384/512 by
+            # the config validator, so `none` / asymmetric confusion can never
+            # reach here.
+            # SV-004 — require the structural claims explicitly: a token minted
+            # without `exp` would otherwise be accepted forever (PyJWT only
+            # validates `exp` when it is present). Fail-closed on any token
+            # missing expiry / subject / type.
+            options={"require": ["exp", "sub", "type"]},
         )
         return payload
     except jwt.PyJWTError:
@@ -222,9 +241,21 @@ def verify_token_type(payload: dict, token_type: str) -> bool:
     return payload.get("type") == token_type
 
 
+# SV-019 — jeu de caractères spéciaux unique, partagé par TOUS les points
+# d'entrée (création de compte, reset admin, self-service change-password) afin
+# qu'un seul et même plancher de robustesse s'applique au même secret.
+PASSWORD_SPECIAL_CHARS = r'[!@#$%^&*(),.?":{}|<>]'
+
+
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """
-    Valide la force d'un mot de passe.
+    Valide la force d'un mot de passe (validateur unique — SV-019).
+
+    Exigences : >= 8 caractères, au plus 72 octets (limite bcrypt), au moins
+    une minuscule, une majuscule, un chiffre ET un caractère spécial. C'est
+    la seule source de vérité de la politique : `schemas/user.py` (création /
+    update) et `/auth/change-password` délèguent tous ici pour éviter trois
+    politiques divergentes pour le même secret.
 
     Args:
         password: Mot de passe à valider
@@ -236,6 +267,8 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
         >>> validate_password_strength("abc")
         (False, "Le mot de passe doit contenir au moins 8 caractères")
     """
+    import re
+
     if len(password) < 8:
         return False, "Le mot de passe doit contenir au moins 8 caractères"
 
@@ -249,5 +282,8 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
 
     if not (has_lower and has_upper and has_digit):
         return False, "Le mot de passe doit contenir au moins une minuscule, une majuscule et un chiffre"
+
+    if not re.search(PASSWORD_SPECIAL_CHARS, password):
+        return False, "Le mot de passe doit contenir au moins un caractère spécial"
 
     return True, ""

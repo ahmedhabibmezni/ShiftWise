@@ -8,7 +8,13 @@
 # FastAPI Framework
 # Audit A14 — FastAPI >= 0.115 pulls Starlette >= 0.40, closing the
 # multipart DoS CVE-2024-47874 in older Starlette releases.
-fastapi==0.115.6
+# SV-012 — FastAPI 0.115.6 resolved Starlette ~0.41.x, still vulnerable to
+# CVE-2025-54121 (MultiPartParser blocking/temp-file DoS, fixed in Starlette
+# 0.47.2). Bumped to the version the test suite is actually validated against;
+# it pulls a Starlette well past the fix. A Starlette floor is pinned so the
+# fix can never regress on a transitive re-resolve.
+fastapi==0.136.3
+starlette>=0.47.2
 # Audit G30 — uvicorn bumped 0.27.0 -> 0.47.0 (ASGI server only; no app
 # API surface change). paramiko (3.4 -> 5.x) and the kubernetes client
 # (28 -> 35) are intentionally NOT bumped here: both are major-version
@@ -27,10 +33,16 @@ alembic==1.13.1
 
 # Authentication & Security
 PyJWT==2.10.1
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
+# SV-022 — passlib 1.7.4 is abandoned and pinned bcrypt to 4.0.1 (it reads the
+# removed bcrypt.__about__ shim, breaking on bcrypt >= 4.1). We hash via the
+# `bcrypt` library directly now (app/core/security.py), so passlib is dropped
+# and bcrypt floats to a maintained release that can take future fixes.
+bcrypt>=4.2.0,<5.0.0
 python-dotenv==1.0.0
-pydantic[email]==2.5.3
+# SV-012 — pydantic bumped 2.5.3 -> 2.13.4 to match the version the suite is
+# validated against; FastAPI 0.136.3 (Starlette CVE-2025-54121 fix) requires
+# pydantic >= 2.9, and the old 2.5.3 pin never matched the working env anyway.
+pydantic[email]==2.13.4
 pydantic-settings==2.1.0
 # Audit G24 — cryptography is pinned explicitly (it is a transitive
 # dependency of paramiko); an unpinned transitive makes the build
@@ -45,7 +57,17 @@ pyvmomi==8.0.1.0.2
 libvirt-python==11.3.0; platform_system == "Linux"
 # Proxmox VE REST API client (password + API token auth)
 proxmoxer==2.0.1
-requests==2.32.3
+# SV-012 — requests 2.32.3 is vulnerable to CVE-2024-47081 (.netrc credential
+# leak to the wrong host), fixed in 2.32.4.
+requests==2.32.4
+# SV-012 — pin urllib3 explicitly to clear CVE-2025-50181 / CVE-2025-50182
+# (redirect/PoolManager handling, fixed in 1.26.20 and 2.5.0) and
+# CVE-2024-37891 (proxy-auth header leak on redirect, fixed in 1.26.19 /
+# 2.2.2). We stay on the 1.26.x line (>= 1.26.20) rather than jumping to 2.x:
+# kubernetes==28.1.0 is the pinned client here and the 2.x major has not been
+# validated against it (the kubernetes 28 -> 35 bump is a separately tracked
+# task). 1.26.20 clears all three CVEs without that risk.
+urllib3>=1.26.20,<2.0.0
 # oVirt / RHV engine SDK
 ovirt-engine-sdk-python==4.6.3
 # Hyper-V remote (Linux in-cluster worker): WinRM for PowerShell control +

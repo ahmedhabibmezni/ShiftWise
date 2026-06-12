@@ -75,7 +75,7 @@ def _prompt_password() -> str:
             return pwd_input
 
         print(f"   ❌ {error_message}")
-        print("   💡 Exigences : au moins 8 caractères, 1 majuscule, 1 minuscule, 1 chiffre")
+        print("   💡 Exigences : au moins 8 caractères, 1 majuscule, 1 minuscule, 1 chiffre, 1 caractère spécial")
 
 
 def _build_superuser(email: str, username: str, first_name: str, last_name: str,

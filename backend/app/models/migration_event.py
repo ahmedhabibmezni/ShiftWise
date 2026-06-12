@@ -134,6 +134,16 @@ class MigrationEvent(BaseModel):
     # Charge utile JSON pour les métadonnées structurées (error_code, etc.).
     payload = Column(JSON, nullable=True)
 
+    # SV-021 — chaînage cryptographique de détection de falsification.
+    # ``row_hash = sha256(prev_row_hash || canonical_payload)`` par
+    # ``migration_id``. Toute suppression ou édition d'une ligne (y compris
+    # par un superuser DB contournant le trigger append-only, cf. SV-001)
+    # casse le chaînage de la ligne suivante et devient détectable à la
+    # vérification (``crud.migration_event.verify_event_chain``). Nullable :
+    # les lignes antérieures à l'introduction du chaînage portent NULL et
+    # sont traitées comme « legacy non chaînées » par le vérificateur.
+    row_hash = Column(String(64), nullable=True)
+
     __table_args__ = (
         # Q2 — uniqueness (migration_id, sequence_id). Allocation atomique
         # via le verrou FOR UPDATE de crud_migration_event.

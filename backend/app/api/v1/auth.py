@@ -22,10 +22,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.login_throttle import (
+    check_ip_lockout,
     check_lockout,
     client_ip_from_request,
     record_failure,
+    record_ip_failure,
     reset as reset_throttle,
+    reset_ip,
 )
 from app.core import refresh_token_store
 from app.core.refresh_token_store import (
@@ -241,6 +244,7 @@ def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_token_endpoint(
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     refresh_cookie: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
@@ -249,6 +253,46 @@ def refresh_token_endpoint(
     Renouvelle l'access token via le cookie refresh HttpOnly.
 
     Valide la famille/jti contre Redis, détecte le reuse, rotate.
+
+    SV-013 — per-IP throttle: family rotation + reuse-detection bound the
+    damage of a stolen token, but without a rate limit a source could hammer
+    refresh-token-shaped requests freely. Each rejected attempt feeds the
+    per-IP bucket; a legitimate rotation clears it.
+    """
+    ip = _client_ip(request)
+    lockout = check_ip_lockout(ip)
+    if lockout is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Trop de tentatives. Réessayez dans "
+                f"{lockout.retry_after_seconds} secondes."
+            ),
+            headers={"Retry-After": str(lockout.retry_after_seconds)},
+        )
+
+    try:
+        token_response = _do_refresh(response, db, refresh_cookie)
+    except HTTPException as exc:
+        if exc.status_code in (
+            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
+        ):
+            record_ip_failure(ip)
+        raise
+    reset_ip(ip)
+    return token_response
+
+
+def _do_refresh(
+    response: Response,
+    db: Session,
+    refresh_cookie: str | None,
+) -> TokenResponse:
+    """Core refresh logic — validation, reuse detection, rotation.
+
+    Extracted from the endpoint so the per-IP throttle (SV-013) can wrap
+    every rejection path uniformly.
     """
     if not refresh_cookie:
         raise HTTPException(
@@ -344,16 +388,39 @@ def get_current_user_info(
 
 @router.post("/change-password", response_model=MessageResponse)
 def change_password(
+    request: Request,
     password_data: ChangePasswordRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """Change le mot de passe de l'utilisateur connecté."""
+    """Change le mot de passe de l'utilisateur connecté.
+
+    SV-013 — the ``current_password`` re-check is a credential-verification
+    step-up; without a throttle an attacker holding a live access token could
+    brute-force it (bounded only by bcrypt). Failures feed a per-user bucket
+    (namespaced ``chpw:{id}`` so it stays isolated from the login buckets);
+    a correct verification clears it.
+    """
+    ip = _client_ip(request)
+    throttle_key = f"chpw:{current_user.id}"
+    lockout = check_lockout(throttle_key, ip)
+    if lockout is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Trop de tentatives. Réessayez dans "
+                f"{lockout.retry_after_seconds} secondes."
+            ),
+            headers={"Retry-After": str(lockout.retry_after_seconds)},
+        )
+
     if not verify_password(password_data.current_password, current_user.hashed_password):
+        record_failure(throttle_key, ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Mot de passe actuel incorrect",
         )
+    reset_throttle(throttle_key, ip)
     if password_data.current_password == password_data.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

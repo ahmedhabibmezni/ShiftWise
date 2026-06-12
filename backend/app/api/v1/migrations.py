@@ -58,14 +58,18 @@ def require_internal_token(
 
     ``PUT /migrations/{id}/progress`` is driven exclusively by the Celery
     worker — it must not be reachable by a regular RBAC-authenticated API
-    user (Audit B4 / H-10). The worker and the API process share
-    ``settings.SECRET_KEY``; the worker presents it in the
-    ``X-Internal-Token`` header. Comparison is constant-time.
+    user (Audit B4 / H-10). The worker presents a dedicated
+    ``INTERNAL_API_TOKEN`` (SV-011) in the ``X-Internal-Token`` header; it is
+    NOT the JWT signing key, so a leak of this transport credential cannot be
+    escalated into token forgery. When ``INTERNAL_API_TOKEN`` is unset we fall
+    back to ``SECRET_KEY`` (legacy) to avoid breaking an existing deployment.
+    Comparison is constant-time.
 
     Returns ``True`` on success; raises ``401`` otherwise.
     """
+    expected = settings.INTERNAL_API_TOKEN or settings.SECRET_KEY
     if not x_internal_token or not hmac.compare_digest(
-            x_internal_token, settings.SECRET_KEY,
+            x_internal_token, expected,
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

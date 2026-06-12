@@ -89,8 +89,42 @@ def _assert_kubeconfig_shape(doc: dict) -> None:
     if not isinstance(doc.get("contexts"), list) or not doc["contexts"]:
         raise InvalidKubeconfig("section 'contexts' manquante ou vide")
 
-    if not isinstance(doc.get("users"), list) or not doc["users"]:
+    users = doc.get("users")
+    if not isinstance(users, list) or not users:
         raise InvalidKubeconfig("section 'users' manquante ou vide")
+
+    _assert_no_credential_plugins(users)
+
+
+def _assert_no_credential_plugins(users: list) -> None:
+    """Rejette tout bloc d'identité exécutant un binaire externe (SV-002).
+
+    Le client Kubernetes honore un plugin d'identification ``exec`` (ou un
+    ``auth-provider`` legacy avec ``cmd-path``) **au moment d'acquérir le
+    credential** — c.-à-d. dès le premier appel API du « test connection ».
+    Un kubeconfig uploadé par un tenant admin pourrait ainsi faire exécuter
+    une commande arbitraire dans le process backend/worker (qui détient la
+    clé Fernet du coffre, la connexion DB, la clé de signature JWT et le
+    token de ServiceAccount in-cluster) : RCE authentifiée franchissant la
+    frontière de confiance tenant → plateforme.
+
+    Le loader ne peut pas être configuré pour ignorer ``exec`` : la
+    validation EN AMONT de tout ``load_kube_config*`` est le seul contrôle.
+    """
+    for entry in users:
+        user_block = (entry or {}).get("user", {}) or {}
+        if "exec" in user_block:
+            raise InvalidKubeconfig(
+                "les plugins d'identification 'exec' ne sont pas autorisés "
+                "dans un kubeconfig uploadé"
+            )
+        auth_provider = user_block.get("auth-provider", {}) or {}
+        provider_config = auth_provider.get("config", {}) or {}
+        if "cmd-path" in provider_config:
+            raise InvalidKubeconfig(
+                "les plugins de commande 'auth-provider' (cmd-path) ne sont "
+                "pas autorisés dans un kubeconfig uploadé"
+            )
 
 
 def assert_mode_applicable(scope_type: ClusterScopeType, mode: ClusterMode) -> None:

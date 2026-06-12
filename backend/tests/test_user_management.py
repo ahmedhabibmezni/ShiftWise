@@ -91,9 +91,9 @@ def setup_test_superuser():
     Uses bcrypt to hash the password. This bypasses the API entirely
     so we have a guaranteed login for the rest of the test suite.
     """
-    from passlib.context import CryptContext
-    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    hashed = pwd_ctx.hash(SUPERUSER_PASSWORD)
+    # SV-022 — hash via the app's own bcrypt-based helper (no passlib).
+    from app.core.security import get_password_hash
+    hashed = get_password_hash(SUPERUSER_PASSWORD)
 
     conn = _get_db_conn()
     cur = conn.cursor()

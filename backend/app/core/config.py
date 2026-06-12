@@ -146,9 +146,47 @@ class Settings(BaseSettings):
     SHIFTWISE_FERNET_KEY: str
     SHIFTWISE_FERNET_OLD_KEYS: str = ""
 
+    # SV-020 — version de clé explicite et monotone, persistée à côté de
+    # chaque ciphertext pour la corrélation forensique « quelle clé a chiffré
+    # cette ligne ». Doit être incrémentée par l'opérateur à chaque rotation.
+    # 0 (défaut) => repli legacy : la version est dérivée de
+    # ``1 + len(SHIFTWISE_FERNET_OLD_KEYS)`` (non monotone après purge des
+    # clés expirées — voir vault.py). Mettre >= 1 pour activer le schéma
+    # explicite stable.
+    SHIFTWISE_FERNET_KEY_VERSION: int = 0
+
+    # SV-011 — jeton d'authentification des appels internes worker → API
+    # (`PUT /migrations/{id}/progress`). DOIT être distinct de `SECRET_KEY` :
+    # réutiliser la clé de signature JWT comme credential de transport fait
+    # qu'une fuite du jeton (logs worker, dump d'env, SSRF lisant l'env)
+    # escalade de « spoof de progression » à « forge de n'importe quel JWT ».
+    # Vide => repli legacy sur `SECRET_KEY` (avec avertissement au démarrage)
+    # pour ne pas casser un déploiement existant ; renseigner un secret dédié.
+    INTERNAL_API_TOKEN: str = ""
+
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    @field_validator("ALGORITHM")
+    @classmethod
+    def validate_algorithm(cls, v: str) -> str:
+        """
+        SV-003 — refuse tout algorithme JWT hors de l'allowlist symétrique.
+
+        Le modèle de clé est une unique `SECRET_KEY` partagée (HMAC) : seuls
+        HS256/384/512 sont applicables. Sans ce garde, poser `ALGORITHM=none`
+        dans l'environnement transforme chaque token en token NON signé que
+        `jwt.decode` accepterait — contournement complet de l'authentification.
+        Une valeur asymétrique (RS*/ES*) provoquerait par ailleurs une
+        confusion d'algorithme (la clé HMAC interprétée comme clé publique).
+        """
+        allowed = {"HS256", "HS384", "HS512"}
+        if v not in allowed:
+            raise ValueError(
+                f"ALGORITHM doit être l'un de : {', '.join(sorted(allowed))}"
+            )
+        return v
 
     # Refresh token cookie (HttpOnly, Secure, SameSite=Strict).
     # COOKIE_DOMAIN reste vide en dev (host == "localhost" suffit). En prod,

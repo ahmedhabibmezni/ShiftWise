@@ -29,9 +29,11 @@ def test_no_default_admin_password_constant():
 def test_prompt_password_requires_a_strong_value(monkeypatch):
     # Vide, puis faible, puis forte : _prompt_password ne doit accepter que
     # la valeur forte — jamais un repli par défaut.
-    answers = iter(["", "weak", "StrongPass1"])
+    # SV-019 — the centralised policy now also requires a special char, so
+    # "StrongPass1" (no special) is rejected and only "StrongPass1!" passes.
+    answers = iter(["", "weak", "StrongPass1", "StrongPass1!"])
     monkeypatch.setattr("builtins.input", lambda *args, **kwargs: next(answers))
 
     result = init_db._prompt_password()
 
-    assert result == "StrongPass1"
+    assert result == "StrongPass1!"

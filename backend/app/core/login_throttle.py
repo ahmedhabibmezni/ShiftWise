@@ -161,14 +161,20 @@ def check_lockout(email: str, ip: Optional[str]) -> Optional[LockoutActive]:
 
 
 def record_failure(email: str, ip: Optional[str]) -> None:
-    """Increment both buckets and (re)arm their TTL.
+    """Increment both buckets, arming TTLs with bucket-specific semantics.
 
-    The EXPIRE on every call is intentional: it implements a fixed-window
-    rather than a sliding one, but resets the clock when a new attempt
-    arrives — making the protection more aggressive against a sustained
-    attacker. The trade-off is that a single legitimate typo lengthens
-    the lockout by the full window; in practice the count threshold is
-    forgiving enough (5 by default) that real users never trip it.
+    SV-017 — the **email** bucket uses a *fixed* window: the TTL is set only
+    when the key is first created (``EXPIRE ... NX``), never re-armed on
+    subsequent failures. Re-arming on every failure (the old behaviour) let
+    an attacker who knows a victim's email keep that account locked out
+    forever by sending one bad attempt just inside each window — a targeted
+    account-lockout DoS. With a fixed window the lockout self-clears at most
+    one window after the *first* failure regardless of attacker cadence.
+
+    The **IP** bucket keeps the sliding (re-armed) window on purpose: a
+    sustained brute-force burst from one source should stay throttled for as
+    long as it keeps hammering, and an attacker cannot use it to lock out a
+    third party (it only restricts their own source IP).
     """
     if not _enabled():
         return
@@ -178,11 +184,57 @@ def record_failure(email: str, ip: Optional[str]) -> None:
 
     pipe = r.pipeline()
     pipe.incr(_email_key(email))
-    pipe.expire(_email_key(email), window)
+    # NX => set the expiry only if the key has none yet (first failure of the
+    # window). Redis 7+; on older servers `nx` is ignored and the bucket
+    # degrades to the previous sliding behaviour rather than failing.
+    pipe.expire(_email_key(email), window, nx=True)
     if ip:
         pipe.incr(_ip_key(ip))
         pipe.expire(_ip_key(ip), window)
     pipe.execute()
+
+
+def check_ip_lockout(ip: Optional[str]) -> Optional[LockoutActive]:
+    """Per-IP-only lockout check (SV-013).
+
+    Used by endpoints that have no email in scope — ``/auth/refresh`` — so a
+    single source cannot hammer refresh-token-shaped requests unbounded.
+    Read-only; mirrors :func:`check_lockout` but inspects only the IP bucket.
+    """
+    if not _enabled() or not ip:
+        return None
+
+    r = get_redis()
+    threshold = _max_attempts()
+
+    pipe = r.pipeline()
+    pipe.get(_ip_key(ip))
+    pipe.ttl(_ip_key(ip))
+    raw = pipe.execute()
+
+    ip_count = int(raw[0]) if raw[0] is not None else 0
+    ip_ttl = int(raw[1]) if raw[1] is not None else 0
+    if ip_count < threshold:
+        return None
+    return LockoutActive(retry_after_seconds=max(0, ip_ttl), locked_by="ip")
+
+
+def record_ip_failure(ip: Optional[str]) -> None:
+    """Increment the per-IP bucket with a sliding window (SV-013)."""
+    if not _enabled() or not ip:
+        return
+    r = get_redis()
+    pipe = r.pipeline()
+    pipe.incr(_ip_key(ip))
+    pipe.expire(_ip_key(ip), _window_seconds())
+    pipe.execute()
+
+
+def reset_ip(ip: Optional[str]) -> None:
+    """Drop the per-IP bucket after a legitimate success (SV-013)."""
+    if not _enabled() or not ip:
+        return
+    get_redis().delete(_ip_key(ip))
 
 
 def reset(email: str, ip: Optional[str]) -> None:

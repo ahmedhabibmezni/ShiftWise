@@ -68,7 +68,8 @@ WARP.md
 commit_rules.md
 start.txt
 scenario.txt
-security_vulnerabilities.md
+security-vulnerabilities.md
+security-vulnerabilities-fix.md
 *.rdb
 DESIGN.md
 PRODUCT.md

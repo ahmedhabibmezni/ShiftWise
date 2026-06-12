@@ -9,9 +9,12 @@ ni l'adresse non spécifiée.
 import pytest
 from pydantic import ValidationError
 
-from app.models.hypervisor import HypervisorType
+from datetime import datetime, timezone
+
+from app.models.hypervisor import HypervisorType, HypervisorStatus
 from app.schemas.hypervisor import (
     HypervisorCreate,
+    HypervisorResponse,
     HypervisorTestConnection,
     HypervisorUpdate,
     _check_host_not_ssrf,
@@ -30,11 +33,20 @@ def _create(host: str) -> HypervisorCreate:
     "192.168.1.69",
     "esxi.lab.example.com",
     "qemu+ssh://ubuntu@10.9.21.131/system",
-    "localhost",
 ])
 def test_legitimate_hosts_accepted(host):
     assert _check_host_not_ssrf(host) == host
     _create(host)  # ne doit lever aucune exception
+
+
+def test_localhost_hostname_rejected():
+    """SV-008 — un hostname résolvant vers la boucle locale (``localhost``
+    → 127.0.0.1 / ::1) est désormais rejeté : l'ancien garde IP-littéral le
+    laissait passer (contournement par nom)."""
+    with pytest.raises(ValueError):
+        _check_host_not_ssrf("localhost")
+    with pytest.raises(ValidationError):
+        _create("localhost")
 
 
 @pytest.mark.parametrize("host", [
@@ -64,6 +76,51 @@ def test_loopback_hosts_rejected(host):
         _check_host_not_ssrf(host)
     with pytest.raises(ValidationError):
         _create(host)
+
+
+class _StoredHypervisor:
+    """Stub ORM-like object for exercising HypervisorResponse.model_validate.
+
+    Mirrors the attributes HypervisorResponse reads (incl. the computed
+    properties is_reachable / connection_url / needs_sync / username_masked).
+    """
+
+    def __init__(self, host: str):
+        now = datetime.now(timezone.utc)
+        self.id = 1
+        self.tenant_id = "system"
+        self.name = "hv"
+        self.description = None
+        self.type = HypervisorType.HYPER_V
+        self.host = host
+        self.port = None
+        self.username_masked = "u***"
+        self.verify_ssl = False
+        self.ssl_cert_path = None
+        self.status = HypervisorStatus.ACTIVE
+        self.is_active = True
+        self.last_sync_at = None
+        self.last_successful_connection = None
+        self.last_error = None
+        self.total_vms_discovered = 0
+        self.total_vms_migrated = 0
+        self.connection_config = None
+        self.tags = None
+        self.created_at = now
+        self.updated_at = now
+        self.is_reachable = True
+        self.connection_url = host
+        self.needs_sync = False
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "169.254.169.254"])
+def test_response_schema_does_not_revalidate_stored_host(host):
+    """SV-008 regression — the SSRF guard is an INPUT control. A stored row
+    whose host is loopback/link-local (e.g. a local Hyper-V at ``localhost``)
+    must still serialise out; re-validating it on read would 500 the list
+    endpoint. The validator must NOT leak into HypervisorResponse."""
+    resp = HypervisorResponse.model_validate(_StoredHypervisor(host))
+    assert resp.host == host
 
 
 def test_ssrf_check_applies_to_update_and_test_connection():

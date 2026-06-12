@@ -7,6 +7,7 @@ Définit les schémas de validation et sérialisation pour l'API REST.
 import ipaddress
 import posixpath
 import re
+import socket
 from datetime import datetime
 from typing import Optional
 
@@ -26,29 +27,21 @@ _SSRF_BLOCKED_NETWORKS = (
 )
 
 
-def _check_host_not_ssrf(host: str) -> str:
-    """
-    Rejette un host dont le littéral IP cible une plage interdite.
+def _assert_ip_not_blocked(ip: ipaddress._BaseAddress, host: str) -> None:
+    """Lève ``ValueError`` si ``ip`` tombe dans une plage interdite.
 
-    Le champ `host` est polymorphe (IP, hostname, URI ``qemu+ssh://``, ou
-    chemin local pour VMware Workstation) : on n'inspecte un littéral IP que
-    s'il y en a un. La validation réseau complète (allowlist d'opérateur,
-    résolution DNS anti-rebinding) relève d'un durcissement ultérieur.
+    Plages bloquées : non spécifiée (0.0.0.0 / ::), boucle locale
+    (127.0.0.0/8, ::1) et link-local (169.254.0.0/16 — métadonnées cloud —
+    et fe80::/10).
+
+    NB délibéré (SV-008) : les plages RFC1918 (10/8, 172.16/12, 192.168/16)
+    ne sont PAS bloquées. Les hyperviseurs gérés par ShiftWise résident
+    légitimement sur des réseaux privés (Proxmox 172.16.x, cluster 10.9.21.x).
+    Les bloquer casserait le produit ; le risque SSRF visé ici est l'accès
+    aux endpoints de métadonnées / services co-localisés, pas au LAN.
     """
-    candidate = host.strip()
-    uri_match = re.search(r"@([^/:?]+)", candidate) or re.search(r"://([^/:?@]+)", candidate)
-    if uri_match:
-        candidate = uri_match.group(1)
-    try:
-        ip = ipaddress.ip_address(candidate)
-    except ValueError:
-        return host  # pas un littéral IP — laissé tel quel
     if ip.is_unspecified:
         raise ValueError(f"hôte interdit : {host!r} (adresse non spécifiée)")
-    # Audit A5 — la loopback (127.0.0.0/8, ::1) est interdite : aucun
-    # hyperviseur légitime ne réside sur la boucle locale du backend ;
-    # l'autoriser ouvrirait un vecteur SSRF vers les services
-    # co-localisés (Redis, Postgres, Flower, métadonnées...).
     if ip.is_loopback:
         raise ValueError(f"hôte interdit : {host!r} (adresse de bouclage)")
     for net in _SSRF_BLOCKED_NETWORKS:
@@ -57,6 +50,59 @@ def _check_host_not_ssrf(host: str) -> str:
                 f"hôte interdit : {host!r} cible la plage link-local {net} "
                 "(risque de SSRF vers les métadonnées cloud)"
             )
+
+
+def _check_host_not_ssrf(host: str) -> str:
+    """
+    Rejette un host ciblant une plage interdite — littéral IP, encodage
+    numérique non standard, OU hostname se résolvant vers une telle plage.
+
+    Le champ `host` est polymorphe (IP, hostname, URI ``qemu+ssh://``, ou
+    chemin local pour VMware Workstation).
+
+    SV-008 — le contrôle précédent n'inspectait QUE les littéraux IP dotés,
+    laissant passer :
+      - un hostname résolvant vers 169.254.169.254 / 127.0.0.1 / ::1 ;
+      - un encodage entier/octal/hex (``2130706433``, ``0x7f000001``) que
+        ``ipaddress`` rejette mais que le resolveur OS ramène à 127.0.0.1.
+    On résout désormais l'hôte et on rejette si TOUTE adresse résolue est
+    interdite. La résolution est tolérante aux pannes (fail-open sur échec
+    DNS) : on ne veut pas refuser un hôte légitime hors-ligne au moment de
+    la validation — un vrai vecteur SSRF, lui, résout avec succès. Le
+    pinning anti-rebinding complet (TOCTOU) reste un durcissement ultérieur.
+    """
+    candidate = host.strip()
+    uri_match = re.search(r"@([^/:?]+)", candidate) or re.search(r"://([^/:?@]+)", candidate)
+    if uri_match:
+        candidate = uri_match.group(1)
+    # Strip an éventuel port "host:port" pour la résolution (IPv6 entre [] géré
+    # par getaddrinfo plus bas via le littéral d'origine).
+    candidate = candidate.strip("[]")
+
+    # 1) Littéral IP standard — chemin rapide, sans réseau.
+    try:
+        _assert_ip_not_blocked(ipaddress.ip_address(candidate), host)
+        return host
+    except ValueError as exc:
+        if "hôte interdit" in str(exc):
+            raise
+        # Sinon : pas un littéral IP dotté — on continue (hostname ou
+        # encodage numérique non standard).
+
+    # 2) Résolution (hostname + encodages numériques alternatifs). Tout ce
+    #    qui résout est vérifié ; un échec de résolution est non bloquant.
+    try:
+        infos = socket.getaddrinfo(candidate, None)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return host  # non résolvable ici — laissé au connecteur en aval
+    for info in infos:
+        sockaddr = info[4]
+        resolved = sockaddr[0]
+        try:
+            _assert_ip_not_blocked(ipaddress.ip_address(resolved), host)
+        except ValueError as exc:
+            if "hôte interdit" in str(exc):
+                raise
     return host
 
 
@@ -175,18 +221,21 @@ def _validate_connection_config(cfg: Optional[dict]) -> Optional[dict]:
 
 # Schéma de base
 class HypervisorBase(BaseModel):
-    """Propriétés de base d'un hyperviseur"""
+    """Propriétés de base d'un hyperviseur.
+
+    SV-008 — la validation SSRF de `host` n'est PAS déclarée ici : c'est un
+    contrôle d'ENTRÉE (Create/Update/TestConnection), pas de sortie. La
+    placer sur la base la ferait hériter par `HypervisorResponse`, qui
+    re-valide alors des données déjà stockées au moment de la sérialisation —
+    une ligne légitime (ex. un hôte Hyper-V local `localhost`) ferait alors
+    échouer la lecture (500). Chaque schéma d'entrée porte donc son propre
+    validateur `_validate_host_ssrf`.
+    """
     name: str = Field(..., min_length=1, max_length=255, description="Nom de l'hyperviseur")
     description: Optional[str] = Field(None, description="Description")
     type: HypervisorTypeEnum = Field(..., description="Type d'hyperviseur")
     host: str = Field(..., min_length=1, max_length=255, description="Hostname ou IP")
     port: Optional[int] = Field(None, ge=1, le=65535, description="Port de connexion")
-
-    @field_validator("host")
-    @classmethod
-    def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
-        """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
-        return v if v is None else _check_host_not_ssrf(v)
 
 
 # Schéma pour la création (avec credentials)
@@ -198,6 +247,12 @@ class HypervisorCreate(HypervisorBase):
     ssl_cert_path: Optional[str] = Field(None, max_length=512, description="Chemin certificat SSL")
     connection_config: Optional[dict] = Field(None, description="Configuration avancée")
     tags: Optional[dict] = Field(None, description="Tags personnalisés")
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host_ssrf(cls, v: Optional[str]) -> Optional[str]:
+        """Audit H-03 — refuse un hôte link-local (SSRF métadonnées cloud)."""
+        return v if v is None else _check_host_not_ssrf(v)
 
     @field_validator("connection_config")
     @classmethod
