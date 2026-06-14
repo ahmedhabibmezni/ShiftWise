@@ -107,3 +107,26 @@ spec:
               kubernetes.io/metadata.name: openshift-ingress
       ports:
         - {protocol: TCP, port: 8000}
+---
+# 5. Frontend :8080 — accepte le trafic HTTP du routeur OpenShift (Route
+#    `frontend` TLS edge, host partagé avec le backend). Sans cette règle, le
+#    default-deny ci-dessus rendrait la SPA injoignable (503 côté routeur).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-from-router
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+spec:
+  podSelector:
+    matchLabels: {app: frontend}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - {protocol: TCP, port: 8080}

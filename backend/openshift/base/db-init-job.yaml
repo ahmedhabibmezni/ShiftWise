@@ -53,15 +53,15 @@ spec:
               drop: [ALL]
       containers:
         - name: bootstrap
-          # Image API slim (G12) — bootstrap.py ne fait qu'alembic upgrade +
-          # seed des rôles ; aucun besoin du guest-tooling du worker.
+          # Image unique ShiftWise — `shiftwise-backend` (cf. note dans
+          # backend-deployment.yaml). bootstrap.py ne fait qu'alembic upgrade +
+          # seed des rôles, mais partage l'image unique réellement publiée.
           # TODO (G14/G26) : `:latest` est mutable. À épingler sur un tag
           #   immuable `v<semver>` une fois le push registre activé dans le
-          #   workflow CI (job `image`, étape "Registry push" actuellement en
-          #   stub). Récupérer le digest après push avec :
-          #     docker buildx imagetools inspect docker.io/dida1609/shiftwise-backend-api:v<semver>
+          #   workflow CI. Récupérer le digest après push avec :
+          #     docker buildx imagetools inspect docker.io/dida1609/shiftwise-backend:v<semver>
           #   puis remplacer par  ...:v<semver>@sha256:<digest>
-          image: docker.io/dida1609/shiftwise-backend-api:latest
+          image: docker.io/dida1609/shiftwise-backend:latest
           imagePullPolicy: IfNotPresent
           command: [python, bootstrap.py]
           envFrom:

@@ -63,14 +63,16 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: api
-          # Image API slim (G12) — `shiftwise-backend-api`, construite par
-          # backend/Dockerfile. N'embarque PAS libguestfs / qemu-img / kernel
-          # (réservés au worker, cf. celery-worker-deployment.yaml). L'API ne
-          # fait qu'exposer le REST + lire le statut des Jobs.
+          # Image unique ShiftWise — `shiftwise-backend`, construite par
+          # backend/Dockerfile. C'est la SEULE image publiée sur le registre
+          # (le découpage api/worker n'a jamais été poussé) ; backend, flower,
+          # db-init ET worker la partagent. Elle embarque le guest-tooling
+          # (qemu-img / libguestfs / kernel) — surdimensionnée pour l'API mais
+          # cohérente avec ce qui existe réellement.
           # imagePullPolicy explicite (G14). NOTE : `:latest` est mutable —
           # remplacer par un tag immuable `:v<semver>` pour des rollouts
           # déterministes (le pipeline CI le fera, cf. ci.yml job image-build).
-          image: docker.io/dida1609/shiftwise-backend-api:latest
+          image: docker.io/dida1609/shiftwise-backend:latest
           imagePullPolicy: IfNotPresent
           command:
             - uvicorn
@@ -131,12 +133,21 @@ spec:
     - {name: http, port: 8000, targetPort: 8000}
   type: ClusterIP
 ---
+# Route backend — host PARTAGÉ avec le frontend, dispatch par path (G — auth).
+# Le routeur OpenShift résout par longest-match : `/api` → backend, `/` →
+# frontend (cf. frontend-deployment.yaml). Frontend et backend DOIVENT partager
+# le même host : le cookie refresh est host-only (REFRESH_COOKIE_DOMAIN vide),
+# SameSite=Strict, Path=/api/v1/auth — un host distinct le ferait tomber.
+# Le host est figé sur l'URL publique de prod (= BACKEND_CORS_ORIGINS dans le
+# ConfigMap) ; le surcharger par overlay pour un autre environnement.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: backend
   namespace: shiftwise
 spec:
+  host: shiftwise.apps.migration.nextstep-it.com
+  path: /api
   to: {kind: Service, name: backend}
   port: {targetPort: http}
   tls:

@@ -37,13 +37,12 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: worker
-          # Image worker (G12) — `shiftwise-backend-worker`, construite par
-          # backend/Dockerfile.worker (image API + couche guest-tooling :
-          # qemu-img, libguestfs-tools, kernel). NE PAS pointer ici l'image
-          # API slim : le pipeline de migration ne tournerait pas.
-          # imagePullPolicy explicite (G14). `:latest` mutable — voir note
-          # dans backend-deployment.yaml ; migrer vers un tag immuable.
-          image: docker.io/dida1609/shiftwise-backend-worker:latest
+          # Image unique ShiftWise — `shiftwise-backend` (cf. note dans
+          # backend-deployment.yaml). Elle inclut qemu-img + libguestfs-tools
+          # + kernel, requis par le pipeline de migration que ce worker pilote.
+          # imagePullPolicy explicite (G14). `:latest` mutable — migrer vers
+          # un tag immuable.
+          image: docker.io/dida1609/shiftwise-backend:latest
           imagePullPolicy: IfNotPresent
           command:
             - celery

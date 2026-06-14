@@ -78,14 +78,18 @@ oc wait --for=condition=complete job/db-init -n "$NAMESPACE" --timeout="$TIMEOUT
 echo "==> [4/6] Waiting for Redis"
 oc rollout status deployment/redis -n "$NAMESPACE" --timeout="$TIMEOUT_DEPLOY"
 
-echo "==> [5/6] Waiting for backend / worker / flower"
+echo "==> [5/6] Waiting for backend / frontend / worker / flower"
 oc rollout status deployment/backend       -n "$NAMESPACE" --timeout="$TIMEOUT_DEPLOY"
+oc rollout status deployment/frontend      -n "$NAMESPACE" --timeout="$TIMEOUT_DEPLOY"
 oc rollout status deployment/celery-worker -n "$NAMESPACE" --timeout="$TIMEOUT_DEPLOY"
 oc rollout status deployment/flower        -n "$NAMESPACE" --timeout="$TIMEOUT_DEPLOY"
 
 echo "==> [6/6] Cluster ready"
 oc get pods -n "$NAMESPACE"
 echo
-echo "Backend route:  https://$(oc get route backend -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
+# Frontend et backend partagent le même host (dispatch par path : / → frontend,
+# /api → backend). L'app s'ouvre sur la Route frontend.
+echo "App (UI):      https://$(oc get route frontend -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
+echo "API (/api):    https://$(oc get route backend  -n "$NAMESPACE" -o jsonpath='{.spec.host}')/api/v1/docs"
 # Flower n'a plus de Route publique (durcissement G18). Accès opérateur :
 echo "Flower (interne, basic-auth):  oc port-forward -n $NAMESPACE svc/flower 5555:5555  → http://localhost:5555"
