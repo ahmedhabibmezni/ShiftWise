@@ -240,8 +240,8 @@ def test_hypervisor_connection(
     **Permissions requises :** hypervisors:create
 
     Reuses the discovery service connectors to enumerate VMs on the source
-    without persisting anything. VSPHERE returns success=False until the
-    pyvmomi-based connector lands.
+    without persisting anything. VSPHERE / VMWARE_ESXi probe the host via
+    pyVmomi like any other connector.
     """
     # Audit B21 — l'endpoint pilote une connexion sortante avec un hôte et
     # des credentials fournis par l'appelant : oracle de credential / SSRF.

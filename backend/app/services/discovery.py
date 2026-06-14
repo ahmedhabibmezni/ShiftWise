@@ -282,6 +282,167 @@ def _vmx_os_type(guest_os: str) -> OSType:
     return OSType.UNKNOWN
 
 
+# ============================================================================
+# vSphere / ESXi helpers
+# ============================================================================
+#
+# The mapping helpers below are pure and getattr-based so they can be unit
+# tested with plain objects standing in for pyVmomi managed objects — no live
+# vCenter/ESXi and no ``pyVmomi`` import on the mapping path. Only the network
+# boundary (``_vsphere_fetch_vms``) touches pyVmomi, and it is monkeypatched in
+# tests. SmartConnect works against a standalone ESXi host directly.
+
+# pyVmomi ``runtime.powerState`` -> our discovery power_state vocabulary.
+_VSPHERE_POWER_MAP = {
+    "poweredOn": "running",
+    "poweredOff": "stopped",
+    "suspended": "suspended",
+}
+
+
+def _vsphere_normalise_uuid(raw: Optional[str]) -> str:
+    """Normalise a vSphere UUID to 32-char lowercase no-dash (KVM/oVirt style)."""
+    return (raw or "").replace("-", "").lower()
+
+
+def _vsphere_os_type(guest_full_name: Optional[str], guest_id: Optional[str]) -> OSType:
+    """Classify a vSphere guest by its ``guestFullName`` / ``guestId``.
+
+    Delegates to :func:`_vmx_os_type`, whose substring matching already covers
+    the vSphere vocabulary (e.g. ``ubuntu64Guest`` contains ``ubuntu``).
+    """
+    combined = f"{guest_full_name or ''} {guest_id or ''}"
+    return _vmx_os_type(combined)
+
+
+def _vsphere_total_disk_gb(devices: Any) -> int:
+    """Sum every virtual disk's capacity (GiB) from a device list.
+
+    A device is treated as a disk when it carries ``capacityInKB`` /
+    ``capacityInBytes`` — true only for ``VirtualDisk`` devices, so NICs and
+    controllers are ignored without importing ``pyVmomi`` here.
+    """
+    total_kb = 0
+    for dev in devices or []:
+        cap_kb = getattr(dev, "capacityInKB", None)
+        if cap_kb is None:
+            cap_bytes = getattr(dev, "capacityInBytes", None)
+            if not cap_bytes:
+                continue
+            cap_kb = int(cap_bytes) // 1024
+        total_kb += int(cap_kb)
+    return int(total_kb // (1024 * 1024))
+
+
+def _vsphere_primary_mac(net_list: Any) -> Optional[str]:
+    """First non-empty MAC from ``guest.net`` (only populated when tools run)."""
+    for entry in net_list or []:
+        mac = getattr(entry, "macAddress", None)
+        if mac:
+            return mac
+    return None
+
+
+def _vsphere_vm_to_dict(vm_obj: Any) -> Dict[str, Any]:
+    """Map a pyVmomi ``VirtualMachine`` to a discovery dict.
+
+    The result conforms to the contract consumed by ``_save_discovered_vms`` /
+    ``_create_vm_from_discovery``: ``name``, ``source_uuid`` and ``source_name``
+    are always present and non-empty; the rest are best-effort.
+    """
+    config = getattr(vm_obj, "config", None)
+    guest = getattr(vm_obj, "guest", None)
+    runtime = getattr(vm_obj, "runtime", None)
+    hardware = getattr(config, "hardware", None)
+
+    name = getattr(vm_obj, "name", None) or "unknown"
+    uuid = _vsphere_normalise_uuid(
+        getattr(config, "instanceUuid", None) or getattr(config, "uuid", None)
+    )
+    guest_full_name = (
+        getattr(guest, "guestFullName", None)
+        or getattr(config, "guestFullName", None)
+    )
+    guest_id = getattr(guest, "guestId", None) or getattr(config, "guestId", None)
+    power_state = _VSPHERE_POWER_MAP.get(
+        str(getattr(runtime, "powerState", "")), "unknown"
+    )
+
+    return {
+        # source_uuid keys the DB sync and the converter's VM resolution; fall
+        # back to the name only if the host exposes no UUID at all.
+        "source_uuid": uuid or name,
+        "source_name": name,
+        "name": name,
+        "cpu_cores": int(getattr(hardware, "numCPU", 0) or 0),
+        "memory_mb": int(getattr(hardware, "memoryMB", 0) or 0),
+        "disk_gb": _vsphere_total_disk_gb(getattr(hardware, "device", None)),
+        "os_type": _vsphere_os_type(guest_full_name, guest_id),
+        "os_version": guest_full_name,
+        "os_name": guest_full_name,
+        "ip_address": getattr(guest, "ipAddress", None),
+        "mac_address": _vsphere_primary_mac(getattr(guest, "net", None)),
+        "hostname": getattr(guest, "hostName", None),
+        "power_state": power_state,
+    }
+
+
+def _vsphere_fetch_vms(hypervisor: Hypervisor) -> List[Dict[str, Any]]:
+    """Connect to vCenter/ESXi and return one discovery dict per VM.
+
+    Network boundary — imports pyVmomi lazily so the rest of the module loads
+    without the dependency, and so tests can monkeypatch this function.
+
+    pyVmomi managed objects are lazy: reading a property issues a SOAP call on
+    the live session. We therefore project each VM to a plain dict via
+    :func:`_vsphere_vm_to_dict` **while the session is still open**, and never
+    leak session-bound objects past ``Disconnect`` (doing so raises
+    ``NotAuthenticated`` on the first property access).
+    """
+    import ssl
+
+    from pyVim.connect import Disconnect, SmartConnect  # type: ignore
+    from pyVmomi import vim  # type: ignore
+
+    password = hypervisor.password_plain
+    if not password:
+        raise DiscoveryError(
+            f"vSphere {hypervisor.host}: aucun identifiant utilisable"
+        )
+
+    if hypervisor.verify_ssl:
+        ctx = ssl.create_default_context()
+    else:
+        ctx = ssl._create_unverified_context()  # NOSONAR — self-signed ESXi dev
+
+    si = SmartConnect(
+        host=hypervisor.host,
+        user=hypervisor.username,
+        pwd=password,
+        port=hypervisor.port or 443,
+        sslContext=ctx,
+    )
+    try:
+        content = si.RetrieveContent()
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.VirtualMachine], True
+        )
+        try:
+            # Map while connected — the session must be live for every
+            # lazy property access inside _vsphere_vm_to_dict.
+            return [_vsphere_vm_to_dict(vm_obj) for vm_obj in view.view]
+        finally:
+            try:
+                view.Destroy()
+            except Exception:  # NOSONAR — best-effort cleanup
+                logger.debug("vSphere view destroy failed", exc_info=True)
+    finally:
+        try:
+            Disconnect(si)
+        except Exception:  # NOSONAR — best-effort cleanup
+            logger.debug("vSphere disconnect failed", exc_info=True)
+
+
 def _vmx_os_version(guest_os: str) -> str:
     """Convert the raw guestOS string to a human-readable OS version label."""
     mapping = {
@@ -1122,7 +1283,7 @@ class DiscoveryService:
         self.db.commit()
 
         try:
-            if hypervisor.type == HypervisorType.VSPHERE:
+            if hypervisor.type in (HypervisorType.VSPHERE, HypervisorType.VMWARE_ESXi):
                 vms_data = self._discover_vsphere(hypervisor)
             elif hypervisor.type == HypervisorType.VMWARE_WORKSTATION:
                 vms_data = self._discover_vmware_workstation(hypervisor)
@@ -1181,19 +1342,12 @@ class DiscoveryService:
         Reuses the per-type _discover_* methods but stops after the VM
         enumeration step — nothing is written to the database. Returns a
         dict with `success` (bool), `vms_count` (int|None) and `error`
-        (str|None). VSPHERE short-circuits because its connector is still
-        a stub returning fake data; reporting "success" from it would mask
-        the missing pyvmomi implementation.
+        (str|None).
         """
-        if hypervisor.type == HypervisorType.VSPHERE:
-            return {
-                "success": False,
-                "vms_count": None,
-                "error": "vSphere connector not implemented (pyvmomi pending)",
-            }
-
         try:
-            if hypervisor.type == HypervisorType.VMWARE_WORKSTATION:
+            if hypervisor.type in (HypervisorType.VSPHERE, HypervisorType.VMWARE_ESXi):
+                vms = self._discover_vsphere(hypervisor)
+            elif hypervisor.type == HypervisorType.VMWARE_WORKSTATION:
                 vms = self._discover_vmware_workstation(hypervisor)
             elif hypervisor.type == HypervisorType.HYPER_V:
                 vms = self._discover_hyperv(hypervisor)
@@ -1221,59 +1375,25 @@ class DiscoveryService:
     # ========================================================================
 
     def _discover_vsphere(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
-        """Découvre les VMs depuis vSphere (stub — pyvmomi non encore implémenté)."""
-        logger.info(f"Connexion à vSphere: {hypervisor.host}")
+        """Découvre les VMs depuis vCenter/ESXi via pyVmomi.
+
+        Connecte l'endpoint (``SmartConnect`` fonctionne directement sur un hôte
+        ESXi autonome), énumère toutes les ``VirtualMachine`` et les projette
+        dans le contrat de découverte via :func:`_vsphere_vm_to_dict`. La
+        résolution disque côté Converter s'appuie sur ``source_uuid``
+        (instanceUuid normalisé) — d'où l'usage de la même normalisation ici.
+        """
+        logger.info(f"Découverte vSphere/ESXi: {hypervisor.host}")
         try:
-            logger.warning("⚠️  Mode SIMULATION - pyvmomi non encore implémenté")
-            return [
-                {
-                    "source_uuid": "vm-001-vsphere",
-                    "source_name": "web-server-prod",
-                    "name": "web-server-prod",
-                    "cpu_cores": 4,
-                    "memory_mb": 8192,
-                    "disk_gb": 100,
-                    "os_type": OSType.LINUX,
-                    "os_version": "Ubuntu 22.04",
-                    "os_name": "Ubuntu Server 22.04 LTS",
-                    "ip_address": "192.168.1.10",
-                    "mac_address": "00:50:56:00:00:01",
-                    "hostname": "web-prod-01",
-                    "power_state": "poweredOn",
-                },
-                {
-                    "source_uuid": "vm-002-vsphere",
-                    "source_name": "db-server-prod",
-                    "name": "db-server-prod",
-                    "cpu_cores": 8,
-                    "memory_mb": 16384,
-                    "disk_gb": 500,
-                    "os_type": OSType.LINUX,
-                    "os_version": "CentOS 8",
-                    "os_name": "CentOS 8 Stream",
-                    "ip_address": "192.168.1.11",
-                    "mac_address": "00:50:56:00:00:02",
-                    "hostname": "db-prod-01",
-                    "power_state": "poweredOn",
-                },
-                {
-                    "source_uuid": "vm-003-vsphere",
-                    "source_name": "win-app-server",
-                    "name": "win-app-server",
-                    "cpu_cores": 2,
-                    "memory_mb": 4096,
-                    "disk_gb": 80,
-                    "os_type": OSType.WINDOWS,
-                    "os_version": "Windows Server 2019",
-                    "os_name": "Windows Server 2019 Standard",
-                    "ip_address": "192.168.1.12",
-                    "mac_address": "00:50:56:00:00:03",
-                    "hostname": "win-app-01",
-                    "power_state": "poweredOn",
-                },
-            ]
-        except Exception as e:
-            raise DiscoveryError(f"Erreur connexion vSphere: {str(e)}") from None
+            return _vsphere_fetch_vms(hypervisor)
+        except ImportError as e:
+            raise DiscoveryError(
+                "pyvmomi non installé dans l'environnement worker"
+            ) from e
+        except DiscoveryError:
+            raise
+        except Exception as e:  # NOSONAR — pyVmomi lève des types variés
+            raise DiscoveryError(f"Erreur connexion vSphere: {e}") from None
 
     def _discover_vmware_workstation(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """

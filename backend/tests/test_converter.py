@@ -865,3 +865,56 @@ class TestVsphereConnector:
         with pytest.raises(ConversionError) as ei:
             _split_ds_path("no-brackets.vmdk")
         assert ei.value.code == "ERR_DISK_NOT_FOUND"
+
+    def test_registry_maps_vsphere_and_esxi_to_vsphere_puller(self):
+        from app.models.hypervisor import HypervisorType
+        from app.services.converter.connectors import get_puller
+        from app.services.converter.connectors.vsphere import VsphereStubPuller
+
+        assert isinstance(get_puller(HypervisorType.VSPHERE), VsphereStubPuller)
+        # ESXi enum must resolve to the same connector (additive alias).
+        assert isinstance(get_puller(HypervisorType.VMWARE_ESXi), VsphereStubPuller)
+
+    def test_power_off_already_off_makes_no_api_call(self):
+        from types import SimpleNamespace
+        from app.services.converter.connectors.vsphere import VsphereStubPuller
+
+        def _should_not_be_called():
+            raise AssertionError("PowerOffVM_Task must not be called when off")
+
+        vm = SimpleNamespace(
+            name="ubuntu",
+            runtime=SimpleNamespace(powerState="poweredOff"),
+            PowerOffVM_Task=_should_not_be_called,
+        )
+        assert VsphereStubPuller._power_off_if_running(vm) is False
+
+    def test_power_off_restricted_license_raises_actionable_error(self):
+        from types import SimpleNamespace
+        from app.services.converter.connectors.vsphere import VsphereStubPuller
+
+        def _restricted():
+            # Mimics free/eval ESXi: vim.fault.RestrictedVersion on power ops.
+            raise RuntimeError("RestrictedVersion: license prohibits operation")
+
+        vm = SimpleNamespace(
+            name="ubuntu",
+            runtime=SimpleNamespace(powerState="poweredOn"),
+            PowerOffVM_Task=_restricted,
+        )
+        with pytest.raises(ConversionError) as ei:
+            VsphereStubPuller._power_off_if_running(vm)
+        assert ei.value.code == "ERR_VM_RUNNING_NEEDS_COLD"
+        assert "power" in str(ei.value).lower()
+
+    def test_is_flat_backing_accepts_thin_flat_rejects_sesparse(self):
+        # Uses real pyVmomi types so the isinstance guard is verified, not guessed.
+        vim = pytest.importorskip("pyVmomi").vim
+        from app.services.converter.connectors.vsphere import _is_flat_backing
+
+        flat = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
+        flat.thinProvisioned = True  # a thin base disk is still FlatVer2
+        sesparse = vim.vm.device.VirtualDisk.SeSparseBackingInfo()  # snapshot
+
+        assert _is_flat_backing(flat) is True
+        assert _is_flat_backing(sesparse) is False

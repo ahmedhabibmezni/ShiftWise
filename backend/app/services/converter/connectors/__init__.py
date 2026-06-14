@@ -26,6 +26,9 @@ _REGISTRY: dict[HypervisorType, type[DiskPuller]] = {
     HypervisorType.HYPER_V: HyperVPuller,
     HypervisorType.OVIRT: OvirtPuller,
     HypervisorType.VSPHERE: VsphereStubPuller,
+    # ESXi standalone hosts register under either enum value; both use the
+    # same pyVmomi/datastore connector.
+    HypervisorType.VMWARE_ESXi: VsphereStubPuller,
 }
 
 

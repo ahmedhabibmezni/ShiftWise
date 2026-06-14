@@ -185,6 +185,21 @@ def _virtual_disks(vm_obj):
     return [d for d in devices if isinstance(d, vim.vm.device.VirtualDisk)]
 
 
+def _is_flat_backing(backing) -> bool:
+    """True only for a single flat extent (``FlatVer2BackingInfo``).
+
+    A thin **and** a thick base disk are both ``FlatVer2`` (thin only flips
+    ``thinProvisioned``); the datastore ``/folder`` HTTP path serves their
+    ``-flat.vmdk`` as readable RAW. Snapshots / linked clones use
+    ``SeSparseBackingInfo`` / ``SparseVer2BackingInfo``, whose active delta is
+    NOT a flat extent — the HTTP path cannot read it, so those are rejected
+    upfront with an actionable error rather than a corrupt pull.
+    """
+    from pyVmomi import vim  # type: ignore
+
+    return isinstance(backing, vim.vm.device.VirtualDisk.FlatVer2BackingInfo)
+
+
 class VsphereStubPuller:
     """:class:`DiskPuller` for vSphere/ESXi — best-effort HTTP datastore download."""
 
@@ -199,6 +214,13 @@ class VsphereStubPuller:
                 file_name = getattr(backing, "fileName", None)
                 if not file_name:
                     continue
+                if not _is_flat_backing(backing):
+                    raise ConversionError(
+                        "ERR_DISK_NOT_FOUND",
+                        f"VM {vm.name!r} disk {index} has a non-flat backing "
+                        f"({type(backing).__name__}) — likely a snapshot/linked "
+                        "clone. Consolidate snapshots on the VM, then retry.",
+                    )
                 capacity = int(
                     getattr(dev, "capacityInBytes", 0)
                     or (getattr(dev, "capacityInKB", 0) or 0) * 1024
@@ -317,7 +339,21 @@ class VsphereStubPuller:
         state = getattr(getattr(vm_obj, "runtime", None), "powerState", None)
         if str(state) != "poweredOn":
             return False
-        task = vm_obj.PowerOffVM_Task()
+        try:
+            task = vm_obj.PowerOffVM_Task()
+        except Exception as e:  # NOSONAR — pyVmomi raises various SOAP faults
+            # Free / evaluation ESXi licenses make the vSphere API read-only, so
+            # PowerOffVM_Task raises vim.fault.RestrictedVersion. A running VM's
+            # -flat.vmdk is also locked and cannot be pulled. Surface a clear,
+            # actionable error instead of a cryptic ERR_INTERNAL.
+            raise ConversionError(
+                "ERR_VM_RUNNING_NEEDS_COLD",
+                f"VM {getattr(vm_obj, 'name', '?')!r} is powered on and the ESXi "
+                "API refused to stop it (free/evaluation ESXi licenses make the "
+                "vSphere API read-only). Power the VM off manually in the ESXi "
+                "console, then retry the migration.",
+                cause=e,
+            ) from e
         _wait_task(task)
         return True
 

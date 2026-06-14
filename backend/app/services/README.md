@@ -40,7 +40,7 @@ Connects to registered hypervisors and inventories their virtual machines.
 | libvirt / KVM | `paramiko` SSH + `virsh` |
 | Proxmox VE | REST API (`proxmoxer`) |
 | oVirt / RHV | `ovirt-engine-sdk-python` |
-| VMware vSphere | Stub — no test environment available (free ESXi discontinued) |
+| VMware vSphere / ESXi | `pyVmomi` `SmartConnect` (works against standalone ESXi); covered by mocked tests — no permanent live endpoint in CI |
 
 Rediscovery is scoped to the source hypervisor to avoid cross-hypervisor name collisions. On re-sync, the `MIGRATING` and `MIGRATED` statuses are preserved while other VMs are reset to `DISCOVERED`.
 
