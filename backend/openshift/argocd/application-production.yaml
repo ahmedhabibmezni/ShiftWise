@@ -1,0 +1,36 @@
+# Argo CD Application — ShiftWise PRODUCTION (pull-based GitOps, MANUAL sync).
+#
+# Production promotion is deliberate (constitution Governance §4): there is NO
+# `automated` syncPolicy block, so Argo shows the new revision as OutOfSync and
+# waits. Promote by bumping overlays/production image tags via PR to `main`,
+# then clicking Sync (or `argocd app sync shiftwise-production`).
+#
+# selfHeal is still off here on purpose — an operator doing emergency
+# `oc` surgery on prod should not be fought by the controller mid-incident.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shiftwise-production
+  namespace: openshift-gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ahmedhabibmezni/ShiftWise.git
+    targetRevision: main
+    path: backend/openshift/overlays/production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shiftwise
+  syncPolicy:
+    # No `automated:` — sync is manual.
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 8m

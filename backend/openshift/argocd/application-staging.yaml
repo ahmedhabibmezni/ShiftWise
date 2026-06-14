@@ -1,0 +1,48 @@
+# Argo CD Application — ShiftWise STAGING (pull-based GitOps).
+#
+# Why GitOps instead of `oc apply` from CI: the OpenShift API
+# (api.migration.nextstep-it.com:6443) lives on a private on-prem network
+# behind a slow VPN. A GitHub-hosted runner cannot reach it. Argo CD runs
+# INSIDE the cluster and reaches OUT to GitHub (egress only) — no inbound, no
+# cluster credentials in CI, no self-hosted runner.
+#
+# Flow: release.yml builds+pushes vX.Y.Z images, then `kustomize edit set image`
+# bumps overlays/staging and commits to `develop`. Argo sees the commit and
+# auto-syncs (selfHeal + prune). Production is a separate, manually-synced App.
+#
+# Prerequisites (see README.md in this directory):
+#   - OpenShift GitOps operator installed (Argo CD in `openshift-gitops`).
+#   - Repo credentials registered if the GitHub repo is private.
+#   - The Argo application-controller must be able to manage the cluster-scoped
+#     SecurityContextConstraints (populator-scc.yaml) — the default
+#     openshift-gitops instance has cluster-admin, which covers it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shiftwise-staging
+  namespace: openshift-gitops          # Argo CD's own namespace
+  finalizers:
+    # Cascade: deleting the Application prunes the managed resources too.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ahmedhabibmezni/ShiftWise.git
+    targetRevision: develop
+    path: backend/openshift/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shiftwise-staging
+  syncPolicy:
+    automated:
+      prune: true                      # delete resources removed from git
+      selfHeal: true                   # revert manual drift back to git state
+    syncOptions:
+      - CreateNamespace=true           # the overlay sets namespace: but defines no Namespace object
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 8m

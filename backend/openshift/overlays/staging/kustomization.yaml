@@ -26,9 +26,25 @@ resources:
 # create the Secret out-of-band (see credential-key-secret.yaml header).
 
 # Tag the staging Deployments with the environment label so observability
-# tooling can filter by it.
-commonLabels:
-  app.shiftwise.io/environment: staging
+# tooling can filter by it. `labels` (not the deprecated `commonLabels`) with
+# includeSelectors:false — mutating the Deployment selector would conflict with
+# the immutable `spec.selector` on the second apply / sync.
+labels:
+  - pairs:
+      app.shiftwise.io/environment: staging
+    includeSelectors: false
+
+# Image tags — bumped by CI (`kustomize edit set image`) after the release
+# workflow pushes the freshly built `vX.Y.Z` images, then committed to the
+# `develop` branch that the staging Argo CD Application tracks. Argo reconciles
+# the change. The single `shiftwise-backend` image backs backend / flower /
+# db-init / worker (one newTag retags them all); `shiftwise-frontend` backs the
+# SPA. Starts at `latest` so the first sync works before any release tag.
+images:
+  - name: docker.io/dida1609/shiftwise-backend
+    newTag: latest
+  - name: docker.io/dida1609/shiftwise-frontend
+    newTag: latest
 
 # Keep the dev-time KUBERNETES_VERIFY_SSL=False here (self-signed certs).
 # The production overlay flips it to True.

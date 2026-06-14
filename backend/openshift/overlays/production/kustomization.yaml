@@ -57,3 +57,13 @@ patches:
         value:
           name: KUBERNETES_VERIFY_SSL
           value: "True"
+
+# Image tags — production promotion is MANUAL (constitution Governance §4):
+# bump these to the validated `vX.Y.Z` via PR to `main`, then sync the
+# production Argo CD Application by hand. The single `shiftwise-backend` image
+# backs backend / flower / db-init / worker; `shiftwise-frontend` backs the SPA.
+images:
+  - name: docker.io/dida1609/shiftwise-backend
+    newTag: latest
+  - name: docker.io/dida1609/shiftwise-frontend
+    newTag: latest
