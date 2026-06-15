@@ -175,6 +175,26 @@ echo ">>> Adapter done"
 """
 
 
+# P2V initramfs regeneration — a bare-metal host's initramfs lacks the virtio
+# block/net drivers KubeVirt presents, so it cannot find its root device and
+# panics on first boot. Regenerate the initramfs with virtio forced in. Both
+# tool families are attempted; the one that exists for the guest distro runs,
+# the other is a no-op (|| true).
+_P2V_INITRAMFS_FIXUP = r"""
+echo ">>> P2V: forcing virtio drivers into the initramfs"
+virt-customize -a "$DISK" \
+  --run-command 'echo "virtio_blk virtio_net virtio_pci virtio_scsi" | tr " " "\n" >> /etc/initramfs-tools/modules 2>/dev/null || true' \
+  --run-command 'mkdir -p /etc/dracut.conf.d && echo '\''add_drivers+=" virtio_blk virtio_net virtio_pci virtio_scsi "'\'' > /etc/dracut.conf.d/99-shiftwise-virtio.conf 2>/dev/null || true' \
+  --run-command 'update-initramfs -u 2>/dev/null || true' \
+  --run-command 'dracut --regenerate-all --force 2>/dev/null || true' \
+  || {
+    echo "ERROR P2V initramfs virt-customize exit $?"
+    exit 1
+  }
+echo ">>> P2V: initramfs regeneration done"
+"""
+
+
 # Windows guest path — virt-customize cannot configure DHCP / serial on a
 # Windows partition (NTFS plus driver-injection requirements). The standard
 # tool is libguestfs's `virt-v2v-in-place`, which:
@@ -229,16 +249,23 @@ echo ">>> Adapter done"
 """
 
 
-def _fixup_script_for_os(os_type: OSType) -> str:
+def _fixup_script_for_os(os_type: OSType, *, is_physical: bool = False) -> str:
     """Pick the libguestfs strategy that fits the guest OS family.
 
     Windows guests need `virt-v2v-in-place` (virtio driver injection plus
     Windows first-boot scripting). Linux — and OTHER/UNKNOWN as a safe
-    fallback — use the multi-stack DHCP / serial-console / GRUB script
-    above driven by `virt-customize`.
+    fallback — use the multi-stack DHCP / serial-console / GRUB script driven
+    by `virt-customize`.
+
+    ``is_physical`` (P2V source) appends a virtio-initramfs regeneration step to
+    the Linux fixup — a bare-metal initramfs has no virtio drivers and would
+    panic looking for its root device under KubeVirt. Ignored for Windows
+    (virt-v2v-in-place already injects virtio drivers).
     """
     if os_type == OSType.WINDOWS:
         return _WINDOWS_FIXUP_SCRIPT
+    if is_physical:
+        return _LINUX_FIXUP_SCRIPT + _P2V_INITRAMFS_FIXUP
     return _LINUX_FIXUP_SCRIPT
 
 

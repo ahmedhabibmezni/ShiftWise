@@ -389,3 +389,28 @@ class TestAdapterServiceRun:
         with pytest.raises(AdapterError) as excinfo:
             AdapterService().run(db_session, seeded["migration"].id)
         assert excinfo.value.code == "ERR_ADAPT_QCOW2_MISSING"
+
+
+def test_physical_fixup_adds_virtio_initramfs():
+    from app.models.virtual_machine import OSType
+    from app.services.adapter.guestfish_job import _fixup_script_for_os
+    script = _fixup_script_for_os(OSType.LINUX, is_physical=True)
+    assert "update-initramfs -u" in script
+    assert "dracut" in script
+    assert "virtio_blk" in script and "virtio_net" in script
+    assert "virtio_pci" in script and "virtio_scsi" in script
+
+
+def test_non_physical_linux_fixup_has_no_initramfs_step():
+    from app.models.virtual_machine import OSType
+    from app.services.adapter.guestfish_job import _fixup_script_for_os
+    script = _fixup_script_for_os(OSType.LINUX, is_physical=False)
+    assert "update-initramfs -u" not in script
+    assert "serial-getty@ttyS0" in script
+
+
+def test_windows_fixup_ignores_physical_flag():
+    from app.models.virtual_machine import OSType
+    from app.services.adapter.guestfish_job import _fixup_script_for_os
+    script = _fixup_script_for_os(OSType.WINDOWS, is_physical=True)
+    assert "virt-v2v-in-place" in script
