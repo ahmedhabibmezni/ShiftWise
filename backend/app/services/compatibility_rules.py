@@ -9,7 +9,7 @@ Each rule returns a dict:
         "passed":   bool,
         "severity": str,    # "BLOCKER" | "WARNING" | "INFO"
         "message":  str,    # human-readable explanation
-        "weight":   int,    # contribution to the compatibility score
+        "weight":   int,    # penalty subtracted from 100 when the rule FAILS
     }
 
 Grading rules (applied by :func:`aggregate`):
@@ -17,7 +17,8 @@ Grading rules (applied by :func:`aggregate`):
   - else any failed WARNING          → PARTIAL
   - else                              → COMPATIBLE
 
-Score = 100 * (sum of passed weights) / (sum of all weights), rounded.
+Penalty model: score = 100 − Σ(weight of each FAILED rule).
+A passed rule subtracts nothing. ``weight`` is the pipeline intervention cost.
 
 This module is the single source of truth for labels used by
 :mod:`app.ml.synthetic_data` — re-using :func:`evaluate_all` + :func:`aggregate`
@@ -129,6 +130,11 @@ _UNKNOWN_OS_HINTS = {
     "ovirt": "oVirt os_type via reported_devices — guest agent requis",
 }
 
+# Sources whose guests are already virtio-based (NIC + block) — no NIC/driver
+# adaptation needed for KubeVirt. Everything else (VMware, Hyper-V, bare-metal)
+# presents non-virtio hardware to the guest and requires the Adapter stage.
+_VIRTIO_NATIVE_HYPERVISORS = ("kvm", "proxmox", "ovirt")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,7 +216,7 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": f"OS type UNKNOWN ({hint}) — migration possible mais vérification manuelle recommandée",
-            "weight": 30,
+            "weight": 10,
         }
 
     soft_hv = htype in _UNKNOWN_OS_SOFT_HYPERVISORS
@@ -226,14 +232,14 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
                         "passed": False,
                         "severity": SEVERITY_BLOCKER,
                         "message": f"{distro} {actual} en dessous du minimum supporté ({min_major}+)",
-                        "weight": 30,
+                        "weight": 40,
                     }
                 return {
                     "id": "os_supported",
                     "passed": True,
                     "severity": SEVERITY_BLOCKER,
                     "message": f"Distribution Linux supportée: {distro}",
-                    "weight": 30,
+                    "weight": 40,
                 }
         # Distro not recognised. On hypervisors with optional/heuristic OS reporting
         # (Hyper-V, KVM, Proxmox, oVirt) this is commonly a generic kernel string
@@ -248,14 +254,14 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
                 "passed": False,
                 "severity": SEVERITY_WARNING,
                 "message": f"Distribution Linux non reconnue: {label} ({hint}) — vérification manuelle recommandée",
-                "weight": 30,
+                "weight": 10,
             }
         return {
             "id": "os_supported",
             "passed": False,
             "severity": SEVERITY_BLOCKER,
             "message": f"Distribution Linux non reconnue: {combined or 'inconnue'}",
-            "weight": 30,
+            "weight": 40,
         }
 
     if os_type == "windows":
@@ -266,14 +272,14 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
                     "passed": True,
                     "severity": SEVERITY_BLOCKER,
                     "message": f"Windows supporté: {supported}",
-                    "weight": 30,
+                    "weight": 40,
                 }
         return {
             "id": "os_supported",
             "passed": False,
             "severity": SEVERITY_BLOCKER,
             "message": f"Version Windows non supportée: {combined or 'inconnue'}",
-            "weight": 30,
+            "weight": 40,
         }
 
     # os_type empty/other on a soft hypervisor — typically a VM with no guest
@@ -287,7 +293,7 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": f"Type d'OS non renseigné: {os_type or 'vide'} ({hint}) — VM sans OS ou guest agent absent",
-            "weight": 30,
+            "weight": 10,
         }
 
     # os_type other/unknown on a hypervisor that *does* report OS info
@@ -296,7 +302,7 @@ def rule_os_supported(vm: Dict[str, Any]) -> Dict[str, Any]:
         "passed": False,
         "severity": SEVERITY_BLOCKER,
         "message": f"Type d'OS non supporté: {os_type or 'inconnu'}",
-        "weight": 30,
+        "weight": 40,
     }
 
 
@@ -313,7 +319,7 @@ def rule_cpu_min(vm: Dict[str, Any]) -> Dict[str, Any]:
             if passed
             else f"vCPU insuffisant: {cpu} (minimum 1)"
         ),
-        "weight": 10,
+        "weight": 40,
     }
 
 
@@ -331,7 +337,7 @@ def rule_memory_min(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_BLOCKER,
             "message": f"RAM insuffisante: {mem} MB (< 512 MB)",
-            "weight": 15,
+            "weight": 40,
         }
     if mem < 1024:
         return {
@@ -339,14 +345,14 @@ def rule_memory_min(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": f"RAM faible: {mem} MB (< 1024 MB recommandé)",
-            "weight": 15,
+            "weight": 10,
         }
     return {
         "id": "memory_min",
         "passed": True,
         "severity": SEVERITY_BLOCKER,
         "message": f"RAM: {mem} MB ≥ 1024 MB",
-        "weight": 15,
+        "weight": 40,
     }
 
 
@@ -365,7 +371,7 @@ def rule_disk_min(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": "disk_gb=0 (artefact KVM — qemu-img info n'a pas retourné virtual-size)",
-            "weight": 10,
+            "weight": 5,
         }
     if disk < 10:
         return {
@@ -373,14 +379,14 @@ def rule_disk_min(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": f"Disque faible: {disk} GB (< 10 GB recommandé)",
-            "weight": 10,
+            "weight": 5,
         }
     return {
         "id": "disk_min",
         "passed": True,
         "severity": SEVERITY_WARNING,
         "message": f"Disque: {disk} GB ≥ 10 GB",
-        "weight": 10,
+        "weight": 5,
     }
 
 
@@ -398,7 +404,7 @@ def rule_disk_format(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_BLOCKER,
             "message": f"Format disque non migrable: {fmt} (média d'installation)",
-            "weight": 20,
+            "weight": 40,
         }
     if fmt in _CONVERTIBLE_FORMATS:
         return {
@@ -406,7 +412,7 @@ def rule_disk_format(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": f"Format disque convertible: {fmt} → qcow2 via qemu-img",
-            "weight": 20,
+            "weight": 15,
         }
     if fmt in _NATIVE_FORMATS:
         return {
@@ -414,49 +420,79 @@ def rule_disk_format(vm: Dict[str, Any]) -> Dict[str, Any]:
             "passed": True,
             "severity": SEVERITY_BLOCKER,
             "message": f"Format disque natif KubeVirt: {fmt}",
-            "weight": 20,
+            "weight": 15,
         }
     return {
         "id": "disk_format",
         "passed": False,
         "severity": SEVERITY_WARNING,
         "message": f"Format disque inconnu: {fmt or 'non déterminé'}",
+        "weight": 15,
+    }
+
+
+def rule_guest_adaptation(vm: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Guest hardware/network adaptation for KubeVirt.
+
+    KubeVirt presents a virtio NIC (enp1s0/ens2). A guest from a virtio-native
+    source (KVM/Proxmox/oVirt) already matches; anything else (VMware ens33/eth0,
+    Hyper-V synthetic NIC, bare-metal physical NICs) needs the Adapter stage to
+    rewrite the network config, enable the serial console and relabel SELinux.
+    """
+    htype = _norm(vm.get("hypervisor_type"))
+    if htype in _VIRTIO_NATIVE_HYPERVISORS:
+        return {
+            "id": "guest_adaptation",
+            "passed": True,
+            "severity": SEVERITY_WARNING,
+            "message": "Source virtio-native: aucune adaptation invité requise",
+            "weight": 20,
+        }
+    return {
+        "id": "guest_adaptation",
+        "passed": False,
+        "severity": SEVERITY_WARNING,
+        "message": "Adaptation invité requise (reconfig NIC virtio, console série, relabel SELinux)",
         "weight": 20,
     }
 
 
-def rule_drivers_virtio(vm: Dict[str, Any]) -> Dict[str, Any]:
+def rule_driver_injection(vm: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Driver availability (inferred — guest tools data is often absent).
+    virtio driver injection requirement.
 
-    Linux guests: virtio-net / virtio-blk are in the mainline kernel since 2.6.25;
-    assumed present. Windows guests: virtio drivers must be injected at migration
-    time — surfaced as a WARNING so the migration engine knows to run virt-v2v or
-    inject the Fedora virtio-win ISO.
+    - Windows guests: virtio-win must be injected (virt-v2v).
+    - Physical Linux (P2V): the bare-metal initramfs has no virtio modules — they
+      must be regenerated (dracut / update-initramfs), else the guest panics
+      looking for its root disk under KubeVirt.
+    - Linux from a virtualized source: virtio already in the running kernel/initramfs.
     """
     os_type = _norm(vm.get("os_type"))
-    if os_type == "linux":
-        return {
-            "id": "drivers_virtio",
-            "passed": True,
-            "severity": SEVERITY_WARNING,
-            "message": "Linux: virtio-net / virtio-blk supposés présents (kernel mainline)",
-            "weight": 5,
-        }
+    htype = _norm(vm.get("hypervisor_type"))
+
     if os_type == "windows":
         return {
-            "id": "drivers_virtio",
+            "id": "driver_injection",
             "passed": False,
             "severity": SEVERITY_WARNING,
             "message": "Windows: injection virtio-win requise lors de la migration",
-            "weight": 5,
+            "weight": 15,
+        }
+    if os_type == "linux" and htype == "physical":
+        return {
+            "id": "driver_injection",
+            "passed": False,
+            "severity": SEVERITY_WARNING,
+            "message": "Source physique: injection virtio dans l'initramfs requise (dracut/update-initramfs)",
+            "weight": 15,
         }
     return {
-        "id": "drivers_virtio",
-        "passed": False,
+        "id": "driver_injection",
+        "passed": True,
         "severity": SEVERITY_WARNING,
-        "message": "Drivers virtio: OS inconnu — vérification manuelle",
-        "weight": 5,
+        "message": "Drivers virtio déjà présents (invité virtualisé)",
+        "weight": 15,
     }
 
 
@@ -470,7 +506,8 @@ _RULE_FUNCTIONS = (
     rule_memory_min,
     rule_disk_min,
     rule_disk_format,
-    rule_drivers_virtio,
+    rule_guest_adaptation,
+    rule_driver_injection,
 )
 
 
@@ -481,25 +518,27 @@ def evaluate_all(vm: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def aggregate(rules: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Derive the grade, numeric score, blocker list and warning list from the
-    rule results.
+    Derive grade, numeric score, blocker list and warning list.
+
+    Penalty model: score = 100 − Σ(weight of each FAILED rule). A passed rule
+    subtracts nothing. ``weight`` is therefore the penalty a rule costs when its
+    intervention is required. Grade: any failed BLOCKER → INCOMPATIBLE; else any
+    failed WARNING → PARTIAL; else COMPATIBLE.
     """
     blockers: List[str] = []
     warnings: List[str] = []
-    total_weight = 0
-    passed_weight = 0
+    penalty = 0
 
     for rule in rules:
-        total_weight += rule["weight"]
         if rule["passed"]:
-            passed_weight += rule["weight"]
             continue
+        penalty += rule["weight"]
         if rule["severity"] == SEVERITY_BLOCKER:
             blockers.append(rule["message"])
         elif rule["severity"] == SEVERITY_WARNING:
             warnings.append(rule["message"])
 
-    score = round(100 * passed_weight / total_weight) if total_weight else 0
+    score = max(0, 100 - penalty)
 
     if blockers:
         grade = GRADE_INCOMPATIBLE
