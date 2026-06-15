@@ -24,6 +24,7 @@ from app.core.config import settings
 from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus
 from app.services.compatibility_rules import aggregate, evaluate_all
 from app.services.feature_extractor import FEATURE_NAMES, rules_features, to_vector
+from app.services.strategy import recommend_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,15 @@ class AnalyzerService:
             "override_reason": override_reason,
         }
 
+    @classmethod
+    def _details_keys(cls) -> tuple:
+        """The keys analyze_vm writes into compatibility_details (contract)."""
+        return (
+            "score", "grade", "engine", "confidence", "model_grade",
+            "override_reason", "rules", "blockers", "warnings",
+            "recommended_strategy", "analyzed_at",
+        )
+
     def analyze_vm(self, db: Session, vm_id: int, force: bool = False) -> Optional[Dict[str, Any]]:
         """
         Analyze a VM's compatibility. Lock the row for update to prevent
@@ -262,6 +272,11 @@ class AnalyzerService:
             decision = self._decide_grade(vm_id, vm_dict, rules_agg)
             grade = decision["grade"]
 
+            has_blocker = bool(rules_agg["blockers"])
+            recommended = recommend_strategy(
+                score=rules_agg["score"], has_blocker=has_blocker,
+            )
+
             details: Dict[str, Any] = {
                 "score": rules_agg["score"],
                 "grade": grade,
@@ -272,6 +287,7 @@ class AnalyzerService:
                 "rules": rules,
                 "blockers": rules_agg["blockers"],
                 "warnings": rules_agg["warnings"],
+                "recommended_strategy": recommended.value if recommended else None,
                 "analyzed_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -358,3 +374,7 @@ class AnalyzerService:
 def create_analyzer_service() -> AnalyzerService:
     """Factory for AnalyzerService."""
     return AnalyzerService()
+
+
+# Public alias used in tests and external callers.
+CompatibilityAnalyzer = AnalyzerService

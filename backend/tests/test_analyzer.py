@@ -519,3 +519,14 @@ class TestAnalyzerIntegration:
         # classes_[2] is "PARTIAL"; the bug read labels[2] == "INCOMPATIBLE".
         assert vm.compatibility_details["model_grade"] == "PARTIAL"
         assert vm.compatibility_details["engine"] == "model"
+
+
+def test_analyze_stores_recommended_strategy():
+    from app.services import analyzer as analyzer_mod
+    from app.services.strategy import recommend_strategy
+    from app.models.migration import MigrationStrategy
+
+    # The pure mapping is the source of truth for the value the analyzer stores.
+    assert recommend_strategy(score=100, has_blocker=False) == MigrationStrategy.DIRECT
+    # Contract: analyze_vm writes 'recommended_strategy' into compatibility_details.
+    assert "recommended_strategy" in analyzer_mod.CompatibilityAnalyzer._details_keys()
