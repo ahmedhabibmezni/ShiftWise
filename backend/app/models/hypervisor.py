@@ -30,6 +30,7 @@ class HypervisorType(str, enum.Enum):
     OVIRT = "ovirt"  # oVirt / Red Hat Virtualization (RHV)
     VIRTUALBOX = "virtualbox"  # Oracle VirtualBox
     XEN = "xen"  # Citrix XenServer / XCP-ng
+    PHYSICAL = "physical"  # Bare-metal Linux server (P2V)
     OTHER = "other"  # Autre type
 
 
