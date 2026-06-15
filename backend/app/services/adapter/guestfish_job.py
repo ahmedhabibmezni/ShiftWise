@@ -288,6 +288,7 @@ def submit_adapter_job(
     disk_index: int,
     src_relative_path: str,
     os_type: OSType = OSType.LINUX,
+    is_physical: bool = False,
     backoff_limit: int = 0,
     active_deadline_seconds: int = 30 * 60,
 ) -> str:
@@ -312,6 +313,7 @@ def submit_adapter_job(
         nfs_server=nfs_server,
         nfs_path=nfs_path,
         os_type=os_type,
+        is_physical=is_physical,
         backoff_limit=backoff_limit,
         active_deadline_seconds=active_deadline_seconds,
     )
@@ -432,6 +434,7 @@ def _build_manifest(
     backoff_limit: int,
     active_deadline_seconds: int,
     os_type: OSType = OSType.LINUX,
+    is_physical: bool = False,
 ) -> dict:
     labels = {
         _LABEL_APP: _LABEL_APP_VAL,
@@ -439,7 +442,7 @@ def _build_manifest(
         _LABEL_DISK: str(disk_index),
     }
     disk_path = f"/src/{src_relative_path.lstrip('/')}"
-    fixup_script = _fixup_script_for_os(os_type)
+    fixup_script = _fixup_script_for_os(os_type, is_physical=is_physical)
 
     return {
         "apiVersion": "batch/v1",

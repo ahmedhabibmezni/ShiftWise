@@ -414,3 +414,24 @@ def test_windows_fixup_ignores_physical_flag():
     from app.services.adapter.guestfish_job import _fixup_script_for_os
     script = _fixup_script_for_os(OSType.WINDOWS, is_physical=True)
     assert "virt-v2v-in-place" in script
+
+
+def test_build_manifest_physical_embeds_initramfs_script():
+    from app.models.virtual_machine import OSType
+    from app.services.adapter.guestfish_job import _build_manifest
+    manifest = _build_manifest(
+        namespace="shiftwise-t1",
+        job_name="shiftwise-adapt-1-d0",
+        migration_id=1,
+        disk_index=0,
+        src_relative_path="t1/outputs/grp/0.qcow2",
+        nfs_server="10.0.0.1",
+        nfs_path="/export/transit",
+        os_type=OSType.LINUX,
+        is_physical=True,
+        backoff_limit=0,
+        active_deadline_seconds=1800,
+    )
+    script = manifest["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "update-initramfs -u" in script
+    assert "virtio_blk" in script

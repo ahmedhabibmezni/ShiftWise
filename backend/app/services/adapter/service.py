@@ -30,6 +30,7 @@ from app.models.conversion import (
     ConversionJob,
     ConversionStatus,
 )
+from app.models.hypervisor import HypervisorType
 from app.models.virtual_machine import OSType
 from app.services.adapter.errors import AdapterError
 from app.services.adapter.guestfish_job import (
@@ -71,6 +72,11 @@ class AdapterService:
         # corrupt a non-Linux guest, just leaves it un-adapted).
         vm = crud_vm.get_vm(db, migration.vm_id)
         os_type = vm.os_type if vm is not None else OSType.LINUX
+        is_physical = (
+            vm is not None
+            and vm.source_hypervisor is not None
+            and vm.source_hypervisor.type == HypervisorType.PHYSICAL
+        )
 
         for i, job in enumerate(jobs, start=1):
             self._adapt_one(
@@ -80,6 +86,7 @@ class AdapterService:
                 job=job,
                 group_uuid=group.group_uuid,
                 os_type=os_type,
+                is_physical=is_physical,
             )
             crud_migration.update_migration_progress(
                 db, migration_id,
@@ -149,6 +156,7 @@ class AdapterService:
         job: ConversionJob,
         group_uuid: str,
         os_type: OSType,
+        is_physical: bool = False,
     ) -> None:
         job_name = adapter_job_name(migration_id, job.disk_index)
         # Path on transit, relative to the NFS mount root.
@@ -162,6 +170,7 @@ class AdapterService:
             disk_index=job.disk_index,
             src_relative_path=rel,
             os_type=os_type,
+            is_physical=is_physical,
             active_deadline_seconds=settings.ADAPTER_TIMEOUT,
         )
 
