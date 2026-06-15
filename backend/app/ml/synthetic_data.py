@@ -69,6 +69,10 @@ _WINDOWS_UNSUPPORTED = [
 
 _HYPERVISORS = ("vmware_workstation", "hyper_v", "kvm", "vsphere", "proxmox", "ovirt", "physical")
 
+# Virtio-native sources need no guest adaptation — only these can be truly
+# COMPATIBLE (score 100) under the intervention-based rules engine.
+_VIRTIO_NATIVE = ("kvm", "proxmox", "ovirt")
+
 
 def _base_custom_metadata(hypervisor_type: str, power: str, rng: random.Random) -> Dict[str, Any]:
     """Mirror the connector audit: only VMware WS sets vmx_path + tools_state."""
@@ -113,13 +117,11 @@ def _make_sample(
 
 def _gen_compatible(rng: random.Random) -> Dict[str, Any]:
     os_type, os_name, os_version = rng.choice(_LINUX_SAMPLES + _WINDOWS_SUPPORTED)
-    # Native-format hypervisors (KVM, Proxmox, oVirt default to qcow2; physical
-    # P2V captures raw) are weighted up for the COMPATIBLE class; VMware /
-    # Hyper-V would trigger the convertible-format warning and belong in
-    # _gen_partial instead.
-    hypervisor_type = rng.choices(
-        _HYPERVISORS, weights=[1, 1, 4, 1, 4, 4, 4], k=1
-    )[0]
+    # Only virtio-native sources (KVM/Proxmox/oVirt) can be truly COMPATIBLE:
+    # every other source needs guest adaptation (NIC→virtio) which the
+    # intervention-based rules engine scores as a warning → PARTIAL. Physical
+    # also needs initramfs virtio injection, so it belongs in _gen_partial.
+    hypervisor_type = rng.choice(_VIRTIO_NATIVE)
     cpu = rng.randint(2, 16)
     memory = rng.choice([2048, 4096, 8192, 16384, 32768])
     disk = rng.randint(20, 500)
