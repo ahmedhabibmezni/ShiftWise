@@ -14,6 +14,7 @@ from app.services.converter.protocol import DiskPuller
 from app.services.converter.connectors.hyperv import HyperVPuller
 from app.services.converter.connectors.kvm import KvmPuller
 from app.services.converter.connectors.ovirt import OvirtPuller
+from app.services.converter.connectors.physical import PhysicalPuller
 from app.services.converter.connectors.proxmox import ProxmoxPuller
 from app.services.converter.connectors.vmware_workstation import VmwareWorkstationPuller
 from app.services.converter.connectors.vsphere import VsphereStubPuller
@@ -25,6 +26,7 @@ _REGISTRY: dict[HypervisorType, type[DiskPuller]] = {
     HypervisorType.VMWARE_WORKSTATION: VmwareWorkstationPuller,
     HypervisorType.HYPER_V: HyperVPuller,
     HypervisorType.OVIRT: OvirtPuller,
+    HypervisorType.PHYSICAL: PhysicalPuller,
     HypervisorType.VSPHERE: VsphereStubPuller,
     # ESXi standalone hosts register under either enum value; both use the
     # same pyVmomi/datastore connector.

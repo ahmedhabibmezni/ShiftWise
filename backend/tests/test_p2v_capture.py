@@ -108,3 +108,12 @@ def test_physical_puller_conforms_to_protocol():
     from app.services.converter.connectors.physical import PhysicalPuller
     p: DiskPuller = PhysicalPuller()
     assert all(hasattr(p, m) for m in ("list_disks", "pull_disk", "convert_on_source"))
+
+
+def test_registry_returns_physical_puller():
+    from app.models.hypervisor import HypervisorType
+    from app.services.converter.connectors import get_puller
+    from app.services.converter.connectors.physical import PhysicalPuller
+
+    puller = get_puller(HypervisorType.PHYSICAL)
+    assert isinstance(puller, PhysicalPuller)
