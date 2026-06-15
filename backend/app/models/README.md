@@ -165,7 +165,7 @@ All enums are string enums (`str, enum.Enum`). Exact members:
 
 | Enum | Values |
 |------|--------|
-| `HypervisorType` | `VSPHERE`, `VMWARE_WORKSTATION`, `VMWARE_ESXi`, `HYPER_V`, `KVM`, `PROXMOX`, `OVIRT`, `VIRTUALBOX`, `XEN`, `OTHER` |
+| `HypervisorType` | `VSPHERE`, `VMWARE_WORKSTATION`, `VMWARE_ESXi`, `HYPER_V`, `KVM`, `PROXMOX`, `OVIRT`, `VIRTUALBOX`, `XEN`, `PHYSICAL`, `OTHER` |
 | `HypervisorStatus` | `ACTIVE`, `INACTIVE`, `ERROR`, `UNREACHABLE`, `AUTHENTICATING`, `DISCOVERING`, `UNKNOWN` |
 | `VMStatus` | `DISCOVERED`, `ANALYZING`, `COMPATIBLE`, `INCOMPATIBLE`, `PARTIAL`, `MIGRATING`, `MIGRATED`, `FAILED`, `ARCHIVED` |
 | `CompatibilityStatus` | `COMPATIBLE`, `PARTIAL`, `INCOMPATIBLE`, `UNKNOWN` |

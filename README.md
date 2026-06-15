@@ -50,7 +50,7 @@
 
 ## 🎯 Overview
 
-**ShiftWise** is an intelligent platform that automates the migration of virtual machines from heterogeneous hypervisor environments (VMware vSphere, VMware Workstation, libvirt/KVM, Microsoft Hyper-V, Proxmox VE, oVirt/RHV) to **Red Hat OpenShift Virtualization**. It combines automated discovery, AI-driven compatibility analysis, disk format conversion, guest-OS adaptation, and orchestrated migration execution into a single, unified workflow.
+**ShiftWise** is an intelligent platform that automates the migration of virtual machines from heterogeneous hypervisor environments (VMware vSphere/ESXi, VMware Workstation, libvirt/KVM, Microsoft Hyper-V, Proxmox VE, oVirt/RHV) — **and bare-metal Linux servers (P2V)** — to **Red Hat OpenShift Virtualization**. It combines automated discovery, AI-driven compatibility analysis, disk format conversion, guest-OS adaptation, and orchestrated migration execution into a single, unified workflow.
 
 The platform addresses the critical challenges organizations face when modernizing legacy VM workloads: migration failures, excessive manual intervention, and prolonged downtime windows.
 
@@ -60,11 +60,11 @@ The platform addresses the critical challenges organizations face when modernizi
 ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
 │ DISCOVERY  │─▶│  ANALYZER  │─▶│ CONVERTER  │─▶│  ADAPTER   │─▶│  MIGRATOR  │─▶│ REPORTING  │
 │            │  │            │  │            │  │            │  │            │  │            │
-│ Auto-      │  │ Hybrid     │  │ VMDK/VHD → │  │ Guest-OS   │  │ PVC        │  │ Status,    │
-│ detect VMs │  │ rules + ML │  │ QCOW2 via  │  │ fixup via  │  │ populate + │  │ history &  │
-│ from 6     │  │ compat.    │  │ qemu-img   │  │ libguestfs │  │ KubeVirt   │  │ CSV        │
-│ hypervisor │  │ scoring    │  │ K8s Jobs   │  │ (DHCP,     │  │ VM create  │  │ export     │
-│ types      │  │ (0–100%)   │  │            │  │ console)   │  │ & verify   │  │            │
+│ Auto-      │  │ Hybrid     │  │ VMDK/VHD/  │  │ Guest-OS   │  │ PVC        │  │ Status,    │
+│ detect VMs │  │ rules + ML │  │ raw →QCOW2 │  │ fixup via  │  │ populate + │  │ history &  │
+│ from 7     │  │ compat.    │  │ via        │  │ libguestfs │  │ KubeVirt   │  │ CSV        │
+│ source     │  │ scoring +  │  │ qemu-img   │  │ (DHCP,     │  │ VM create  │  │ export     │
+│ types      │  │ strategy   │  │ K8s Jobs   │  │ console)   │  │ & verify   │  │            │
 └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
 ```
 
@@ -77,10 +77,10 @@ The pipeline is orchestrated asynchronously by Celery workers backed by Redis.
 | Objective | Description |
 |-----------|-------------|
 | **Reduce Migration Failures** | AI-driven compatibility analysis pre-validates VM configurations before migration |
-| **Minimize Downtime** | Strategy selection (direct, conversion, cold, warm, hybrid, auto) based on workload characteristics |
+| **Minimize Downtime** | Strategy auto-selection (direct, conversion, cold, warm, hybrid, auto) derived from the compatibility score |
 | **Eliminate Manual Effort** | Automated disk conversion, guest-OS adaptation, and orchestration via Celery |
-| **Ensure Compatibility** | Guest-OS fixup (multi-stack DHCP, serial console, SELinux relabel) so migrated VMs boot correctly on KubeVirt |
-| **Multi-Hypervisor Support** | Unified discovery across VMware vSphere/Workstation, libvirt/KVM, Hyper-V, Proxmox VE, and oVirt/RHV |
+| **Ensure Compatibility** | Guest-OS fixup (multi-stack DHCP, serial console, SELinux relabel, P2V virtio-initramfs regeneration) so migrated VMs boot correctly on KubeVirt |
+| **Multi-Source Support** | Unified discovery across VMware vSphere/ESXi/Workstation, libvirt/KVM, Hyper-V, Proxmox VE, oVirt/RHV, and bare-metal Linux (P2V) |
 
 ---
 
@@ -384,10 +384,10 @@ curl http://localhost:8000/health
 | **RBAC System** | ✅ Complete | 4 system roles (`super_admin`, `admin`, `user`, `viewer`) + custom roles, permission matrix |
 | **KubeVirt Client** | ✅ Complete | 3 connection modes: `kubeconfig`, `incluster`, `custom` |
 | **Cluster Connectivity** | ✅ Complete | DB-backed per-tenant cluster connection config (Infrastructure page) — dynamic kubeconfig upload / mode switch / live test, replacing the static `scp` + restart workflow |
-| **Discovery** | ✅ Complete | Real connectors for VMware Workstation, Hyper-V, KVM, Proxmox VE, oVirt/RHV (vSphere: stub) |
-| **Analyzer** | ✅ Complete | Hybrid rule engine + scikit-learn classifier, 0–100% compatibility score |
-| **Converter** | ✅ Complete | VMDK/VHD → QCOW2 via qemu-img Kubernetes Jobs on NFS transit |
-| **Adapter** | ✅ Complete | Guest-OS fixup (multi-stack DHCP, serial console, SELinux relabel) via libguestfs |
+| **Discovery** | ✅ Complete | Real connectors for VMware Workstation, vSphere/ESXi (pyVmomi), Hyper-V, KVM, Proxmox VE, oVirt/RHV, and physical Linux (P2V) over SSH |
+| **Analyzer** | ✅ Complete | Hybrid rule engine + scikit-learn classifier, intervention-based 0–100 score + auto migration-strategy selection |
+| **Converter** | ✅ Complete | VMDK/VHD/raw → QCOW2 via qemu-img Kubernetes Jobs on NFS transit (incl. P2V `dd\|gzip` raw capture) |
+| **Adapter** | ✅ Complete | Guest-OS fixup (multi-stack DHCP, serial console, SELinux relabel, P2V virtio-initramfs) via libguestfs |
 | **Migrator** | ✅ Complete | PVC populate (NFS-direct qemu-img Job) + KubeVirt VM create/start/verify |
 | **Celery Orchestration** | ✅ Complete | Redis-backed asynchronous migration pipeline |
 | **OpenShift Deployment** | ✅ Complete | One-command deploy (`backend/openshift/deploy.sh`) |

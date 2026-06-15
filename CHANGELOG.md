@@ -13,10 +13,13 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 ### ✨ Added
 
-- **Discovery Service** — real VM discovery connectors: VMware Workstation (`vmrun` + VMX scan), Hyper-V (PowerShell over SSH), libvirt/KVM (paramiko SSH + `virsh`), Proxmox VE (REST API), oVirt/RHV (engine SDK). vSphere remains a stub — no test environment available.
-- **Analyzer Module** — hybrid compatibility scoring: rule-based feature extraction feeding a scikit-learn classifier; 0–100% score from `predict_proba()`; analyze endpoints under `/api/v1/vms`.
-- **Converter Module** — disk format conversion (VMDK/VHD → QCOW2) via `qemu-img` Kubernetes Jobs on an NFS transit zone; `/api/v1/conversions` router for job tracking.
-- **Adapter Module** — guest-OS fixup via libguestfs/`virt-customize`: multi-stack DHCP configuration, serial-console enablement, SELinux relabel. Runs as a Kubernetes Job between the Converter and Migrator stages.
+- **Discovery Service** — real VM discovery connectors: VMware Workstation (`vmrun` + VMX scan), vSphere/ESXi (`pyVmomi` `SmartConnect`), Hyper-V (PowerShell over SSH), libvirt/KVM (paramiko SSH + `virsh`), Proxmox VE (REST API), oVirt/RHV (engine SDK), and physical Linux (P2V) over SSH.
+- **Physical server (P2V) source** — migrate a bare-metal Linux host (no hypervisor, no disk image) to OpenShift Virtualization. New `HypervisorType.PHYSICAL` (migration `d1f8274d5e22`); SSH discovery collecting host facts + an `lsblk` block-device plan; a `PhysicalPuller` converter connector that captures each device as a `dd | gzip` raw stream over SSH; an adapter branch that regenerates the guest initramfs with virtio drivers (a bare-metal initramfs has none and would panic on KubeVirt's virtio bus).
+- **Real vSphere/ESXi connector** — replaced the previous fake-data vSphere stub with a `pyVmomi` `SmartConnect` implementation working against standalone ESXi (discovery + test-connection + disk conversion; `VMWARE_ESXi` routed through the same connector).
+- **Analyzer Module** — hybrid compatibility scoring: rule-based feature extraction feeding a scikit-learn classifier; **intervention-based 0–100 score** (`100 − Σ penalties`, each failing rule weighted by the pipeline work it implies); analyze endpoints under `/api/v1/vms`.
+- **Auto migration-strategy selection** — `services/strategy.py:recommend_strategy` maps the compatibility score to a `MigrationStrategy` band (≥90 `DIRECT`, ≥70 `CONVERSION`, ≥50 `HYBRID`, else `COLD`); persisted as `recommended_strategy` and applied automatically when a migration is created (fallback `AUTO`).
+- **Converter Module** — disk format conversion (VMDK/VHD/raw → QCOW2) via `qemu-img` Kubernetes Jobs on an NFS transit zone; `/api/v1/conversions` router for job tracking.
+- **Adapter Module** — guest-OS fixup via libguestfs/`virt-customize`: multi-stack DHCP configuration, serial-console enablement, SELinux relabel, and P2V virtio-initramfs regeneration. Runs as a Kubernetes Job between the Converter and Migrator stages.
 - **Migrator Module** — PVC populate (NFS-direct `qemu-img` Job) and KubeVirt VirtualMachine creation, start, and verification; tenant namespace auto-creation; opt-in per-tenant ResourceQuota.
 - **Celery + Redis orchestration** — asynchronous, durable migration pipeline wired to `POST /api/v1/migrations/{id}/start`.
 - **OpenShift deployment** — `backend/openshift/` manifests (PostgreSQL, Redis, transit PVC, backend, Celery workers, Flower, RBAC, SCC) and a one-command idempotent `deploy.sh`.

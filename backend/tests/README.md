@@ -17,8 +17,14 @@ Test coverage for the ShiftWise backend API, services, and migration pipeline. C
 | `test_kubevirt_client.py` | KubeVirt client connection modes |
 | `test_analyzer.py` | Compatibility rules engine, feature extractor, model degraded mode |
 | `test_analyzer_live.py` | Analyzer integration against a live model artifact |
-| `test_converter.py` | Conversion plan, Kubernetes Job manifests, error catalog |
-| `test_adapter.py` | Adapter error catalog, Job manifests, orchestration (K8s mocked) |
+| `test_compatibility_scoring.py` | Intervention-based scoring (`100 − Σ penalties`), incl. physical (P2V) driver-injection rule |
+| `test_strategy.py` | Score → `MigrationStrategy` band mapping (`recommend_strategy`) |
+| `test_migration_auto_strategy.py` | Auto strategy selection at migration creation (fallback `AUTO`) |
+| `test_converter.py` | Conversion plan, Kubernetes Job manifests, error catalog (incl. vSphere + P2V raw cases) |
+| `test_p2v_capture.py` | Physical (P2V) `dd\|gzip` raw capture + gunzip-to-file streaming |
+| `test_adapter.py` | Adapter error catalog, Job manifests, orchestration (K8s mocked), P2V initramfs branch |
+| `test_discovery_physical.py` | Physical (P2V) SSH fact collection + `lsblk` disk plan |
+| `test_discovery_vsphere.py` | vSphere/ESXi `pyVmomi` discovery mapping (getattr fakes) |
 | `test_migrator.py` | PVC sizing, VM manifest, `MigratorService` (K8s mocked) |
 | `test_migrator_p1.py` | Transit-NFS discovery, namespace lifecycle, error classification |
 | `test_namespace_quota.py` | Opt-in per-tenant `ResourceQuota` |
