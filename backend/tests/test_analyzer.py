@@ -322,6 +322,26 @@ class TestFeatureExtraction:
         v2 = extract_vector(vm)
         assert v1 == v2
 
+    def test_physical_hypervisor_one_hot_column_exists(self):
+        """A physical (P2V) source must light up its own one-hot column,
+        not collapse to 'other'/'unknown'."""
+        assert "hypervisor_type_physical" in FEATURE_NAMES
+        from app.services.feature_extractor import rules_features
+        feats = rules_features({
+            "cpu_cores": 4, "memory_mb": 8192, "disk_gb": 100,
+            "os_type": "linux", "os_name": "Debian GNU/Linux", "os_version": "13",
+            "hypervisor_type": "physical",
+        })
+        assert feats["hypervisor_type_physical"] == 1
+        assert feats["hypervisor_type_other"] == 0
+        assert feats["hypervisor_type_unknown"] == 0
+
+    def test_physical_disk_format_inferred_raw(self):
+        """Physical P2V captures raw images → native format, no convert warning."""
+        verdict = rule_disk_format({"hypervisor_type": "physical"})
+        assert verdict["passed"] is True
+        assert "raw" in verdict["message"].lower()
+
 
 # ---------------------------------------------------------------------------
 # Integration Tests

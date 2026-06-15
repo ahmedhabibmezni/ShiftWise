@@ -112,6 +112,9 @@ _HYPERVISOR_DEFAULT_FORMAT = {
     # oVirt / RHV: thin-provisioned disks are qcow2, preallocated are raw. Default
     # to qcow2 — both are native KubeVirt formats, so the grade is identical.
     "ovirt": "qcow2",
+    # Physical server (P2V): the connector captures each block device as a raw
+    # image via `dd`. raw is a native KubeVirt format — no conversion warning.
+    "physical": "raw",
 }
 
 # Hypervisors whose connectors may report os_type == "unknown" because the guest

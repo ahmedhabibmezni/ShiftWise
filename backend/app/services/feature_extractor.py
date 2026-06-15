@@ -49,6 +49,7 @@ _HYPERVISOR_TYPES = (
     "kvm",
     "proxmox",
     "ovirt",
+    "physical",
     "other",
     "unknown",
 )
