@@ -75,3 +75,36 @@ def test_stream_gunzip_to_file(tmp_path):
     assert dest.read_bytes() == payload
     assert sha == hashlib_sha(payload)
     assert progress
+
+
+def test_local_raw_to_qcow2_invokes_qemu_img(tmp_path, monkeypatch):
+    from app.services.converter.connectors import physical
+
+    raw = tmp_path / "0.raw"
+    raw.write_bytes(b"x" * 4096)
+    out = tmp_path / "0.qcow2"
+
+    calls = {}
+
+    def fake_run(cmd, check, capture_output, text):
+        calls["cmd"] = cmd
+        out.write_bytes(b"qcow2-bytes")
+        class _R:
+            returncode = 0
+            stderr = ""
+        return _R()
+
+    monkeypatch.setattr(physical.subprocess, "run", fake_run)
+    physical._local_raw_to_qcow2(raw, out)
+
+    assert calls["cmd"][:3] == ["qemu-img", "convert", "-O"]
+    assert "qcow2" in calls["cmd"]
+    assert "-c" in calls["cmd"]
+    assert out.exists()
+
+
+def test_physical_puller_conforms_to_protocol():
+    from app.services.converter.protocol import DiskPuller
+    from app.services.converter.connectors.physical import PhysicalPuller
+    p: DiskPuller = PhysicalPuller()
+    assert all(hasattr(p, m) for m in ("list_disks", "pull_disk", "convert_on_source"))

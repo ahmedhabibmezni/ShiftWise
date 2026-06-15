@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import shlex
+import shutil
+import subprocess
 import zlib
 from pathlib import Path
 from typing import List, Optional
@@ -26,6 +28,7 @@ from app.models.virtual_machine import VirtualMachine
 from app.services.converter.errors import ConversionError
 from app.services.converter.protocol import (
     DiskDescriptor,
+    DiskPuller,
     ProgressCallback,
     PullResult,
 )
@@ -97,6 +100,34 @@ def _stream_gunzip_to_file(
             cause=e,
         ) from e
     return h.hexdigest()
+
+
+def _sha256_of(path: Path, chunk: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _local_raw_to_qcow2(raw_path: Path, out_path: Path) -> None:
+    """Convert a local staged ``.raw`` into a compressed sparse qcow2."""
+    if shutil.which("qemu-img") is None:
+        raise ConversionError(
+            "ERR_TOOL_NOT_FOUND", "qemu-img not found in worker image",
+        )
+    cmd = [
+        "qemu-img", "convert", "-O", "qcow2", "-c",
+        str(raw_path), str(out_path),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise ConversionError(
+            "ERR_OUTPUT_INVALID",
+            f"qemu-img convert failed (rc={result.returncode}): {result.stderr}",
+        )
+    if not out_path.exists() or out_path.stat().st_size <= 0:
+        raise ConversionError("ERR_OUTPUT_INVALID", "qemu-img produced no output")
 
 
 def _ssh_connect(hv: Hypervisor):
@@ -187,4 +218,44 @@ class PhysicalPuller:
             sha256=sha256,
         )
 
-    # convert_on_source implemented in the next task.
+    def convert_on_source(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        target_format: str = "qcow2",
+        cold: bool = True,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> PullResult:
+        """Stream the raw to worker scratch, then qemu-img convert -> qcow2.
+
+        The physical source has no qemu-img (POSIX-minimal), so unlike the
+        Proxmox/KVM connectors the conversion runs on the worker, mirroring the
+        VMware Workstation pull-then-convert connector.
+        """
+        if target_format != "qcow2":
+            raise ConversionError(
+                "ERR_OUTPUT_INVALID",
+                f"physical connector only produces qcow2, got {target_format!r}",
+            )
+        raw_tmp = dest_path.with_suffix(".raw")
+        try:
+            self.pull_disk(
+                hv, vm, descriptor, raw_tmp, cold=cold, progress_cb=progress_cb,
+            )
+            _local_raw_to_qcow2(raw_tmp, dest_path)
+            sha256 = _sha256_of(dest_path)
+        finally:
+            raw_tmp.unlink(missing_ok=True)
+        return PullResult(
+            staged_path=dest_path,
+            source_format=SourceFormat.QCOW2,
+            size_bytes=dest_path.stat().st_size,
+            sha256=sha256,
+        )
+
+
+# Structural conformance check (Protocol) — kept explicit for readers.
+_: DiskPuller = PhysicalPuller()
