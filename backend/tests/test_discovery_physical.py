@@ -1,6 +1,6 @@
 from app.models.hypervisor import HypervisorType
 from app.models.virtual_machine import CompatibilityStatus, OSType
-from app.services.discovery import _parse_lsblk_disks, _build_physical_vm_dict
+from app.services.discovery import _parse_lsblk_disks, _build_physical_vm_dict, DiscoveryService
 
 
 def test_physical_hypervisor_type_exists():
@@ -72,3 +72,39 @@ def test_build_physical_vm_dict_synthetic_uuid_fallback():
              "uuid": "", "os_name": "Linux", "os_version": "N/A"}
     vm = _build_physical_vm_dict(facts, [])
     assert vm["source_uuid"] == "physical-no-dmi-host"
+
+
+def test_collect_physical_facts_single_vm():
+    responses = {
+        "hostname": ("debian-p2v", "", 0),
+        "os-release": ('NAME="Debian GNU/Linux"\nVERSION_ID="13"', "", 0),
+        "nproc": ("4", "", 0),
+        "MemTotal": ("MemTotal:        8192000 kB", "", 0),
+        "product_uuid": ("a8584d56-0dd7-0fa8-f32b-f33d4daae164", "", 0),
+        "findmnt": ("/dev/sda1", "", 0),
+        "lsblk": ('{"blockdevices":[{"name":"sda","size":8589934592,"type":"disk",'
+                  '"mountpoint":null,"children":[{"name":"sda1","size":8587837440,'
+                  '"type":"part","mountpoint":"/"}]},'
+                  '{"name":"sdb","size":4294967296,"type":"disk","mountpoint":null}]}',
+                  "", 0),
+        "ip -j": ('[{"ifname":"ens33","addr_info":[{"local":"192.168.1.14"}],'
+                  '"address":"52:54:00:aa:bb:cc"}]', "", 0),
+    }
+
+    def fake_run(cmd: str):
+        for key, val in responses.items():
+            if key in cmd:
+                return val
+        return ("", "", 0)
+
+    svc = DiscoveryService.__new__(DiscoveryService)
+    vms = svc._collect_physical_facts(fake_run)
+    assert len(vms) == 1
+    vm = vms[0]
+    assert vm["name"] == "debian-p2v"
+    assert vm["cpu_cores"] == 4
+    assert vm["memory_mb"] == 8000
+    assert vm["os_name"] == "Debian GNU/Linux"
+    assert vm["source_uuid"] == "a8584d560dd70fa8f32bf33d4daae164"
+    assert vm["ip_address"] == "192.168.1.14"
+    assert len(vm["physical_disks"]) == 2

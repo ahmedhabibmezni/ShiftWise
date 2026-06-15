@@ -965,6 +965,49 @@ def _build_physical_vm_dict(
     }
 
 
+def _safe_int(value: str, *, default: int = 0) -> int:
+    try:
+        return int((value or "").strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def _grep_meminfo(line: str) -> int:
+    """Extract the kB integer from a ``MemTotal:  8192000 kB`` line."""
+    parts = (line or "").split()
+    for token in parts:
+        if token.isdigit():
+            return int(token)
+    return 0
+
+
+def _parse_os_release(text: str) -> tuple:
+    """Return (NAME, VERSION_ID) from /etc/os-release content."""
+    name, version = "N/A", "N/A"
+    for raw in (text or "").splitlines():
+        if raw.startswith("NAME="):
+            name = raw.split("=", 1)[1].strip().strip('"')
+        elif raw.startswith("VERSION_ID="):
+            version = raw.split("=", 1)[1].strip().strip('"')
+    return name, version
+
+
+def _parse_ip_json(ip_json: str) -> tuple:
+    """Return (first non-loopback IPv4, its MAC) from ``ip -j addr`` output."""
+    try:
+        ifaces = json.loads(ip_json) if ip_json.strip() else []
+    except (ValueError, TypeError):
+        return None, None
+    for iface in ifaces:
+        if iface.get("ifname") == "lo":
+            continue
+        for addr in iface.get("addr_info") or []:
+            local = addr.get("local")
+            if local and not local.startswith("127."):
+                return local, iface.get("address")
+    return None, None
+
+
 # ============================================================================
 # Hyper-V helpers
 # ============================================================================
@@ -1374,6 +1417,8 @@ class DiscoveryService:
                 vms_data = self._discover_proxmox(hypervisor)
             elif hypervisor.type == HypervisorType.OVIRT:
                 vms_data = self._discover_ovirt(hypervisor)
+            elif hypervisor.type == HypervisorType.PHYSICAL:
+                vms_data = self._discover_physical(hypervisor)
             else:
                 raise DiscoveryError(f"Type d'hypervisor non supporté: {hypervisor.type}")
 
@@ -1436,6 +1481,8 @@ class DiscoveryService:
                 vms = self._discover_proxmox(hypervisor)
             elif hypervisor.type == HypervisorType.OVIRT:
                 vms = self._discover_ovirt(hypervisor)
+            elif hypervisor.type == HypervisorType.PHYSICAL:
+                vms = self._discover_physical(hypervisor)
             else:
                 return {
                     "success": False,
@@ -1954,6 +2001,97 @@ class DiscoveryService:
                 connection.close()
             except Exception:
                 pass
+
+    def _collect_physical_facts(self, run) -> List[Dict[str, Any]]:
+        """Run read-only fact commands via ``run`` and build the host VM dict.
+
+        ``run(cmd) -> (stdout, stderr, rc)``. Split from :meth:`_discover_physical`
+        so it can be unit-tested with a fake runner (no live SSH).
+        """
+        hostname = (run("hostname -f")[0] or run("hostname")[0] or "unknown").strip()
+
+        os_release = run("cat /etc/os-release")[0]
+        os_name, os_version = _parse_os_release(os_release)
+
+        cpu_cores = _safe_int(run("nproc")[0], default=1)
+        mem_total_kb = _grep_meminfo(run("grep MemTotal /proc/meminfo")[0])
+        memory_mb = mem_total_kb // 1024
+
+        uuid = run("cat /sys/class/dmi/id/product_uuid")[0].strip()
+        boot_source = run("findmnt -n -o SOURCE /")[0].strip()
+        lsblk_json = run("lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINT")[0]
+        disks = _parse_lsblk_disks(lsblk_json, boot_source) if lsblk_json.strip() else []
+
+        ip_json = run("ip -j addr")[0]
+        ip_address, mac_address = _parse_ip_json(ip_json)
+
+        facts = {
+            "hostname": hostname,
+            "os_name": os_name,
+            "os_version": os_version,
+            "cpu_cores": cpu_cores,
+            "memory_mb": memory_mb,
+            "uuid": uuid,
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+        }
+        return [_build_physical_vm_dict(facts, disks)]
+
+    def _discover_physical(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
+        """Discover a physical Linux server (P2V) over SSH.
+
+        connection_config keys:
+          ssh_key_path  — optional private key path (falls back to
+                          settings.KVM_SSH_KEY_PATH, then agent/~/.ssh).
+        Password auth via the credential vault (hypervisor.password_plain) is
+        also supported. Returns exactly one VM dict representing the host.
+        """
+        import warnings as _warnings
+        import paramiko
+        from app.core.config import settings
+        from app.core.ssh import apply_host_key_policy
+
+        cfg: Dict[str, Any] = hypervisor.connection_config or {}
+        ssh_host = hypervisor.host or ""
+        ssh_user = hypervisor.username or "root"
+        ssh_key_path: Optional[str] = (
+            cfg.get("ssh_key_path") or settings.KVM_SSH_KEY_PATH or None
+        )
+        password = hypervisor.password_plain or None
+
+        logger.info(f"Physical P2V SSH: {ssh_user}@{ssh_host}")
+
+        def _run(cmd: str):
+            _, stdout, stderr = client.exec_command(cmd, timeout=20)
+            rc = stdout.channel.recv_exit_status()
+            out = stdout.read().decode("utf-8", errors="replace").strip()
+            err = stderr.read().decode("utf-8", errors="replace").strip()
+            return out, err, rc
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            client = paramiko.SSHClient()
+            apply_host_key_policy(client)  # Audit H-02
+            try:
+                client.connect(
+                    ssh_host,
+                    port=hypervisor.port or 22,
+                    username=ssh_user,
+                    password=password,
+                    key_filename=ssh_key_path,
+                    timeout=15,
+                    look_for_keys=True,
+                )
+            except Exception as exc:
+                client.close()  # Audit E8 — avoid transport/thread leak
+                raise DiscoveryError(
+                    f"SSH physical connection failed ({ssh_user}@{ssh_host}): {exc}"
+                ) from None
+
+        try:
+            return self._collect_physical_facts(_run)
+        finally:
+            client.close()
 
     @staticmethod
     def _ovirt_disk_gb(vm_svc, disks_service, vm) -> int:
