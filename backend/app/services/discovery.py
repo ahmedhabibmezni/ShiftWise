@@ -928,6 +928,43 @@ def _parse_lsblk_disks(lsblk_json: str, boot_source: str) -> List[Dict[str, Any]
     return disks
 
 
+def _build_physical_vm_dict(
+    facts: Dict[str, Any],
+    disks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Assemble a ShiftWise VM dict for a physical host from collected facts.
+
+    UUID strategy (stable, mirrors Proxmox/oVirt): DMI ``product_uuid`` →
+    fallback synthetic ``physical-{hostname}``. The DMI UUID is normalised to
+    32-char lowercase no-dash like the KVM/oVirt connectors.
+    """
+    hostname = (facts.get("hostname") or "unknown").strip()
+    uuid_raw = (facts.get("uuid") or "").replace("-", "").lower().strip()
+    source_uuid = uuid_raw if uuid_raw else f"physical-{hostname}"
+
+    total_bytes = sum(int(d.get("size_bytes") or 0) for d in disks)
+    disk_gb = max(0, -(-total_bytes // 1_073_741_824))  # ceil-div to GiB
+
+    return {
+        "source_uuid":          source_uuid,
+        "source_name":          hostname,
+        "name":                 hostname,
+        "cpu_cores":            int(facts.get("cpu_cores") or 1),
+        "memory_mb":            int(facts.get("memory_mb") or 0),
+        "disk_gb":              disk_gb,
+        "os_type":              OSType.LINUX,
+        "os_version":           facts.get("os_version") or "N/A",
+        "os_name":              facts.get("os_name") or "N/A",
+        "ip_address":           facts.get("ip_address"),
+        "mac_address":          facts.get("mac_address"),
+        "hostname":             hostname,
+        "power_state":          "running",
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+        # Per-disk capture plan consumed by PhysicalPuller.list_disks.
+        "physical_disks":       disks,
+    }
+
+
 # ============================================================================
 # Hyper-V helpers
 # ============================================================================
