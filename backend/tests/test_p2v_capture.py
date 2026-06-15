@@ -42,3 +42,36 @@ def test_build_capture_command_quotes_device():
 def test_build_capture_command_rejects_injection():
     cmd = build_capture_command("/dev/sda; rm -rf /")
     assert cmd.startswith("dd if='/dev/sda; rm -rf /'")
+
+
+import gzip as _gzip
+
+
+def hashlib_sha(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_stream_gunzip_to_file(tmp_path):
+    from app.services.converter.connectors.physical import _stream_gunzip_to_file
+
+    payload = b"SHIFTWISE-RAW-DISK-CONTENT" * 1000
+    compressed = _gzip.compress(payload)
+
+    class _Chan:
+        def __init__(self, data): self._buf = data
+        def read(self, n=-1):
+            if not self._buf:
+                return b""
+            take, self._buf = self._buf[:7], self._buf[7:]
+            return take
+
+    dest = tmp_path / "0.raw"
+    progress = []
+    sha = _stream_gunzip_to_file(
+        _Chan(compressed), dest, expected_size=len(payload),
+        progress_cb=lambda d, t: progress.append((d, t)),
+    )
+    assert dest.read_bytes() == payload
+    assert sha == hashlib_sha(payload)
+    assert progress
