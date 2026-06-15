@@ -254,7 +254,8 @@ class _FakeRunner:
         self.submitted = []
 
     def submit_qemu_img(self, *, job_name, group_uuid, disk_index,
-                        input_path, output_path, target_format):
+                        input_path, output_path, target_format,
+                        source_format=""):
         self.submitted.append(("qemu", job_name, input_path, output_path))
         if self.succeed:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -918,3 +919,85 @@ class TestVsphereConnector:
 
         assert _is_flat_backing(flat) is True
         assert _is_flat_backing(sesparse) is False
+
+
+# ---------------------------------------------------------------------------
+# qemu-img command builder — source-format flag
+# ---------------------------------------------------------------------------
+
+class TestQemuImgConvertCmd:
+    """Unit-test the pure command-builder so K8s is never involved.
+
+    The helper ``_qemu_img_convert_cmd`` must insert ``-f raw`` into the
+    command when ``source_format="raw"`` and must leave the command
+    byte-for-byte unchanged for every other value (including omitted /
+    empty string / qcow2 / vmdk / vhd).
+    """
+
+    def _cmd(self, target_format="qcow2", input_path="/in/0.raw",
+             output_path="/out/0.qcow2", source_format=""):
+        from app.services.converter.k8s_jobs import _qemu_img_convert_cmd
+        return _qemu_img_convert_cmd(
+            target_format=target_format,
+            input_path=input_path,
+            output_path=output_path,
+            source_format=source_format,
+        )
+
+    # --- raw: must include -f raw -------------------------------------------
+
+    def test_raw_source_inserts_f_flag(self):
+        cmd = self._cmd(source_format="raw")
+        assert "-f" in cmd
+        f_idx = cmd.index("-f")
+        assert cmd[f_idx + 1] == "raw"
+
+    def test_raw_source_f_flag_is_before_input_path(self):
+        cmd = self._cmd(source_format="raw")
+        f_idx = cmd.index("-f")
+        in_idx = cmd.index("/in/0.raw")
+        assert f_idx < in_idx
+
+    def test_raw_source_uppercase_treated_as_raw(self):
+        """Case-insensitive: 'RAW' must also trigger -f."""
+        cmd = self._cmd(source_format="RAW")
+        assert "-f" in cmd
+
+    # --- non-raw: command must be identical to no-source_format call --------
+
+    def test_no_source_format_no_f_flag(self):
+        cmd = self._cmd(source_format="")
+        assert "-f" not in cmd
+
+    def test_qcow2_source_no_f_flag(self):
+        cmd = self._cmd(source_format="qcow2")
+        assert "-f" not in cmd
+
+    def test_vmdk_source_no_f_flag(self):
+        cmd = self._cmd(source_format="vmdk")
+        assert "-f" not in cmd
+
+    def test_vhd_source_no_f_flag(self):
+        cmd = self._cmd(source_format="vhd")
+        assert "-f" not in cmd
+
+    def test_non_raw_cmd_identical_to_omitted(self):
+        """For qcow2/vmdk/vhd the produced list must equal the no-flag baseline."""
+        baseline = self._cmd(source_format="")
+        for fmt in ("qcow2", "vmdk", "vhd", "vhdx"):
+            assert self._cmd(source_format=fmt) == baseline, (
+                f"source_format={fmt!r} produced a different command than the baseline"
+            )
+
+    # --- qcow2 target: -o compat option still present -----------------------
+
+    def test_qcow2_target_keeps_compat_opts(self):
+        cmd = self._cmd(target_format="qcow2", source_format="raw")
+        assert "-o" in cmd
+        o_idx = cmd.index("-o")
+        assert "compat" in cmd[o_idx + 1]
+
+    def test_non_qcow2_target_no_compat_opts(self):
+        cmd = self._cmd(target_format="raw", source_format="raw")
+        # When target is not qcow2, the compat option value is absent.
+        assert not any("compat" in c for c in cmd)

@@ -55,6 +55,37 @@ class JobOutcome:
     container_exit_code: Optional[int]
 
 
+def _qemu_img_convert_cmd(
+    *,
+    target_format: str,
+    input_path: str,
+    output_path: str,
+    source_format: str = "",
+) -> list[str]:
+    """Build the ``qemu-img convert`` command list.
+
+    Adds ``-f <source_format>`` only when *source_format* is ``"raw"``
+    (case-insensitive).  For every other value the produced command is
+    byte-for-byte identical to the no-flag baseline, preserving backward
+    compatibility with existing connectors that stage qcow2/vmdk/vhd files
+    whose magic headers are reliably auto-detected by qemu-img.
+
+    RAW disk images produced by ``dd | gzip`` → gunzip lack a magic header
+    (the first sector is a filesystem superblock) so auto-detection is
+    unreliable and must be suppressed with an explicit ``-f raw``.
+    """
+    src_flag: list[str] = ["-f", source_format] if source_format.lower() == "raw" else []
+    cmd = [
+        "qemu-img", "convert", "-p",
+        *src_flag,
+        "-O", target_format,
+        "-o", "compat=1.1,cluster_size=65536" if target_format == "qcow2" else "",
+        input_path, output_path,
+    ]
+    # Drop empty -o argument when not qcow2.
+    return [c for c in cmd if c != ""]
+
+
 class ConversionJobRunner:
     """Submit + observe Kubernetes Jobs that perform disk conversion."""
 
@@ -75,22 +106,26 @@ class ConversionJobRunner:
         input_path: str,
         output_path: str,
         target_format: str,
+        source_format: str = "",
         backoff_limit: int = 0,        # we manage retries at the DB layer
         active_deadline_seconds: int = 6 * 3600,  # 6h hard cap
     ) -> str:
-        """Submit a Job that runs ``qemu-img convert -p -O <fmt> <in> <out>``.
+        """Submit a Job that runs ``qemu-img convert -p [-f <src_fmt>] -O <fmt> <in> <out>``.
+
+        ``source_format`` is only passed through to the command when it equals
+        ``"raw"`` (case-insensitive).  All other values leave the command
+        unchanged so existing connectors (KVM, Proxmox, vSphere, oVirt, Hyper-V,
+        VMware Workstation) that stage qcow2/vmdk/vhd files are unaffected.
 
         Returns the submitted Job name. Both input and output paths must lie
         inside the mounted transit PVC.
         """
-        cmd = [
-            "qemu-img", "convert", "-p",
-            "-O", target_format,
-            "-o", "compat=1.1,cluster_size=65536" if target_format == "qcow2" else "",
-            input_path, output_path,
-        ]
-        # Drop empty -o argument when not qcow2
-        cmd = [c for c in cmd if c != ""]
+        cmd = _qemu_img_convert_cmd(
+            target_format=target_format,
+            input_path=input_path,
+            output_path=output_path,
+            source_format=source_format,
+        )
         return self._submit_job(
             job_name=job_name,
             group_uuid=group_uuid,

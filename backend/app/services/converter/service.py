@@ -475,6 +475,7 @@ class ConverterService:
                 input_path=str(in_path),
                 output_path=str(out_path),
                 target_format=_TARGET_EXTENSION[job.target_format],
+                source_format=job.source_format.value,
             )
         elif job.tool == ConversionTool.VIRT_V2V:
             runner.submit_virt_v2v(
