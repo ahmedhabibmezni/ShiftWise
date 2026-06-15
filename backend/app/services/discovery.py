@@ -2381,6 +2381,12 @@ class DiscoveryService:
                 if k in vm_data
             } or None,
         )
+        # P2V: carry the per-disk capture plan so the converter connector
+        # (PhysicalPuller.list_disks) can enumerate block devices later.
+        if vm_data.get("physical_disks") is not None:
+            existing = dict(vm.custom_metadata or {})
+            existing["physical_disks"] = vm_data["physical_disks"]
+            vm.custom_metadata = existing
         return vm
 
     def _update_vm_from_discovery(
@@ -2467,6 +2473,10 @@ class DiscoveryService:
         # Merge live hypervisor metadata
         meta_keys = ("power_state", "vmx_path", "tools_state")
         new_meta = {k: vm_data[k] for k in meta_keys if k in vm_data}
+        # P2V: refresh the per-disk capture plan when present so the converter
+        # connector (PhysicalPuller.list_disks) always sees the current layout.
+        if vm_data.get("physical_disks") is not None:
+            new_meta["physical_disks"] = vm_data["physical_disks"]
         if new_meta:
             current_meta = vm.custom_metadata or {}
             merged = {**current_meta, **new_meta}

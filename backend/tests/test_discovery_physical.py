@@ -1,6 +1,21 @@
-from app.models.hypervisor import HypervisorType
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.models.base import Base
+from app.models.hypervisor import HypervisorType, HypervisorStatus
 from app.models.virtual_machine import CompatibilityStatus, OSType
 from app.services.discovery import _parse_lsblk_disks, _build_physical_vm_dict, DiscoveryService
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    s = Session()
+    yield s
+    s.close()
 
 
 def test_physical_hypervisor_type_exists():
@@ -108,3 +123,100 @@ def test_collect_physical_facts_single_vm():
     assert vm["source_uuid"] == "a8584d560dd70fa8f32bf33d4daae164"
     assert vm["ip_address"] == "192.168.1.14"
     assert len(vm["physical_disks"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# DB-level tests: physical_disks persisted into custom_metadata
+# ---------------------------------------------------------------------------
+
+def test_save_physical_vm_persists_disk_plan(db_session):
+    from app.models.hypervisor import Hypervisor
+    from app.models.virtual_machine import VirtualMachine
+
+    hv = Hypervisor(
+        name="bare-metal-1", type=HypervisorType.PHYSICAL,
+        host="192.168.1.14", username="root", tenant_id="t1",
+        status=HypervisorStatus.ACTIVE,
+    )
+    db_session.add(hv)
+    db_session.commit()
+
+    disks = [
+        {"name": "sda", "device": "/dev/sda", "size_bytes": 8589934592, "is_boot": True},
+        {"name": "sdb", "device": "/dev/sdb", "size_bytes": 4294967296, "is_boot": False},
+    ]
+    vm_dict = {
+        "source_uuid": "a8584d560dd70fa8f32bf33d4daae164",
+        "source_name": "debian-p2v",
+        "name": "debian-p2v",
+        "cpu_cores": 4,
+        "memory_mb": 8000,
+        "disk_gb": 12,
+        "os_type": OSType.LINUX,
+        "os_version": "13",
+        "os_name": "Debian GNU/Linux",
+        "ip_address": "192.168.1.14",
+        "mac_address": "52:54:00:aa:bb:cc",
+        "hostname": "debian-p2v",
+        "power_state": "running",
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+        "physical_disks": disks,
+    }
+
+    svc = DiscoveryService(db_session)
+    svc._save_discovered_vms(hv, [vm_dict])
+
+    vm = db_session.query(VirtualMachine).filter_by(
+        source_uuid="a8584d560dd70fa8f32bf33d4daae164"
+    ).one()
+    assert vm.custom_metadata is not None
+    assert vm.custom_metadata["physical_disks"] == disks
+
+
+def test_rediscover_physical_vm_updates_disk_plan(db_session):
+    """Rediscovery (UPDATE path) must also refresh physical_disks in custom_metadata."""
+    from app.models.hypervisor import Hypervisor
+    from app.models.virtual_machine import VirtualMachine
+
+    hv = Hypervisor(
+        name="bare-metal-2", type=HypervisorType.PHYSICAL,
+        host="192.168.1.15", username="root", tenant_id="t2",
+        status=HypervisorStatus.ACTIVE,
+    )
+    db_session.add(hv)
+    db_session.commit()
+
+    initial_disks = [
+        {"name": "sda", "device": "/dev/sda", "size_bytes": 8589934592, "is_boot": True},
+    ]
+    vm_dict = {
+        "source_uuid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_name": "ubuntu-p2v",
+        "name": "ubuntu-p2v",
+        "cpu_cores": 2,
+        "memory_mb": 4096,
+        "disk_gb": 8,
+        "os_type": OSType.LINUX,
+        "os_version": "22.04",
+        "os_name": "Ubuntu",
+        "ip_address": "192.168.1.15",
+        "power_state": "running",
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+        "physical_disks": initial_disks,
+    }
+
+    svc = DiscoveryService(db_session)
+    svc._save_discovered_vms(hv, [vm_dict])
+
+    # Second discovery with an updated disk list (a new disk was added)
+    updated_disks = [
+        {"name": "sda", "device": "/dev/sda", "size_bytes": 8589934592, "is_boot": True},
+        {"name": "sdc", "device": "/dev/sdc", "size_bytes": 2147483648, "is_boot": False},
+    ]
+    vm_dict["physical_disks"] = updated_disks
+    svc._save_discovered_vms(hv, [vm_dict])
+
+    vm = db_session.query(VirtualMachine).filter_by(
+        source_uuid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ).one()
+    assert vm.custom_metadata["physical_disks"] == updated_disks
