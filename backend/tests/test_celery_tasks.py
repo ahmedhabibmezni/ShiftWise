@@ -61,7 +61,8 @@ class _FakePuller:
 
 class _FakeRunner:
     def submit_qemu_img(self, *, job_name, group_uuid, disk_index,
-                        input_path, output_path, target_format):
+                        input_path, output_path, target_format,
+                        source_format=""):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(Path(input_path).read_bytes())
         return job_name
