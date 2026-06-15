@@ -887,6 +887,48 @@ def _parse_kvm_domain_xml(
 
 
 # ============================================================================
+# Physical server (P2V) helpers
+# ============================================================================
+
+_PHYSICAL_DEV_PREFIX = "/dev/"
+
+
+def _parse_lsblk_disks(lsblk_json: str, boot_source: str) -> List[Dict[str, Any]]:
+    """Parse ``lsblk -b -J`` output into a list of disk descriptors.
+
+    Only ``type == 'disk'`` devices are returned (rom/loop excluded). The disk
+    whose partition tree contains ``boot_source`` (the device backing ``/``) is
+    flagged ``is_boot`` and hoisted to index 0 — the converter treats index 0 as
+    the bootable disk by convention.
+    """
+    data = json.loads(lsblk_json)
+    boot_dev = boot_source.strip()
+
+    def _contains_boot(node: Dict[str, Any]) -> bool:
+        dev = f"{_PHYSICAL_DEV_PREFIX}{node.get('name', '')}"
+        if dev == boot_dev:
+            return True
+        for child in node.get("children") or []:
+            if f"{_PHYSICAL_DEV_PREFIX}{child.get('name', '')}" == boot_dev:
+                return True
+        return False
+
+    disks: List[Dict[str, Any]] = []
+    for node in data.get("blockdevices") or []:
+        if node.get("type") != "disk":
+            continue
+        disks.append({
+            "name": node.get("name", ""),
+            "device": f"{_PHYSICAL_DEV_PREFIX}{node.get('name', '')}",
+            "size_bytes": int(node.get("size") or 0),
+            "is_boot": _contains_boot(node),
+        })
+
+    disks.sort(key=lambda d: (not d["is_boot"], d["name"]))
+    return disks
+
+
+# ============================================================================
 # Hyper-V helpers
 # ============================================================================
 
