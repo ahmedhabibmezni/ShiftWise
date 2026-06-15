@@ -1,0 +1,44 @@
+from app.models.conversion import SourceFormat
+from app.services.converter.connectors.physical import (
+    PhysicalPuller,
+    build_capture_command,
+)
+
+
+class _VM:
+    def __init__(self, disks):
+        self.custom_metadata = {"physical_disks": disks}
+        self.name = "debian-p2v"
+
+
+def test_list_disks_from_plan():
+    vm = _VM([
+        {"name": "sda", "device": "/dev/sda", "size_bytes": 8589934592, "is_boot": True},
+        {"name": "sdb", "device": "/dev/sdb", "size_bytes": 4294967296, "is_boot": False},
+    ])
+    descriptors = PhysicalPuller().list_disks(hv=None, vm=vm)
+    assert len(descriptors) == 2
+    assert descriptors[0].disk_index == 0
+    assert descriptors[0].locator == "/dev/sda"
+    assert descriptors[0].source_format == SourceFormat.RAW
+    assert descriptors[0].size_bytes == 8589934592
+    assert descriptors[1].locator == "/dev/sdb"
+
+
+def test_list_disks_empty_plan_raises():
+    import pytest
+    from app.services.converter.errors import ConversionError
+    with pytest.raises(ConversionError) as exc:
+        PhysicalPuller().list_disks(hv=None, vm=_VM([]))
+    assert exc.value.code == "ERR_DISK_NOT_FOUND"
+
+
+def test_build_capture_command_quotes_device():
+    cmd = build_capture_command("/dev/sda")
+    assert "dd if=/dev/sda bs=4M" in cmd
+    assert "gzip -1" in cmd
+
+
+def test_build_capture_command_rejects_injection():
+    cmd = build_capture_command("/dev/sda; rm -rf /")
+    assert cmd.startswith("dd if='/dev/sda; rm -rf /'")
