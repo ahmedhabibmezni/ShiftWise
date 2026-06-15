@@ -115,6 +115,24 @@ def list_migrations(
     )
 
 
+def _auto_strategy_for_vm(vm) -> MigrationStrategy:
+    """Strategy chosen automatically from the analyzer score.
+
+    Reads ``recommended_strategy`` persisted by the analyzer in
+    ``compatibility_details``. Falls back to AUTO if the VM was never analyzed
+    (should not happen — ``can_migrate`` requires a non-UNKNOWN verdict) or the
+    stored value is not a valid strategy.
+    """
+    details = getattr(vm, "compatibility_details", None) or {}
+    raw = details.get("recommended_strategy")
+    if not raw:
+        return MigrationStrategy.AUTO
+    try:
+        return MigrationStrategy(raw)
+    except ValueError:
+        return MigrationStrategy.AUTO
+
+
 @router.post("", response_model=MigrationResponse, status_code=status.HTTP_201_CREATED)
 def create_migration(
         migration_data: MigrationCreate,
@@ -171,12 +189,18 @@ def create_migration(
             detail=f"VM {vm.id} a déjà une migration active (ID: {active_migration.id})"
         )
 
+    # Strategy is selected automatically from the analyzer compatibility score —
+    # never from the client. The migration pipeline is unaffected; this records
+    # the platform's decision.
+    data = migration_data.model_dump(exclude_unset=True)
+    data["strategy"] = _auto_strategy_for_vm(vm)
+
     # Créer la migration — namespace imposé par le tenant, non configurable par le client
     migration = crud_migration.create_migration(
         db,
-        data=migration_data.model_dump(exclude_unset=True),
+        data=data,
         tenant_id=current_user.tenant_id,
-        target_namespace=f"shiftwise-{current_user.tenant_id}"
+        target_namespace=f"shiftwise-{current_user.tenant_id}",
     )
 
     return MigrationResponse.model_validate(migration)
