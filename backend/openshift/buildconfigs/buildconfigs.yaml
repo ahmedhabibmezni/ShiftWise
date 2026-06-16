@@ -1,0 +1,200 @@
+# ShiftWise — in-cluster image builds (OpenShift BuildConfig)
+#
+# Purpose: build the container images ON the cluster, so no Docker is needed on
+# the developer laptop (Hyper-V off → Docker Desktop dead). The build pods pull
+# the Git source, run a Docker-strategy build of the committed Dockerfiles, and
+# push to the internal OpenShift registry as ImageStreams.
+#
+# Image topology (mirrors backend/openshift/base + CLAUDE.md "single image"):
+#   shiftwise-backend-api  (backend/Dockerfile)        — slim API/Flower/db-init
+#                                                         base, NO guest tooling
+#   shiftwise-backend      (backend/Dockerfile.worker) — = API image + qemu-img
+#                                                         + libguestfs + kernel.
+#                                                         This is the ONE image
+#                                                         every backend workload
+#                                                         (backend, worker, db-
+#                                                         init, flower) AND the
+#                                                         adapter/populator Jobs
+#                                                         run from — hence it
+#                                                         must carry guest tools.
+#   shiftwise-frontend     (frontend/Dockerfile)       — nginx + built SPA
+#
+# The worker build is CHAINED: Dockerfile.worker is `FROM ${API_IMAGE}`, so it
+# consumes the api ImageStream produced by the first build (build-arg + an
+# imageChange trigger so bumping the API rebuilds the worker automatically).
+#
+# Usage:
+#   oc apply -n shiftwise -f backend/openshift/buildconfigs/buildconfigs.yaml
+#   # private repo only — create the Git auth secret first (see README.md):
+#   #   oc -n shiftwise create secret generic shiftwise-git-auth \
+#   #     --from-literal=username=<gh-user> --from-literal=password=<gh-PAT> \
+#   #     --type=kubernetes.io/basic-auth
+#   #   oc -n shiftwise annotate secret shiftwise-git-auth \
+#   #     'build.openshift.io/source-secret-match-uri-1=https://github.com/*'
+#   oc -n shiftwise start-build shiftwise-backend-api --follow
+#   oc -n shiftwise start-build shiftwise-backend --follow   # auto-fires on api too
+#   oc -n shiftwise start-build shiftwise-frontend --follow
+#
+# Consuming the built images: the base manifests reference
+# docker.io/dida1609/shiftwise-backend:latest. To run the in-cluster builds
+# instead, repoint the deployments at the internal registry — see README.md
+# (kustomize `images:` override; no base edit required). The ImageStreams set
+# lookupPolicy.local so a bare `shiftwise-backend:latest` reference resolves
+# locally.
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: shiftwise-backend-api
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: backend-api
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: shiftwise-backend
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: backend-worker
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: shiftwise-frontend
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: frontend
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: shiftwise-backend-api
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: backend-api
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/ahmedhabibmezni/ShiftWise.git
+      ref: develop
+    contextDir: backend
+    # Comment out `sourceSecret` if the repository is public.
+    sourceSecret:
+      name: shiftwise-git-auth
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: shiftwise-backend-api:latest
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  triggers:
+    - type: ConfigChange
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: shiftwise-backend
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: backend-worker
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/ahmedhabibmezni/ShiftWise.git
+      ref: develop
+    contextDir: backend
+    sourceSecret:
+      name: shiftwise-git-auth
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile.worker
+      buildArgs:
+        # Chain on the api image built above (internal registry service DNS).
+        - name: API_IMAGE
+          value: image-registry.openshift-image-registry.svc:5000/shiftwise/shiftwise-backend-api:latest
+        # Windows guest support: flip to "true" AFTER auditing the virtio-win
+        # license (downloads the ~700 MB ISO into the image). Default off keeps
+        # the build Linux-only — see backend/Dockerfile.worker.
+        - name: INSTALL_VIRTIO_WIN
+          value: "false"
+  output:
+    to:
+      kind: ImageStreamTag
+      name: shiftwise-backend:latest
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  triggers:
+    - type: ConfigChange
+    # Rebuild the worker whenever the api base image is rebuilt.
+    - type: ImageChange
+      imageChange:
+        from:
+          kind: ImageStreamTag
+          name: shiftwise-backend-api:latest
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: shiftwise-frontend
+  labels:
+    app.kubernetes.io/part-of: shiftwise
+    app.kubernetes.io/component: frontend
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/ahmedhabibmezni/ShiftWise.git
+      ref: develop
+    contextDir: frontend
+    sourceSecret:
+      name: shiftwise-git-auth
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: shiftwise-frontend:latest
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  triggers:
+    - type: ConfigChange
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
