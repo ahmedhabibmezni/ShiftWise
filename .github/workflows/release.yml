@@ -78,9 +78,13 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund
 
+      # `tsc -b` (not `tsc --noEmit`): the root tsconfig.json is solution-style
+      # (`files: []` + project references), so `tsc --noEmit` resolves no input
+      # files and silently passes. `-b` builds the referenced projects and is
+      # the only invocation that actually type-checks the SPA. Mirrors ci.yml.
       - name: frontend typecheck
         working-directory: frontend
-        run: npx tsc --noEmit
+        run: npx tsc -b --pretty false
 
       - name: frontend lint
         working-directory: frontend

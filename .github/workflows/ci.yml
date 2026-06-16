@@ -80,8 +80,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # `tsc -b` (not `tsc --noEmit`): the root tsconfig.json is solution-style
+      # (`files: []` + project references), so `tsc --noEmit` resolves no
+      # input files and silently passes. `-b` builds the referenced app/node
+      # projects and is the only invocation that actually type-checks the SPA.
       - name: TypeScript typecheck
-        run: npx tsc --noEmit --pretty false
+        run: npx tsc -b --pretty false
 
       - name: Vitest
         run: npx vitest run
