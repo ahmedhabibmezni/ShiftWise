@@ -150,7 +150,7 @@ describe("HypervisorCreateDrawer", () => {
     const user = userEvent.setup();
     renderDrawer();
 
-    const portInput = screen.getByLabelText(/^port$/i) as HTMLInputElement;
+    const portInput = screen.getByLabelText<HTMLInputElement>(/^port$/i);
     expect(portInput.value).toBe("22");
 
     await user.selectOptions(screen.getByLabelText(/^type$/i), "proxmox");

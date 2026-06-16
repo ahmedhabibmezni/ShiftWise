@@ -87,6 +87,7 @@ export function CommandPalette() {
     // Depend on the stable `.mutate` reference, not the `logoutMutation`
     // object — TanStack Query returns a fresh result object every render,
     // so depending on it would defeat the memo entirely.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: see comment above; the full object would re-create commands every render.
     [go, theme, toggle, logoutMutation.mutate],
   );
 

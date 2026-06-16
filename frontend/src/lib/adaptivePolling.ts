@@ -75,7 +75,6 @@ export function nextAdaptiveInterval(
     // Surface backend / frontend drift loudly. The poll falls through to
     // the standard decay (INITIAL_POLL_MS on a fresh state, decaying
     // toward MAX_POLL_MS) so a typo never silently freezes the UI.
-    // eslint-disable-next-line no-console
     console.warn(
       `nextAdaptiveInterval: unknown migration status ${JSON.stringify(
         input.status,

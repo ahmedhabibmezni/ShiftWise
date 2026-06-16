@@ -647,7 +647,7 @@ function failedRules(
 ): DisplayRule[] {
   const fromRules = (details.rules ?? [])
     .filter((r) => !r.passed && r.severity === severity)
-    .map((r) => ({ id: r.id, severity: r.severity, message: r.message }));
+    .map((r) => ({ id: r.id, severity, message: r.message }));
   if (fromRules.length > 0) return fromRules;
 
   const messages = severity === "BLOCKER" ? details.blockers : details.warnings;

@@ -45,7 +45,7 @@ export function describeErrorOrNull(err: unknown): string | null {
 
   // Structured `{code, message}` detail (feature 002 infrastructure router).
   if (detail && typeof detail === "object" && !Array.isArray(detail)) {
-    const message = (detail as StructuredErrorDetail).message;
+    const message = detail.message;
     if (typeof message === "string" && message.length > 0) {
       return message;
     }

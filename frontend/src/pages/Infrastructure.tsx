@@ -117,7 +117,7 @@ export default function Infrastructure() {
   );
 }
 
-function HealthBadge({ status, reason }: { status: ClusterHealthStatus; reason: string | null }) {
+function HealthBadge({ status }: { status: ClusterHealthStatus; reason: string | null }) {
   return (
     <div className="flex items-center gap-2">
       <Badge variant={HEALTH_TONE[status]}>{status.replace("_", " ")}</Badge>

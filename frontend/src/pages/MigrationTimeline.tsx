@@ -55,6 +55,7 @@ export function MigrationTimeline({
   useEffect(() => {
     sinceRef.current = 0;
     intervalRef.current = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional cross-migration accumulator reset; clearing on the migrationId change is the whole point of this effect.
     setEvents([]);
   }, [migrationId]);
 
@@ -86,6 +87,7 @@ export function MigrationTimeline({
   useEffect(() => {
     const page = query.data;
     if (!page || page.items.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- merging each polled delta into the accumulator is an external-system sync (paginated audit feed); a ref-only accumulator silently dropped frames (see component header).
     setEvents((prev) => {
       const known = new Set(prev.map((e) => e.sequence_id));
       const fresh = page.items.filter((e) => !known.has(e.sequence_id));

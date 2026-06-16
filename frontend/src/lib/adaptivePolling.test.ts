@@ -8,7 +8,15 @@
  *      capped at 15 000 ms.
  *   3. A terminal status returns `false` so the client stops polling.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   INITIAL_POLL_MS,
   MAX_POLL_MS,
@@ -66,7 +74,7 @@ describe("nextAdaptiveInterval", () => {
       interval = nextAdaptiveInterval({
         status: "transferring",
         observedNewEvent: false,
-        prevInterval: interval as number,
+        prevInterval: interval,
       });
       if (interval === false) break;
     }
@@ -98,7 +106,7 @@ describe("nextAdaptiveInterval", () => {
   });
 
   describe("unknown-status guard", () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: MockInstance<(...args: unknown[]) => void>;
 
     beforeEach(() => {
       warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);

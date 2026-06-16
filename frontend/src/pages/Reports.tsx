@@ -66,8 +66,8 @@ export default function Reports() {
     staleTime: 5 * 60_000,
   });
 
-  const items = recentQuery.data?.items ?? [];
-  const vms = vmsQuery.data?.items ?? [];
+  const items = useMemo(() => recentQuery.data?.items ?? [], [recentQuery.data]);
+  const vms = useMemo(() => vmsQuery.data?.items ?? [], [vmsQuery.data]);
 
   const breakdown = useMemo(() => computeBreakdown(items), [items]);
   const csv = useMemo(() => makeCsv(items, vms), [items, vms]);

@@ -98,7 +98,7 @@ export default function Migrations() {
   });
 
   const totalPages = listQuery.data ? computeTotalPages(listQuery.data) : 1;
-  const items = listQuery.data?.items ?? [];
+  const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
   const filtersActive = !!(statusFilter || strategyFilter);
   const vmList = vmsQuery.data?.items ?? [];
 
