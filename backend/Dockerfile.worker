@@ -81,6 +81,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libguestfs-tools linux-image-amd64 \
     && rm -rf /var/lib/apt/lists/*
 
+# Windows guest support — virtio-win (OPT-IN, license-gated).
+#
+#   Le code Adapter (os_type=WINDOWS → virt-v2v-in-place) est déjà câblé et
+#   testé ; il manque uniquement l'ISO virtio-win dans l'image. L'activation
+#   est laissée à l'admin cluster APRÈS audit de la licence virtio-win (cf.
+#   note ci-dessus) — c'est pourquoi c'est un build-arg DÉSACTIVÉ par défaut :
+#
+#       docker build -f Dockerfile.worker \
+#         --build-arg API_IMAGE=<image API> \
+#         --build-arg INSTALL_VIRTIO_WIN=true \
+#         -t <worker image> .
+#
+#   Par défaut (false) : le pipeline Linux est intact et inchangé ; une
+#   migration Windows échoue côté pod avec le message explicite
+#   "virtio-win drivers not found at /usr/share/virtio-win" émis par le
+#   script Adapter. L'ISO (~700 MB) n'est téléchargée que sur opt-in.
+#
+#   L'URL pointe par défaut sur le canal stable signé Red Hat ; surchargeable
+#   via --build-arg VIRTIO_WIN_ISO_URL=... pour un miroir interne / un digest.
+ARG INSTALL_VIRTIO_WIN=false
+ARG VIRTIO_WIN_ISO_URL=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+RUN if [ "$INSTALL_VIRTIO_WIN" = "true" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends curl ca-certificates \
+        && mkdir -p /usr/share/virtio-win \
+        && curl -fSL -o /usr/share/virtio-win/virtio-win.iso "$VIRTIO_WIN_ISO_URL" \
+        && chmod 0644 /usr/share/virtio-win/virtio-win.iso \
+        && rm -rf /var/lib/apt/lists/* \
+        && echo ">>> virtio-win ISO installed at /usr/share/virtio-win (Windows guests enabled)"; \
+    else \
+        echo ">>> virtio-win NOT installed (INSTALL_VIRTIO_WIN=false) — Linux pipeline only"; \
+    fi
+
 # Les fichiers ajoutés par apt appartiennent à root:root. Tout le HOME doit
 # rester accessible au GID 0 pour l'UID arbitraire assigné par le SCC
 # OpenShift — on réapplique donc le même chmod que l'image API. /usr (où apt
