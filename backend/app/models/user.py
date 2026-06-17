@@ -10,7 +10,7 @@ Chaque utilisateur :
 - Peut partager des VMs avec d'autres utilisateurs
 """
 
-from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table, DateTime, text
+from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Table, DateTime, false, true
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -96,7 +96,7 @@ class User(BaseModel):
     is_active = Column(
         Boolean,
         default=True,
-        server_default=text("1"),
+        server_default=true(),
         nullable=False,
         comment="True si le compte est actif"
     )
@@ -104,7 +104,7 @@ class User(BaseModel):
     is_verified = Column(
         Boolean,
         default=False,
-        server_default=text("0"),
+        server_default=false(),
         nullable=False,
         comment="True si l'email a été vérifié"
     )
@@ -112,7 +112,7 @@ class User(BaseModel):
     is_superuser = Column(
         Boolean,
         default=False,
-        server_default=text("0"),
+        server_default=false(),
         nullable=False,
         comment="True si super administrateur (accès complet)"
     )

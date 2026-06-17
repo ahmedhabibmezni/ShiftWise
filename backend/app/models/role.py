@@ -10,7 +10,7 @@ Rôles prédéfinis :
 - VIEWER : Accès lecture seule
 """
 
-from sqlalchemy import Column, String, Boolean, JSON, Text, text
+from sqlalchemy import Column, String, Boolean, JSON, Text, false, true
 from sqlalchemy.orm import relationship
 
 from app.models.base import BaseModel
@@ -65,7 +65,7 @@ class Role(BaseModel):
     is_system_role = Column(
         Boolean,
         default=False,
-        server_default=text("0"),
+        server_default=false(),
         nullable=False,
         comment="True si rôle système prédéfini (non modifiable)"
     )
@@ -74,7 +74,7 @@ class Role(BaseModel):
     is_active = Column(
         Boolean,
         default=True,
-        server_default=text("1"),
+        server_default=true(),
         nullable=False,
         comment="True si le rôle est actif et peut être assigné"
     )
