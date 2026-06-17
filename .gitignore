@@ -70,6 +70,8 @@ start.txt
 scenario.txt
 security-vulnerabilities.md
 security-vulnerabilities-fix.md
+DEPLOY_RUNBOOK.md
+FRESH_INIT_BUG.md
 *.rdb
 DESIGN.md
 PRODUCT.md
