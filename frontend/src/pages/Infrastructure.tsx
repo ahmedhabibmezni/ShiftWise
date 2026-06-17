@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Panel } from "@/components/ui/Panel";
 import { Badge } from "@/components/ui/Badge";
+import { Callout } from "@/components/ui/Callout";
+import { Skeleton } from "@/components/ui/Skeleton";
 import type { BadgeVariant } from "@/components/ui/Badge";
 import { describeError } from "@/lib/errors";
 import { useAuthStore } from "@/store/auth";
@@ -117,15 +119,18 @@ export default function Infrastructure() {
   );
 }
 
-function HealthBadge({ status }: { status: ClusterHealthStatus; reason: string | null }) {
+function HealthBadge({ status, reason }: { status: ClusterHealthStatus; reason: string | null }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 min-w-0">
       <Badge variant={HEALTH_TONE[status]}>{status.replace("_", " ")}</Badge>
-      {/* {reason && (
-        <span className="text-[12px] text-[var(--text-muted)] truncate max-w-[48ch]">
+      {reason && (
+        <span
+          className="text-[12px] text-[var(--text-muted)] truncate max-w-[48ch]"
+          title={reason}
+        >
           {reason}
         </span>
-      )} */}
+      )}
     </div>
   );
 }
@@ -145,8 +150,20 @@ function ScopeEditor({
   if (scopeQuery.isLoading) {
     return (
       <Panel>
-        <p className="text-[13px] text-[var(--text-secondary)]">Loading…</p>
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
       </Panel>
+    );
+  }
+
+  if (scopeQuery.isError) {
+    return (
+      <Callout tone="err" role="alert">
+        Could not load this cluster scope. Refresh to retry.
+      </Callout>
     );
   }
 

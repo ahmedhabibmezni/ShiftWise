@@ -124,6 +124,44 @@ describe("Infrastructure page", () => {
     await waitFor(() => expect(screen.getByText(/healthy/i)).toBeInTheDocument());
   });
 
+  it("shows the cluster health reason alongside the badge", async () => {
+    server.use(
+      http.get("/api/v1/infrastructure/scopes", () => HttpResponse.json({ items: [] })),
+      http.get("/api/v1/infrastructure/platform-default", () =>
+        HttpResponse.json({
+          scope_type: "platform_default",
+          tenant_id: null,
+          using_platform_default: false,
+          config: makeConfig({
+            health_status: "unreachable",
+            health_reason: "dial tcp 10.9.21.150:6443: connect: timeout",
+          }),
+        }),
+      ),
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByText("dial tcp 10.9.21.150:6443: connect: timeout"),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("shows an error callout when the scope fails to load", async () => {
+    server.use(
+      http.get("/api/v1/infrastructure/scopes", () => HttpResponse.json({ items: [] })),
+      http.get("/api/v1/infrastructure/platform-default", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+      ),
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByText(/could not load this cluster scope/i)).toBeInTheDocument(),
+    );
+  });
+
   it("surfaces a structured error when saving fails", async () => {
     server.use(
       http.get("/api/v1/infrastructure/scopes", () => HttpResponse.json({ items: [] })),
