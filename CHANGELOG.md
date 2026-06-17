@@ -48,6 +48,8 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 - **Adapter Job created before the tenant namespace existed** (404) — the orchestrator now ensures the tenant namespace before the Adapter stage (idempotent).
 - **Adapter pod rejected by SCC** — the `nfs`-volume `shiftwise-populator` SCC was bound only to the control-plane SA; tenant namespaces now get a dedicated `shiftwise-populator` SA + SCC grant provisioned automatically.
 - **Adapter `guestfs_launch failed`** — the libguestfs appliance could not start on the nodes; the fixup now forces the TCG software-emulation backend, requires a privileged pod, and makes the staged qcow2 writable for the arbitrary OpenShift UID.
+- **Fresh-database initialization failed on PostgreSQL** — boolean columns (`roles.is_system_role`/`is_active`, `users.is_active`/`is_verified`/`is_superuser`) carried an integer `server_default` (`text("0"|"1")`), rendering `BOOLEAN DEFAULT 0` — accepted by SQLite but rejected by PostgreSQL (`DatatypeMismatch`). This broke `Base.metadata.create_all()` and therefore `bootstrap.py` / the `db-init` Job on a brand-new database. Now uses dialect-correct `false()` / `true()`; covered by a PostgreSQL-dialect DDL guard test.
+- **Infrastructure page (feature 002 UI)** — the cluster health badge rendered no reason (a `degraded` / `unreachable` / `auth_failed` verdict gave no diagnostic), and the scope editor had no error state (a 403/5xx rendered a blank panel) and used a bare text loader. Now shows `health_reason` with a tooltip, an error callout on load failure, and a skeleton loader — consistent with the rest of the SPA.
 
 ### 🧪 Dev / Demo
 

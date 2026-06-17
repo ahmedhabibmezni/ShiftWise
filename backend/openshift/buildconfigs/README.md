@@ -24,7 +24,9 @@ it must carry the guest tooling. Its build is **chained** on
 ## Prerequisites
 
 - `oc` logged in to the cluster, `KUBECONFIG` set, current project `shiftwise`.
-- The OpenShift internal registry is up (it is — `nfs-client` storage, default).
+- A push target for the built images. **Two cases:**
+  - **Internal registry available** → the `ImageStreamTag` outputs below work as-is.
+  - **Internal registry disabled** (`oc get configs.imageregistry.operator.openshift.io/cluster -o jsonpath='{.spec.managementState}'` returns `Removed`, as on the current cluster) → either re-enable it (`managementState: Managed` + storage) or repoint each BuildConfig output to an external registry (Docker Hub). See "Pushing to Docker Hub" below — that is the path used in production on this cluster.
 - **Private repo only:** a Git auth secret so the build can clone:
 
   ```bash
@@ -85,23 +87,41 @@ points at the overlay).
 > (the build produces a new image digest; the restart re-resolves the tag). For
 > deterministic deploys, consume the ImageStream by digest instead of `:latest`.
 
-## Alternative: push to Docker Hub
+## Pushing to Docker Hub (the path used on this cluster)
 
-To keep the manifests' `docker.io/...` references untouched, change each
-BuildConfig `output.to` to a `DockerImage` and attach a push secret:
+The cluster's internal registry is `Removed`, and the deployments already pull
+`docker.io/dida1609/...`, so the builds push straight to Docker Hub. Create a
+push secret and repoint each BuildConfig output to a `DockerImage`:
 
-```yaml
-output:
-  to:
-    kind: DockerImage
-    name: docker.io/dida1609/shiftwise-backend:latest
-  pushSecret:
-    name: dockerhub-push   # oc create secret docker-registry dockerhub-push ...
+```bash
+oc -n shiftwise create secret docker-registry dockerhub-push \
+  --docker-server=docker.io --docker-username=<user> --docker-password=<token>
+
+oc -n shiftwise patch bc/shiftwise-backend-api --type merge -p '{"spec":{"output":{"to":{"kind":"DockerImage","name":"docker.io/dida1609/shiftwise-backend-api:latest"},"pushSecret":{"name":"dockerhub-push"}}}}'
+# repeat for shiftwise-backend (also set the API_IMAGE build-arg to the docker.io api image) and shiftwise-frontend
 ```
 
+**Two non-obvious requirements when the internal registry is `Removed`:**
+
+1. **The build subsystem needs a docker secret on the `builder` SA** (normally
+   auto-created by the integrated registry). Without it builds fail
+   `New (CannotRetrieveServiceAccount: No docker secrets associated with build
+   service account builder)`:
+   ```bash
+   oc -n shiftwise secrets link builder dockerhub-push --for=pull,mount
+   ```
+2. **Authenticated image pulls** — nodes pulling `docker.io` anonymously hit
+   `toomanyrequests` (Docker Hub rate limit), both for build base images and the
+   deployment rollout. Link the same secret as an imagePullSecret on the runtime
+   SAs:
+   ```bash
+   for sa in shiftwise-api shiftwise-worker default; do
+     oc -n shiftwise secrets link $sa dockerhub-push --for=pull
+   done
+   ```
+
 This needs cluster egress to `docker.io` (the same path used to pull
-`postgres`/`redis`) and the registry push credentials. The internal-registry
-route above avoids both and is preferred for in-cluster builds.
+`postgres`/`redis`).
 
 ## Status / troubleshooting
 
@@ -111,7 +131,9 @@ oc -n shiftwise logs -f bc/shiftwise-backend
 oc -n shiftwise get istag        # resolved digests
 ```
 
-> **Not yet validated on the live cluster.** The Dockerfiles build locally as a
-> design but these BuildConfigs have not been run against the cluster (no
-> cluster access from the dev host). Treat the first run as a smoke test —
-> watch the build logs and the resulting `istag` digests.
+> **Validated on the live cluster (2026-06-17).** All three images built via
+> these BuildConfigs (api → worker chained → frontend) and pushed to Docker Hub;
+> the full stack rolled out and `GET /health` reports `healthy`. The internal
+> registry was `Removed`, so the Docker Hub path above (push secret + `builder`
+> SA link + runtime-SA pull secrets) was required. Deploy by **image digest**,
+> not `:latest` — `imagePullPolicy: IfNotPresent` will not re-pull a moved tag.
