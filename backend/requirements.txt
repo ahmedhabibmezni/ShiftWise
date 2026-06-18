@@ -42,7 +42,9 @@ PyJWT==2.13.0
 # `bcrypt` library directly now (app/core/security.py), so passlib is dropped
 # and bcrypt floats to a maintained release that can take future fixes.
 bcrypt>=4.2.0,<5.0.0
-python-dotenv==1.0.0
+# 1.2.2 fixes CVE-2026-28684 (set_key/unset_key follow symlinks across a
+# cross-device rename, enabling arbitrary-file overwrite).
+python-dotenv==1.2.2
 # SV-012 — pydantic bumped 2.5.3 -> 2.13.4 to match the version the suite is
 # validated against; FastAPI 0.136.3 (Starlette CVE-2025-54121 fix) requires
 # pydantic >= 2.9, and the old 2.5.3 pin never matched the working env anyway.
@@ -51,7 +53,11 @@ pydantic-settings==2.1.0
 # Audit G24 — cryptography is pinned explicitly (it is a transitive
 # dependency of paramiko); an unpinned transitive makes the build
 # non-reproducible. Bump deliberately, never implicitly.
-cryptography==44.0.0
+# 48.0.1 clears CVE-2024-12797, CVE-2026-26007, PYSEC-2026-35 and
+# GHSA-537c-gmf6-5ccf (OpenSSL-in-wheel + EC subgroup + name-constraint
+# bypass). paramiko 3.4 has no cryptography upper bound; the Fernet vault
+# uses only the stable high-level recipe API.
+cryptography==48.0.1
 
 # Utilities
 python-dateutil==2.8.2
@@ -62,8 +68,9 @@ libvirt-python==11.3.0; platform_system == "Linux"
 # Proxmox VE REST API client (password + API token auth)
 proxmoxer==2.0.1
 # SV-012 — requests 2.32.3 is vulnerable to CVE-2024-47081 (.netrc credential
-# leak to the wrong host), fixed in 2.32.4.
-requests==2.32.4
+# leak to the wrong host), fixed in 2.32.4. 2.33.0 additionally clears
+# CVE-2026-25645 (predictable temp filename in extract_zipped_paths()).
+requests==2.33.0
 # SV-012 — pin urllib3 explicitly to clear CVE-2025-50181 / CVE-2025-50182
 # (redirect/PoolManager handling, fixed in 1.26.20 and 2.5.0) and
 # CVE-2024-37891 (proxy-auth header leak on redirect, fixed in 1.26.19 /
@@ -71,6 +78,9 @@ requests==2.32.4
 # kubernetes==28.1.0 is the pinned client here and the 2.x major has not been
 # validated against it (the kubernetes 28 -> 35 bump is a separately tracked
 # task). 1.26.20 clears all three CVEs without that risk.
+# KNOWN-UNFIXED while capped <2.0.0: PYSEC-2026-141 + CVE-2025-50181 /
+# CVE-2025-66418 / CVE-2025-66471 / CVE-2026-21441 (all fixed only in the 2.x
+# line). pip-audit flags these until the kubernetes 28->35 bump lifts the cap.
 urllib3>=1.26.20,<2.0.0
 # oVirt / RHV engine SDK
 ovirt-engine-sdk-python==4.6.3
@@ -86,6 +96,10 @@ kubernetes==28.1.0
 pyyaml==6.0.1
 
 # File operations & conversions (for future implementation)
+# KNOWN-UNFIXED: CVE-2026-44405 (rsakey.py still permits SHA-1) has no
+# released fix — the patch is an unmerged-into-release commit; "through 4.0.0"
+# is affected. pip-audit flags this until paramiko publishes a fixed release
+# (tracked with the 3.4 -> 5.x bump).
 paramiko==3.4.0
 
 # Async task orchestration (migrations parallèles + durables)
