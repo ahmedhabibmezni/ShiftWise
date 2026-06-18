@@ -22,9 +22,11 @@ starlette>=0.47.2
 # code depend on, and must be validated against a real KVM host and the
 # OpenShift cluster before shipping. Tracked as a planned upgrade.
 uvicorn[standard]==0.47.0
-# Audit A13 — python-multipart 0.0.18 fixes the ReDoS/DoS chain
-# (CVE-2024-24762 / CVE-2024-53981).
-python-multipart==0.0.18
+# Audit A13 — python-multipart 0.0.18 fixed the ReDoS/DoS chain
+# (CVE-2024-24762 / CVE-2024-53981). Bumped to 0.0.31 to clear a later
+# path-traversal + DoS set (CVE-2026-24486 / -40347 / -42561 / -53538 /
+# -53539 / -53540).
+python-multipart==0.0.31
 
 # Database
 sqlalchemy==2.0.25
@@ -32,7 +34,9 @@ psycopg2-binary==2.9.9
 alembic==1.13.1
 
 # Authentication & Security
-PyJWT==2.10.1
+# 2.13.0 clears 7 advisories against 2.10.1 (PYSEC-2025-183 + PYSEC-2026-120/
+# 175/176/177/178/179).
+PyJWT==2.13.0
 # SV-022 — passlib 1.7.4 is abandoned and pinned bcrypt to 4.0.1 (it reads the
 # removed bcrypt.__about__ shim, breaking on bcrypt >= 4.1). We hash via the
 # `bcrypt` library directly now (app/core/security.py), so passlib is dropped
