@@ -197,7 +197,12 @@ jobs:
             tests/test_user_admin_rbac.py \
             tests/test_hypervisor_schema.py \
             tests/test_conversions_api.py \
-            --tb=short -v
+            --tb=short -v --cov-fail-under=0
+        # pyproject addopts pins --cov-fail-under=80, which targets the FULL
+        # local suite (460 tests). CI runs only the infra-free subset above,
+        # so whole-app coverage is necessarily well under 80% — the gate would
+        # fail every run regardless of test outcome. Override to 0 here: the
+        # coverage report still prints, but the unreachable gate is dropped.
 
       # ML model artifact integrity (H7). compatibility_model.joblib (~10 MB)
       # is intentionally committed for deterministic builds — it is the
@@ -317,7 +322,7 @@ jobs:
           python -m pytest \
             tests/test_migration_events_append_only.py \
             tests/test_migration_events_concurrent_emit.py \
-            --tb=short -v
+            --tb=short -v --cov-fail-under=0
 
   sonar:
     name: sonar · static analysis

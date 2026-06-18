@@ -21,6 +21,21 @@ if not os.environ.get("SHIFTWISE_FERNET_KEY"):
 
     os.environ["SHIFTWISE_FERNET_KEY"] = Fernet.generate_key().decode()
 
+# Same rationale as the Fernet key above: ``Settings`` declares
+# DATABASE_HOST / NAME / USER / PASSWORD as required (no defaults), normally
+# sourced from a developer's .env. CI runners have no .env, so ``Settings()``
+# fails validation at import. The suite never connects with these — every DB
+# test overrides the engine with in-memory SQLite — they exist only to let
+# ``Settings()`` instantiate. Set clearly-fake placeholders when absent.
+_CI_DB_DEFAULTS = {
+    "DATABASE_HOST": "localhost",
+    "DATABASE_NAME": "shiftwise_test",
+    "DATABASE_USER": "shiftwise_test",
+    "DATABASE_PASSWORD": "shiftwise-test-not-a-real-secret",
+}
+for _key, _value in _CI_DB_DEFAULTS.items():
+    os.environ.setdefault(_key, _value)
+
 from app.ml.synthetic_data import generate_dataset
 from app.services.feature_extractor import FEATURE_NAMES, to_vector, rules_features
 
