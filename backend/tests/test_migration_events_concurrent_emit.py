@@ -26,6 +26,7 @@ from app.crud import migration_event as crud_migration_event
 from app.models.base import Base
 from app.models.migration import MigrationStrategy
 from app.models.migration_event import MigrationEvent, MigrationEventType
+from app.models.virtual_machine import VirtualMachine
 
 
 @pytest.fixture
@@ -59,13 +60,29 @@ def _skip_unless_postgres(engine) -> None:
         )
 
 
+def _seed_vm(session) -> int:
+    """Insert a minimal VM so Migration.vm_id satisfies its FK.
+
+    SQLite (dev default) does not enforce foreign keys, but the CI Postgres
+    service container does — without a real VM row, create_migration raises
+    ForeignKeyViolation on migrations_vm_id_fkey.
+    """
+    vm = VirtualMachine(
+        tenant_id="t1", name="evt-test-vm",
+        cpu_cores=1, memory_mb=512, disk_gb=10,
+    )
+    session.add(vm)
+    session.commit()
+    return vm.id
+
+
 def test_concurrent_emit_produces_unique_sequence_ids(engine, db_session):
     _skip_unless_postgres(engine)
 
     mig = crud_migration.create_migration(
         db_session,
         data={
-            "vm_id": 1,
+            "vm_id": _seed_vm(db_session),
             "strategy": MigrationStrategy.AUTO,
             "target_storage_class": "nfs-client",
         },
@@ -125,7 +142,7 @@ def test_sequential_emit_in_sqlite_is_monotonic(db_session):
     mig = crud_migration.create_migration(
         db_session,
         data={
-            "vm_id": 1,
+            "vm_id": _seed_vm(db_session),
             "strategy": MigrationStrategy.AUTO,
             "target_storage_class": "nfs-client",
         },

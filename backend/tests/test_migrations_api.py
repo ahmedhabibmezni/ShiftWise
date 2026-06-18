@@ -154,6 +154,10 @@ def test_cancel_revokes_the_celery_task(db_session, monkeypatch):
 
     fake_control = MagicMock()
     monkeypatch.setattr(celery_app, "control", fake_control)
+    # Stub the best-effort K8s teardown — it builds a real KubeVirtClient
+    # (kubeconfig load) which is unavailable in CI. This test asserts the
+    # revoke + status transition, not the cluster cleanup.
+    monkeypatch.setattr("app.api.v1.migrations.MigratorService", MagicMock())
 
     cancel_migration(mig.id, None, db_session, _superuser())
 

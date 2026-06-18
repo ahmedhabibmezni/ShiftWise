@@ -160,6 +160,10 @@ def test_cancel_endpoint_records_reason_as_audit_message(db_session, monkeypatch
     db_session.add(mig)
     db_session.commit()
     monkeypatch.setattr(celery_app, "control", MagicMock())
+    # Stub the best-effort K8s teardown — it builds a real KubeVirtClient
+    # (kubeconfig load) which is unavailable in CI. This test asserts the
+    # audit-log message, not the cluster cleanup.
+    monkeypatch.setattr("app.api.v1.migrations.MigratorService", MagicMock())
 
     cancel_migration(
         mig.id, MigrationCancel(reason="Operator aborted"), db_session, _superuser(),

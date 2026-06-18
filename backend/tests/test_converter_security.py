@@ -56,6 +56,10 @@ def test_ssh_policy_auto_add_only_when_explicitly_enabled(monkeypatch):
     from app.core import ssh as ssh_mod
     from app.core.ssh import apply_host_key_policy
 
+    # AutoAddPolicy is only permitted in dev (DEBUG=True); apply_host_key_policy
+    # raises in production. Establish dev mode explicitly so the test does not
+    # depend on the ambient DEBUG value (CI runs DEBUG=False).
+    monkeypatch.setattr(ssh_mod.settings, "DEBUG", True)
     monkeypatch.setattr(ssh_mod.settings, "SSH_AUTO_ADD_HOST_KEYS", True)
     client = paramiko.SSHClient()
     apply_host_key_policy(client)
