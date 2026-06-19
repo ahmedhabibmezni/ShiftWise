@@ -580,3 +580,45 @@ class ConverterService:
 def create_converter_service() -> ConverterService:
     """Factory for ConverterService — symmetric with create_analyzer_service."""
     return ConverterService()
+
+
+def cleanup_transit_outputs(tenant_id: str, group_uuid: str) -> None:
+    """Delete a group's converted qcow2s from the NFS transit zone.
+
+    Called once a migration has COMPLETED — the Migrator's populator has by then
+    copied each qcow2 into the tenant PVC, so the transit copy is dead weight on
+    the small shared transit volume. Best-effort: a cleanup failure must never
+    fail an already-successful migration, so every error is logged and swallowed.
+
+    Two topologies:
+      * convert-on-source SFTP bridge — the qcow2s live on the remote NFS export
+        reachable only over the bastion jump; delete via ``RemoteTransit``.
+      * in-cluster — the worker shares the transit PVC mount; delete the local
+        ``outputs/{group_uuid}`` directory.
+    """
+    if not tenant_id or not group_uuid:
+        logger.warning("cleanup_transit_outputs: missing tenant/group, skipping")
+        return
+
+    if settings.CONVERTER_SOURCE_CONVERT_SFTP:
+        rel_dir = f"{tenant_id}/outputs/{group_uuid}"
+        try:
+            from app.services.converter.remote_transit import RemoteTransit
+
+            with RemoteTransit.from_settings() as rt:
+                rt.remove_dir(rel_dir)
+            logger.info("Cleaned transit outputs (remote): %s", rel_dir)
+        except Exception:  # NOSONAR — cleanup is best-effort, never fatal
+            logger.warning(
+                "Could not clean remote transit outputs %s", rel_dir, exc_info=True,
+            )
+        return
+
+    out_dir = paths.outputs_dir(tenant_id, group_uuid)
+    try:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        logger.info("Cleaned transit outputs (local): %s", out_dir)
+    except Exception:  # NOSONAR — cleanup is best-effort, never fatal
+        logger.warning(
+            "Could not clean local transit outputs %s", out_dir, exc_info=True,
+        )

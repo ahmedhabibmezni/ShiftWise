@@ -233,6 +233,18 @@ class RemoteTransit:
     def remove(self, rel: str) -> None:
         self._run(f"rm -f {_shq(self._abs(rel))}")
 
+    def remove_dir(self, rel_dir: str) -> None:
+        """Recursively delete a transit directory (``rm -rf``).
+
+        ``_abs`` rejects ``..`` traversal; we additionally refuse an empty
+        ``rel_dir`` so a bug can never expand to ``rm -rf`` on the export root.
+        """
+        if not rel_dir or not rel_dir.strip("/"):
+            raise ConversionError(
+                "ERR_INTERNAL", "remove_dir refused empty transit path",
+            )
+        self._run(f"rm -rf {_shq(self._abs(rel_dir))}")
+
     def free_bytes(self, rel_dir: str = "") -> int:
         target = self._abs(rel_dir) if rel_dir else self._export_root
         rc, out, _e = self._run(f"df -P -B1 {_shq(target)} | tail -1 | awk '{{print $4}}'")

@@ -159,6 +159,81 @@ class TestPaths:
 
 
 # ---------------------------------------------------------------------------
+# Transit cleanup (post-migration hygiene)
+# ---------------------------------------------------------------------------
+
+class TestCleanupTransitOutputs:
+    def test_local_path_removes_outputs_dir(self, monkeypatch, tmp_path):
+        from app.services.converter import service as svc_mod
+
+        monkeypatch.setattr(svc_mod.settings, "CONVERTER_SOURCE_CONVERT_SFTP", False)
+        monkeypatch.setattr(svc_mod.paths, "transit_root", lambda: tmp_path)
+        out = svc_mod.paths.outputs_dir("tnt1", "grp-uuid")
+        out.mkdir(parents=True)
+        (out / "0.qcow2").write_bytes(b"x")
+        assert out.exists()
+
+        svc_mod.cleanup_transit_outputs("tnt1", "grp-uuid")
+        assert not out.exists()
+
+    def test_sftp_path_calls_remote_remove_dir(self, monkeypatch):
+        from app.services.converter import service as svc_mod
+
+        monkeypatch.setattr(svc_mod.settings, "CONVERTER_SOURCE_CONVERT_SFTP", True)
+
+        calls = []
+
+        class _FakeRT:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def remove_dir(self, rel_dir):
+                calls.append(rel_dir)
+
+        import app.services.converter.remote_transit as rt_mod
+
+        monkeypatch.setattr(rt_mod.RemoteTransit, "from_settings", classmethod(lambda cls: _FakeRT()))
+
+        svc_mod.cleanup_transit_outputs("tnt1", "grp-uuid")
+        assert calls == ["tnt1/outputs/grp-uuid"]
+
+    def test_missing_tenant_or_group_is_noop(self, monkeypatch):
+        from app.services.converter import service as svc_mod
+
+        monkeypatch.setattr(svc_mod.settings, "CONVERTER_SOURCE_CONVERT_SFTP", True)
+        # Must not raise / must not attempt any remote work.
+        svc_mod.cleanup_transit_outputs("", "grp-uuid")
+        svc_mod.cleanup_transit_outputs("tnt1", "")
+
+    def test_cleanup_swallows_errors(self, monkeypatch):
+        """A cleanup failure must never propagate (would fail a done migration)."""
+        from app.services.converter import service as svc_mod
+
+        monkeypatch.setattr(svc_mod.settings, "CONVERTER_SOURCE_CONVERT_SFTP", True)
+
+        import app.services.converter.remote_transit as rt_mod
+
+        def _boom(cls):
+            raise RuntimeError("transit unreachable")
+
+        monkeypatch.setattr(rt_mod.RemoteTransit, "from_settings", classmethod(_boom))
+        # Should log + swallow, not raise.
+        svc_mod.cleanup_transit_outputs("tnt1", "grp-uuid")
+
+    def test_remove_dir_refuses_empty_path(self):
+        """Guard against an empty rel expanding to rm -rf on the export root."""
+        import app.services.converter.remote_transit as rt_mod
+
+        rt = rt_mod.RemoteTransit.__new__(rt_mod.RemoteTransit)  # bypass connect
+        for bad in ("", "/", "///"):
+            with pytest.raises(ConversionError):
+                rt.remove_dir(bad)
+
+
+# ---------------------------------------------------------------------------
 # CRUD + group state recompute
 # ---------------------------------------------------------------------------
 

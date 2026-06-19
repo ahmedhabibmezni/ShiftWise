@@ -30,7 +30,7 @@ from app.services.adapter.errors import AdapterError
 from app.services.adapter.service import AdapterService
 from app.services.audit_log import AuditEmitter
 from app.services.converter.errors import ConversionError
-from app.services.converter.service import ConverterService
+from app.services.converter.service import ConverterService, cleanup_transit_outputs
 from app.services.migrator.errors import MigratorError
 from app.services.migrator.service import MigratorService
 from app.tasks.conversion import run_conversion_job
@@ -146,6 +146,15 @@ def run_migration(self, migration_id: int) -> str:
                 "Handing off to migrator — PVC populate and KubeVirt VM create",
             )
             terminal = MigratorService().run(db, migration_id)
+
+            # Transit hygiene — once the migration has COMPLETED, the populator
+            # has copied each qcow2 into the tenant PVC, so the converted images
+            # on the small shared NFS transit are dead weight. Purge them so
+            # repeated migrations don't fill the transit volume. Best-effort:
+            # never let a cleanup hiccup flip a successful migration to FAILED.
+            if terminal == MigrationStatus.COMPLETED:
+                _cleanup_transit(db, group_id)
+
             return terminal.value
 
         except SoftTimeLimitExceeded:
@@ -169,6 +178,17 @@ def run_migration(self, migration_id: int) -> str:
 
 
 # --- stages ----------------------------------------------------------------
+
+def _cleanup_transit(db, group_id: int) -> None:
+    """Best-effort purge of a completed group's qcow2s from the NFS transit."""
+    try:
+        group = crud_conversion.get_group(db, group_id)
+        if group is None:
+            return
+        cleanup_transit_outputs(group.tenant_id, group.group_uuid)
+    except Exception:  # NOSONAR — transit hygiene must never fail the migration
+        logger.warning("Transit cleanup for group %s failed", group_id, exc_info=True)
+
 
 def _ensure_tenant_namespace(migration) -> None:
     """Create the tenant OpenShift namespace if absent (idempotent).
