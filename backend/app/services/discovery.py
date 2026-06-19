@@ -78,10 +78,41 @@ $result = foreach ($vm in $vms) {
         ip_address   = $ip
         mac_address  = $mac
         hostname     = $vm.ComputerName
+        generation   = [int]$vm.Generation
     }
 }
 $result | ConvertTo-Json -Depth 3
 """
+
+# "efi" | "bios" — the guest boot firmware. Every connector populates a
+# ``firmware`` key in its discovery dict so the migrator can emit the matching
+# KubeVirt firmware block. A UEFI guest booted under KubeVirt's SeaBIOS default
+# (or vice-versa) hangs at boot, so this must be detected per source.
+_FW_EFI = "efi"
+_FW_BIOS = "bios"
+_FW_EFI_HINTS = ("efi", "ovmf", "uefi", "secure_boot")
+_FW_BIOS_HINTS = ("bios", "seabios")
+
+
+def _normalize_firmware(raw: Optional[Any]) -> Optional[str]:
+    """Map a source-reported firmware hint to ``"efi"`` / ``"bios"`` / ``None``.
+
+    ``None`` means the source did not report it — the migrator then keeps its
+    SeaBIOS default. Accepts the various spellings connectors expose: VMware
+    ``efi``/``bios``, Proxmox ``ovmf``/``seabios``, oVirt ``q35_ovmf`` /
+    ``q35_secure_boot`` / ``q35_sea_bios``, libvirt ``pflash``/``efi``.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    if not s:
+        return None
+    if any(h in s for h in _FW_EFI_HINTS):
+        return _FW_EFI
+    if any(h in s for h in _FW_BIOS_HINTS):
+        return _FW_BIOS
+    return None
+
 
 # Remote wrapper: reads all sensitive values from env vars so that no credential
 # ever appears in a command-line argument (prevents shell/PS injection).
@@ -384,6 +415,10 @@ def _vsphere_vm_to_dict(vm_obj: Any) -> Dict[str, Any]:
         "mac_address": _vsphere_primary_mac(getattr(guest, "net", None)),
         "hostname": getattr(guest, "hostName", None),
         "power_state": power_state,
+        # "efi" | "bios" — drives the KubeVirt firmware block at migration time.
+        # A UEFI guest stalls under KubeVirt's SeaBIOS default (no legacy MBR
+        # bootloader); the migrator emits an EFI bootloader when this is "efi".
+        "firmware": getattr(config, "firmware", None),
     }
 
 
@@ -702,6 +737,8 @@ def _discover_single_vmx(
         "os_name": os_name,
         "ip_address": ip_address,
         "mac_address": mac_address,
+        # VMX ``firmware = "efi"`` (absent ⇒ legacy BIOS).
+        "firmware": _normalize_firmware(config.get("firmware")) or _FW_BIOS,
         "hostname": hostname_val,
         "power_state": power_state,
         "vmx_path": vmx_path,
@@ -868,10 +905,24 @@ def _parse_kvm_domain_xml(
     if mac_el is not None:
         mac_address = mac_el.get("address")
 
+    # Firmware: UEFI shows as <os firmware='efi'>, a <loader type='pflash'>,
+    # or an <nvram> store; otherwise it is legacy BIOS.
+    firmware = _FW_BIOS
+    os_el = root.find("os")
+    if os_el is not None:
+        loader_el = os_el.find("loader")
+        if (
+            (os_el.get("firmware") or "").lower() == _FW_EFI
+            or (loader_el is not None and (loader_el.get("type") or "").lower() == "pflash")
+            or os_el.find("nvram") is not None
+        ):
+            firmware = _FW_EFI
+
     return {
         "source_uuid":          uuid,
         "source_name":          name,
         "name":                 name,
+        "firmware":             firmware,
         "cpu_cores":            cpu_cores,
         "memory_mb":            memory_mb,
         "disk_gb":              disk_gb,
@@ -958,6 +1009,7 @@ def _build_physical_vm_dict(
         "ip_address":           facts.get("ip_address"),
         "mac_address":          facts.get("mac_address"),
         "hostname":             hostname,
+        "firmware":             facts.get("firmware"),
         "power_state":          "running",
         "compatibility_status": CompatibilityStatus.UNKNOWN,
         # Per-disk capture plan consumed by PhysicalPuller.list_disks.
@@ -1098,6 +1150,8 @@ def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
             "hostname":             item.get("hostname"),
             "power_state":          item.get("power_state") or "unknown",
             "compatibility_status": CompatibilityStatus.UNKNOWN,
+            # Hyper-V Generation 2 = UEFI, Generation 1 = legacy BIOS.
+            "firmware": _FW_EFI if int(item.get("generation") or 1) >= 2 else _FW_BIOS,
         })
     return vms
 
@@ -1244,10 +1298,14 @@ def _parse_proxmox_vm(
     # IP from qemu-guest-agent (only available on running VMs with agent installed).
     ip_address = _proxmox_agent_ipv4(agent_net)
 
+    # Proxmox ``bios``: ``ovmf`` ⇒ UEFI, ``seabios`` / absent ⇒ legacy BIOS.
+    firmware = _normalize_firmware(config.get("bios")) or _FW_BIOS
+
     return {
         "source_uuid":          uuid,
         "source_name":          name,
         "name":                 name,
+        "firmware":             firmware,
         "cpu_cores":            cpu_cores,
         "memory_mb":            memory_mb,
         "disk_gb":              disk_gb,
@@ -1335,6 +1393,15 @@ def _parse_ovirt_vm(
 
     hostname = getattr(vm, "fqdn", None) or None
 
+    # oVirt BIOS type: q35_ovmf / q35_secure_boot ⇒ UEFI, *_sea_bios ⇒ BIOS.
+    # cluster_default is unknown here → leave None (migrator keeps SeaBIOS).
+    bios_obj = getattr(vm, "bios", None)
+    bios_type = None
+    if bios_obj is not None:
+        t = getattr(bios_obj, "type", None)
+        bios_type = getattr(t, "value", None) or (str(t) if t else None)
+    firmware = _normalize_firmware(bios_type)
+
     ip_address: Optional[str] = None
     mac_address: Optional[str] = None
     for dev in devices or []:
@@ -1355,6 +1422,7 @@ def _parse_ovirt_vm(
         "source_uuid":          uuid,
         "source_name":          name,
         "name":                 name,
+        "firmware":             firmware,
         "cpu_cores":            cpu_cores,
         "memory_mb":            memory_mb,
         "disk_gb":              disk_gb,
@@ -2018,6 +2086,10 @@ class DiscoveryService:
         memory_mb = mem_total_kb // 1024
 
         uuid = run("cat /sys/class/dmi/id/product_uuid")[0].strip()
+        # UEFI iff /sys/firmware/efi exists; otherwise the host booted legacy BIOS.
+        firmware = _FW_EFI if "efi" in run(
+            "[ -d /sys/firmware/efi ] && echo efi || echo bios"
+        )[0] else _FW_BIOS
         boot_source = run("findmnt -n -o SOURCE /")[0].strip()
         lsblk_json = run("lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINT")[0]
         disks = _parse_lsblk_disks(lsblk_json, boot_source) if lsblk_json.strip() else []
@@ -2032,6 +2104,7 @@ class DiscoveryService:
             "cpu_cores": cpu_cores,
             "memory_mb": memory_mb,
             "uuid": uuid,
+            "firmware": firmware,
             "ip_address": ip_address,
             "mac_address": mac_address,
         }
@@ -2377,7 +2450,7 @@ class DiscoveryService:
             last_seen_at=datetime.now(timezone.utc),
             custom_metadata={
                 k: vm_data[k]
-                for k in ("power_state", "vmx_path", "tools_state")
+                for k in ("power_state", "vmx_path", "tools_state", "firmware")
                 if k in vm_data
             } or None,
         )
@@ -2471,7 +2544,7 @@ class DiscoveryService:
         changed = True   # last_seen_at is always considered a meaningful update
 
         # Merge live hypervisor metadata
-        meta_keys = ("power_state", "vmx_path", "tools_state")
+        meta_keys = ("power_state", "vmx_path", "tools_state", "firmware")
         new_meta = {k: vm_data[k] for k in meta_keys if k in vm_data}
         # P2V: refresh the per-disk capture plan when present so the converter
         # connector (PhysicalPuller.list_disks) always sees the current layout.

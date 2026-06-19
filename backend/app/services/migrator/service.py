@@ -50,6 +50,7 @@ from app.services.migrator.namespace import ensure_tenant_namespace
 from app.services.migrator.populator_job import (
     PopulatorOutcome,
     delete_populator,
+    get_populator_logs,
     populator_job_name,
     submit_populator_job,
     wait_for_populator,
@@ -308,7 +309,17 @@ class MigratorService:
 
         for job in jobs:
             pvc_name = target_pvc_name(migration_id, job.disk_index)
-            size_bytes = compute_pvc_size_bytes(job.output_size_bytes)
+            # The populator runs `qemu-img convert -O raw`, which writes the
+            # disk's full *virtual* size — not the compressed/sparse on-disk
+            # footprint of the qcow2 (output_size_bytes). source_size_bytes is
+            # the source's provisioned capacity == the raw virtual size, so it
+            # is the correct basis for the PVC. Take the max as a floor in case
+            # one field is missing/zero for a given connector.
+            virtual_size_bytes = max(
+                job.source_size_bytes or 0,
+                job.output_size_bytes or 0,
+            )
+            size_bytes = compute_pvc_size_bytes(virtual_size_bytes)
             create_target_pvc(
                 namespace=target_namespace,
                 name=pvc_name,
@@ -350,7 +361,10 @@ class MigratorService:
                 job_name=job_name,
                 timeout_seconds=settings.MIGRATOR_POPULATOR_TIMEOUT,
             )
-            self._raise_if_populator_failed(outcome, job.disk_index)
+            self._raise_if_populator_failed(
+                outcome, job.disk_index,
+                namespace=target_namespace, job_name=job_name,
+            )
 
             disks.append(DiskSpec(
                 disk_index=job.disk_index,
@@ -369,6 +383,7 @@ class MigratorService:
 
     def _raise_if_populator_failed(
         self, outcome: PopulatorOutcome, disk_index: int,
+        *, namespace: str | None = None, job_name: str | None = None,
     ) -> None:
         if outcome.succeeded:
             return
@@ -381,8 +396,24 @@ class MigratorService:
                 f"Populator for disk {disk_index} timed out ({reason})",
             )
         if exit_code is not None and exit_code != 0:
-            # qemu-img convert exit codes are not standardized; treat
-            # non-zero as corrupt source unless we have evidence otherwise.
+            # qemu-img convert exit codes are not standardized. Inspect the pod
+            # log to tell a too-small target PVC (ENOSPC mid-convert) apart from
+            # a genuinely corrupt source — they demand different operator action.
+            log_tail = ""
+            if namespace and job_name:
+                try:
+                    log_tail = get_populator_logs(
+                        namespace=namespace, job_name=job_name,
+                    )
+                except Exception:  # NOSONAR — diagnostics only, never mask the failure
+                    log_tail = ""
+            if "no space left on device" in log_tail.lower():
+                raise MigratorError(
+                    "ERR_MIG_PVC_TOO_SMALL",
+                    f"Populator for disk {disk_index} ran out of space writing "
+                    f"the raw image — target PVC is smaller than the disk's "
+                    f"virtual size (exit {exit_code}).",
+                )
             raise MigratorError(
                 "ERR_MIG_QCOW2_CORRUPT",
                 f"qemu-img convert disk {disk_index} exited {exit_code} "
@@ -402,6 +433,10 @@ class MigratorService:
         disks: list[DiskSpec],
         migration_id: int,
     ) -> None:
+        # Source boot firmware (captured at discovery into custom_metadata).
+        # A UEFI guest must boot OVMF/EFI under KubeVirt; on the SeaBIOS default
+        # it stalls at "Booting from Hard Disk..." with no legacy bootloader.
+        firmware = (vm_row.custom_metadata or {}).get("firmware")
         manifest = build_virtual_machine(
             name=name,
             namespace=namespace,
@@ -412,6 +447,7 @@ class MigratorService:
             mac_address=vm_row.mac_address,
             migration_id=migration_id,
             source_vm_id=vm_row.id,
+            firmware=firmware,
         )
         kv = get_kubevirt_client()
         try:

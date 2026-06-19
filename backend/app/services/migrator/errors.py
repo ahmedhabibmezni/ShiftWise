@@ -52,6 +52,8 @@ MIGRATOR_ERROR_CATALOG: dict[str, _Spec] = {
               "Converter output is missing on transit volume"),
         _Spec("ERR_MIG_QCOW2_CORRUPT", MigratorErrorBucket.PERMANENT,
               "qemu-img convert refused source as corrupt"),
+        _Spec("ERR_MIG_PVC_TOO_SMALL", MigratorErrorBucket.PERMANENT,
+              "Target PVC too small for the disk's raw virtual size"),
         _Spec("ERR_MIG_VM_CREATE_REJECTED", MigratorErrorBucket.PERMANENT,
               "KubeVirt rejected the VirtualMachine manifest"),
         _Spec("ERR_MIG_VMI_NEVER_RAN", MigratorErrorBucket.PERMANENT,

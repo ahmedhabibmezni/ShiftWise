@@ -104,6 +104,7 @@ def test_collect_physical_facts_single_vm():
                   "", 0),
         "ip -j": ('[{"ifname":"ens33","addr_info":[{"local":"192.168.1.14"}],'
                   '"address":"52:54:00:aa:bb:cc"}]', "", 0),
+        "/sys/firmware/efi": ("bios", "", 0),
     }
 
     def fake_run(cmd: str):
@@ -123,6 +124,35 @@ def test_collect_physical_facts_single_vm():
     assert vm["source_uuid"] == "a8584d560dd70fa8f32bf33d4daae164"
     assert vm["ip_address"] == "192.168.1.14"
     assert len(vm["physical_disks"]) == 2
+    assert vm["firmware"] == "bios"
+
+
+def test_collect_physical_facts_detects_uefi():
+    """A bare-metal host with /sys/firmware/efi is reported as UEFI so the
+    migrator emits an EFI bootloader instead of the SeaBIOS default."""
+    responses = {
+        "hostname": ("uefi-host", "", 0),
+        "os-release": ('NAME="Debian GNU/Linux"\nVERSION_ID="13"', "", 0),
+        "nproc": ("2", "", 0),
+        "MemTotal": ("MemTotal:        4096000 kB", "", 0),
+        "product_uuid": ("11111111-2222-3333-4444-555555555555", "", 0),
+        "findmnt": ("/dev/sda2", "", 0),
+        "lsblk": ('{"blockdevices":[{"name":"sda","size":8589934592,"type":"disk",'
+                  '"mountpoint":null,"children":[{"name":"sda2","size":8587837440,'
+                  '"type":"part","mountpoint":"/"}]}]}', "", 0),
+        "ip -j": ("[]", "", 0),
+        "/sys/firmware/efi": ("efi", "", 0),
+    }
+
+    def fake_run(cmd: str):
+        for key, val in responses.items():
+            if key in cmd:
+                return val
+        return ("", "", 0)
+
+    svc = DiscoveryService.__new__(DiscoveryService)
+    vm = svc._collect_physical_facts(fake_run)[0]
+    assert vm["firmware"] == "efi"
 
 
 # ---------------------------------------------------------------------------

@@ -196,6 +196,39 @@ class TestBuildVirtualMachine:
         devices = m["spec"]["template"]["spec"]["domain"]["devices"]
         assert "inputs" not in devices
 
+    def test_efi_firmware_emits_bootloader_block(self):
+        m = build_virtual_machine(
+            name="vm1", namespace="ns",
+            cpu_cores=2, memory_mb=4096,
+            disks=self._disks(), os_type=OSType.LINUX,
+            firmware="efi",
+        )
+        domain = m["spec"]["template"]["spec"]["domain"]
+        assert domain["firmware"]["bootloader"]["efi"]["secureBoot"] is False
+
+    def test_efi_firmware_is_case_insensitive(self):
+        m = build_virtual_machine(
+            name="vm1", namespace="ns",
+            cpu_cores=2, memory_mb=4096,
+            disks=self._disks(), os_type=OSType.LINUX,
+            firmware="EFI",
+        )
+        domain = m["spec"]["template"]["spec"]["domain"]
+        assert "firmware" in domain
+
+    def test_bios_or_unknown_firmware_omits_bootloader_block(self):
+        # SeaBIOS default — no firmware block (back-compat with BIOS guests
+        # like the Alpine/Proxmox path that already booted).
+        for fw in ("bios", None, ""):
+            m = build_virtual_machine(
+                name="vm1", namespace="ns",
+                cpu_cores=2, memory_mb=4096,
+                disks=self._disks(), os_type=OSType.LINUX,
+                firmware=fw,
+            )
+            domain = m["spec"]["template"]["spec"]["domain"]
+            assert "firmware" not in domain
+
     def test_rejects_no_disks(self):
         with pytest.raises(ValueError):
             build_virtual_machine(
@@ -313,6 +346,10 @@ def _patch_k8s_layer(monkeypatch):
     monkeypatch.setattr(pop_mod, "wait_for_populator", captured["wait_populator"])
     monkeypatch.setattr(svc_mod, "wait_for_populator", captured["wait_populator"])
 
+    captured["populator_logs"] = MagicMock(return_value="")
+    monkeypatch.setattr(pop_mod, "get_populator_logs", captured["populator_logs"])
+    monkeypatch.setattr(svc_mod, "get_populator_logs", captured["populator_logs"])
+
     captured["ensure_ns"] = MagicMock()
     monkeypatch.setattr(svc_mod, "ensure_tenant_namespace", captured["ensure_ns"])
 
@@ -365,6 +402,46 @@ class TestMigratorServiceRun:
             MigratorService().run(db_session, seeded["migration"].id)
         # exit_code 137 is non-zero -> we map it to QCOW2_CORRUPT today.
         assert excinfo.value.code == "ERR_MIG_QCOW2_CORRUPT"
+
+    def test_enospc_populator_maps_to_pvc_too_small(
+        self, db_session, seeded, monkeypatch,
+    ):
+        """A populator that died `No space left on device` is a too-small PVC,
+        not a corrupt source — surface the actionable code."""
+        captured = _patch_k8s_layer(monkeypatch)
+        captured["wait_populator"].return_value = PopulatorOutcome(
+            succeeded=False, failure_reason="BackoffLimitExceeded",
+            container_exit_code=1,
+        )
+        captured["populator_logs"].return_value = (
+            "(98.62/100%)qemu-img: error while writing at byte 11907825664: "
+            "No space left on device"
+        )
+
+        from app.services.migrator.service import MigratorService
+
+        with pytest.raises(MigratorError) as excinfo:
+            MigratorService().run(db_session, seeded["migration"].id)
+        assert excinfo.value.code == "ERR_MIG_PVC_TOO_SMALL"
+
+    def test_pvc_sized_from_virtual_not_compressed_size(
+        self, db_session, seeded, monkeypatch,
+    ):
+        """The PVC must be sized from the disk's raw virtual size
+        (source_size_bytes), not the small compressed qcow2 file."""
+        captured = _patch_k8s_layer(monkeypatch)
+        # Provisioned 12 GiB disk that compressed to a 2 GiB qcow2.
+        seeded["job"].source_size_bytes = 12 * 1024 ** 3
+        seeded["job"].output_size_bytes = 2 * 1024 ** 3
+        db_session.commit()
+
+        from app.services.migrator.service import MigratorService
+
+        MigratorService().run(db_session, seeded["migration"].id)
+
+        size_bytes = captured["create_pvc"].call_args.kwargs["size_bytes"]
+        # Must cover the 12 GiB virtual size, not the 2 GiB compressed file.
+        assert size_bytes >= 12 * 1024 ** 3
 
     def test_missing_qcow2_raises_typed_error(
         self, db_session, seeded, monkeypatch,

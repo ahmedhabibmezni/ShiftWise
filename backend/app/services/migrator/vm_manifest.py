@@ -62,9 +62,17 @@ def build_virtual_machine(
     mac_address: Optional[str] = None,
     migration_id: Optional[int] = None,
     source_vm_id: Optional[int] = None,
+    firmware: Optional[str] = None,
     extra_labels: Optional[dict[str, str]] = None,
 ) -> dict:
-    """Build a KubeVirt VirtualMachine custom resource as a plain dict."""
+    """Build a KubeVirt VirtualMachine custom resource as a plain dict.
+
+    ``firmware`` selects the guest boot firmware: ``"efi"`` emits an OVMF/EFI
+    bootloader block, anything else (incl. ``None``) leaves KubeVirt on its
+    SeaBIOS default. A guest installed in UEFI mode on the source (its disk is
+    GPT with an EFI System Partition and no legacy MBR boot code) hangs at
+    ``Booting from Hard Disk...`` under SeaBIOS — it must be booted with EFI.
+    """
     if not disks:
         raise ValueError("at least one disk is required")
     if cpu_cores < 1:
@@ -89,6 +97,26 @@ def build_virtual_machine(
 
     interface, network = _build_pod_network(mac_address)
 
+    domain: dict = {
+        "cpu": {"cores": int(cpu_cores)},
+        "memory": {"guest": f"{int(memory_mb)}Mi"},
+        "devices": {
+            "disks": disk_devices,
+            "interfaces": [interface],
+            "networkInterfaceMultiqueue": True,
+            # Serial console enabled — paired with the adapter that enables
+            # serial-getty@ttyS0 inside the guest. Without this stanza,
+            # virtctl console connects but never sees output (incident
+            # 2026-05-04).
+            "autoattachSerialConsole": True,
+            **_os_specific_devices(os_type),
+        },
+        "machine": _machine(),
+    }
+    fw_block = _firmware(firmware)
+    if fw_block is not None:
+        domain["firmware"] = fw_block
+
     return {
         "apiVersion": "kubevirt.io/v1",
         "kind": "VirtualMachine",
@@ -104,23 +132,7 @@ def build_virtual_machine(
             "template": {
                 "metadata": {"labels": labels},
                 "spec": {
-                    "domain": {
-                        "cpu": {"cores": int(cpu_cores)},
-                        "memory": {"guest": f"{int(memory_mb)}Mi"},
-                        "devices": {
-                            "disks": disk_devices,
-                            "interfaces": [interface],
-                            "networkInterfaceMultiqueue": True,
-                            # Serial console enabled — paired with the
-                            # adapter that enables serial-getty@ttyS0
-                            # inside the guest. Without this stanza,
-                            # virtctl console connects but never sees
-                            # output (incident 2026-05-04).
-                            "autoattachSerialConsole": True,
-                            **_os_specific_devices(os_type),
-                        },
-                        "machine": _machine(),
-                    },
+                    "domain": domain,
                     "networks": [network],
                     "volumes": volumes,
                     "terminationGracePeriodSeconds": 180,
@@ -183,3 +195,16 @@ def _os_specific_devices(os_type: OSType) -> dict:
 def _machine() -> dict:
     # q35 is the modern PC chipset KubeVirt defaults to; explicit for clarity.
     return {"type": "q35"}
+
+
+def _firmware(firmware: Optional[str]) -> Optional[dict]:
+    """EFI bootloader block for a UEFI guest, else None (SeaBIOS default).
+
+    ``secureBoot: false`` is deliberate: SecureBoot under KubeVirt requires the
+    SMM CPU feature plus an OVMF signed-variables store, and a migrated guest's
+    bootloader is not signed for our OVMF keys anyway. Plain OVMF (no SecureBoot)
+    boots the guest's existing EFI bootloader from its ESP without that setup.
+    """
+    if (firmware or "").strip().lower() == "efi":
+        return {"bootloader": {"efi": {"secureBoot": False}}}
+    return None

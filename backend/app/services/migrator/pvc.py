@@ -22,10 +22,10 @@ from app.services.migrator.errors import MigratorError
 logger = logging.getLogger(__name__)
 
 
-# Headroom on top of the converter's output_size_bytes — qemu-img convert
-# inflates a sparse qcow2 to its full virtual size when written as raw, and
-# we want a safety margin for filesystem metadata + KubeVirt's own padding
-# (the VirtualMachine spec adds ~10% via volume.expand() heuristics).
+# Headroom on top of the disk's raw virtual size — qemu-img convert inflates a
+# sparse/compressed qcow2 to its full virtual size when written as raw, and we
+# want a safety margin for filesystem metadata + KubeVirt's own padding (the
+# VirtualMachine spec adds ~10% via volume.expand() heuristics).
 _PVC_SIZE_HEADROOM_PCT = 15
 _PVC_MIN_SIZE_BYTES = 1 * 1024 * 1024 * 1024   # never request < 1 GiB
 
@@ -39,11 +39,17 @@ def target_pvc_name(migration_id: int, disk_index: int) -> str:
     return f"shiftwise-mig-{int(migration_id)}-disk-{int(disk_index)}"
 
 
-def compute_pvc_size_bytes(output_size_bytes: Optional[int]) -> int:
-    """Compute the target PVC size from the converter's output size."""
-    if not output_size_bytes or output_size_bytes <= 0:
+def compute_pvc_size_bytes(virtual_size_bytes: Optional[int]) -> int:
+    """Compute the target PVC size from the disk's raw virtual size.
+
+    ``virtual_size_bytes`` must be the disk's provisioned/virtual capacity (what
+    ``qemu-img convert -O raw`` writes), NOT the compressed qcow2 file size — a
+    sparse qcow2's on-disk footprint is far smaller and under-sizing the PVC
+    makes the populator fail ``No space left on device`` mid-convert.
+    """
+    if not virtual_size_bytes or virtual_size_bytes <= 0:
         return _PVC_MIN_SIZE_BYTES
-    sized = int(output_size_bytes * (100 + _PVC_SIZE_HEADROOM_PCT) / 100)
+    sized = int(virtual_size_bytes * (100 + _PVC_SIZE_HEADROOM_PCT) / 100)
     return max(sized, _PVC_MIN_SIZE_BYTES)
 
 
