@@ -36,6 +36,7 @@ const DEFAULT_PORT: Record<HypervisorType, string> = {
   ovirt: "443",
   virtualbox: "",
   xen: "443",
+  physical: "22",
   other: "",
 };
 
@@ -47,6 +48,7 @@ const HOST_HINT: Partial<Record<HypervisorType, string>> = {
   kvm: "e.g. qemu+ssh://user@host/system",
   proxmox: "e.g. https://pve.example.com",
   ovirt: "e.g. https://manager.example.com/ovirt-engine/api",
+  physical: "e.g. 192.168.20.14 (bare-metal Linux, SSH)",
 };
 
 export function HypervisorCreateDrawer({

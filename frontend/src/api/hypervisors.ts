@@ -11,6 +11,7 @@ export const HYPERVISOR_TYPES = [
   "ovirt",
   "virtualbox",
   "xen",
+  "physical",
   "other",
 ] as const;
 

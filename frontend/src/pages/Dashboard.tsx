@@ -372,6 +372,7 @@ const HYPERVISOR_BADGE_COLORS: Record<string, [string, string, string]> = {
   ovirt: ["oVi", "#3E6FD4", "#1F3F8A"],
   virtualbox: ["VBx", "#4A546E", "#8893B0"],
   xen: ["Xen", "#2651B2", "#4A7FC4"],
+  physical: ["P2V", "#812300", "#FF7A2F"],
   other: ["?", "#4A546E", "#8893B0"],
 };
 
