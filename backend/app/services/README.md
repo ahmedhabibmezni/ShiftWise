@@ -92,9 +92,9 @@ Sits between the Converter and the Migrator. Submits a Kubernetes Job per disk t
 - 4 parallel DHCP configurations (systemd-networkd, ifupdown, NetworkManager keyfile, netplan)
 - serial-console enablement (`serial-getty@ttyS0` + GRUB serial redirect) — note: the `systemctl` enable is a no-op on non-systemd guests (Alpine/OpenRC), which then have no `ttyS0` login; use the graphical console
 - SELinux relabel
-- **physical (P2V) source only** (`is_physical`): regenerates the guest initramfs with `virtio_blk/net/pci/scsi` forced in (`update-initramfs` + `dracut`) — a bare-metal initramfs has no virtio modules, so the guest would panic on KubeVirt's virtio bus
+- **non-virtio-native sources** (`inject_virtio`): regenerates the guest initramfs with `virtio_blk/net/pci/scsi` forced in (`update-initramfs` + `dracut`). A guest captured from VMware (ESXi/vSphere/Workstation), Hyper-V, or bare-metal (P2V) has no virtio modules in its initramfs, so it would stall/panic on KubeVirt's virtio bus. Gated by `_needs_virtio_injection(source_type)` — skipped only for virtio-native sources (KVM/Proxmox/oVirt) to avoid a redundant second `virt-customize` launch; injected by default for unknown sources (idempotent, so a redundant run is harmless).
 
-The OS/source branch lives in `_fixup_script_for_os(os_type, is_physical=...)`, which also carries the `os_type=WINDOWS` → `virt-v2v-in-place` (virtio-win) path.
+The OS/source branch lives in `_fixup_script_for_os(os_type, inject_virtio=...)`, which also carries the `os_type=WINDOWS` → `virt-v2v-in-place` (virtio-win) path.
 
 Required because KubeVirt exposes a virtio NIC (`enp1s0`/`ens2`) while the source guest is configured for the VMware NIC (`ens33`/`eth0`).
 

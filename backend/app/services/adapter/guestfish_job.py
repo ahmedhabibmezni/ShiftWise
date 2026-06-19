@@ -11,7 +11,15 @@ Strategy:
         2. Enables ``serial-getty@ttyS0`` so KubeVirt's ``virtctl console``
            works.
         3. Patches GRUB to send kernel boot logs to ttyS0 too.
-        4. SELinux relabel.
+        4. For a UEFI guest, installs the distro's GRUB at the EFI
+           removable-media fallback path (``\\EFI\\BOOT\\BOOTX64.EFI``). A
+           KubeVirt VM boots with fresh/empty EFI NVRAM, so the source's boot
+           entry is gone; a stock Ubuntu/RHEL ESP falls back to shim, which
+           then loops in ``fbx64.efi`` trying to recreate the NVRAM entry.
+           Pointing the fallback straight at GRUB boots the guest deterministically
+           (no shim/NVRAM dance; safe because SecureBoot is off). No-op on a
+           BIOS guest (no ESP).
+        5. SELinux relabel.
 
 Idempotent — running twice on the same disk is safe (writes overwrite,
 systemctl enable is no-op if already enabled).
@@ -35,6 +43,7 @@ from kubernetes.client.rest import ApiException
 
 from app.core.config import settings
 from app.core.kubevirt_client import get_kubevirt_client
+from app.models.hypervisor import HypervisorType
 from app.models.virtual_machine import OSType
 from app.services.adapter.errors import AdapterError
 from app.services.migrator.transit_discovery import discover_transit_nfs
@@ -165,6 +174,7 @@ virt-customize -a "$DISK" \
   --run-command 'systemctl enable NetworkManager.service 2>/dev/null || true' \
   --run-command 'sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"console=tty0 console=ttyS0,115200n8\"|" /etc/default/grub 2>/dev/null || true' \
   --run-command 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true' \
+  --run-command 'for v in ubuntu debian centos redhat fedora rocky almalinux sles opensuse; do if [ -d /boot/efi/EFI/BOOT ] && [ -f /boot/efi/EFI/$v/grubx64.efi ]; then cp -f /boot/efi/EFI/$v/grubx64.efi /boot/efi/EFI/BOOT/grubx64.efi; cp -f /boot/efi/EFI/$v/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI; fi; done 2>/dev/null || true' \
   --selinux-relabel \
   || {
     echo "ERROR virt-customize exit $?"
@@ -175,23 +185,28 @@ echo ">>> Adapter done"
 """
 
 
-# P2V initramfs regeneration — a bare-metal host's initramfs lacks the virtio
-# block/net drivers KubeVirt presents, so it cannot find its root device and
-# panics on first boot. Regenerate the initramfs with virtio forced in. Both
-# tool families are attempted; the one that exists for the guest distro runs,
-# the other is a no-op (|| true).
-_P2V_INITRAMFS_FIXUP = r"""
-echo ">>> P2V: forcing virtio drivers into the initramfs"
+# Virtio initramfs regeneration — a guest captured from a non-virtio source
+# (bare-metal P2V, VMware ESXi/vSphere/Workstation, Hyper-V) has an initramfs
+# built for that platform's storage/network drivers (vmw_pvscsi, mptspi,
+# hv_storvsc, …) and NO virtio modules. Under KubeVirt the root disk sits on
+# the virtio bus, so such a guest cannot find its root device and stalls/panics
+# on first boot. Regenerate the initramfs with virtio forced in. Both tool
+# families are attempted; the one that exists for the guest distro runs, the
+# other is a no-op (|| true). Idempotent — harmless on a guest that already
+# ships virtio (KVM/Proxmox/oVirt sources), so it is gated off there only to
+# avoid a redundant (slow, TCG) second virt-customize launch, not for safety.
+_VIRTIO_INITRAMFS_FIXUP = r"""
+echo ">>> virtio: forcing virtio drivers into the initramfs"
 virt-customize -a "$DISK" \
   --run-command 'echo "virtio_blk virtio_net virtio_pci virtio_scsi" | tr " " "\n" >> /etc/initramfs-tools/modules 2>/dev/null || true' \
   --run-command 'mkdir -p /etc/dracut.conf.d && echo '\''add_drivers+=" virtio_blk virtio_net virtio_pci virtio_scsi "'\'' > /etc/dracut.conf.d/99-shiftwise-virtio.conf 2>/dev/null || true' \
   --run-command 'update-initramfs -u 2>/dev/null || true' \
   --run-command 'dracut --regenerate-all --force 2>/dev/null || true' \
   || {
-    echo "ERROR P2V initramfs virt-customize exit $?"
+    echo "ERROR virtio initramfs virt-customize exit $?"
     exit 1
   }
-echo ">>> P2V: initramfs regeneration done"
+echo ">>> virtio: initramfs regeneration done"
 """
 
 
@@ -249,7 +264,31 @@ echo ">>> Adapter done"
 """
 
 
-def _fixup_script_for_os(os_type: OSType, *, is_physical: bool = False) -> str:
+# Sources whose guests already run on the virtio bus — their initramfs ships
+# virtio_blk/virtio_scsi/virtio_net, so the extra (slow, TCG) initramfs
+# regeneration is redundant and skipped. Every OTHER source (VMware ESXi /
+# vSphere / Workstation, Hyper-V, physical P2V, Xen, VirtualBox, unknown) needs
+# virtio forced into the initramfs or the migrated guest cannot find its root
+# device on KubeVirt's virtio bus and stalls at boot.
+_VIRTIO_NATIVE_SOURCES = frozenset({
+    HypervisorType.KVM,
+    HypervisorType.PROXMOX,
+    HypervisorType.OVIRT,
+})
+
+
+def _needs_virtio_injection(hv_type: Optional[HypervisorType]) -> bool:
+    """True when the source guest's initramfs must have virtio forced in.
+
+    Defaults to True for an unknown / missing source type — injecting virtio is
+    safe (idempotent) on a guest that already has it, whereas omitting it on a
+    guest that does not bricks the boot. Better a redundant step than a VM that
+    hangs at ``Booting from Hard Disk...``.
+    """
+    return hv_type not in _VIRTIO_NATIVE_SOURCES
+
+
+def _fixup_script_for_os(os_type: OSType, *, inject_virtio: bool = False) -> str:
     """Pick the libguestfs strategy that fits the guest OS family.
 
     Windows guests need `virt-v2v-in-place` (virtio driver injection plus
@@ -257,15 +296,16 @@ def _fixup_script_for_os(os_type: OSType, *, is_physical: bool = False) -> str:
     fallback — use the multi-stack DHCP / serial-console / GRUB script driven
     by `virt-customize`.
 
-    ``is_physical`` (P2V source) appends a virtio-initramfs regeneration step to
-    the Linux fixup — a bare-metal initramfs has no virtio drivers and would
-    panic looking for its root device under KubeVirt. Ignored for Windows
-    (virt-v2v-in-place already injects virtio drivers).
+    ``inject_virtio`` appends a virtio-initramfs regeneration step to the Linux
+    fixup — a guest captured from a non-virtio source (VMware, Hyper-V, physical)
+    has no virtio drivers in its initramfs and would stall looking for its root
+    device under KubeVirt. Ignored for Windows (virt-v2v-in-place already
+    injects virtio drivers).
     """
     if os_type == OSType.WINDOWS:
         return _WINDOWS_FIXUP_SCRIPT
-    if is_physical:
-        return _LINUX_FIXUP_SCRIPT + _P2V_INITRAMFS_FIXUP
+    if inject_virtio:
+        return _LINUX_FIXUP_SCRIPT + _VIRTIO_INITRAMFS_FIXUP
     return _LINUX_FIXUP_SCRIPT
 
 
@@ -288,7 +328,7 @@ def submit_adapter_job(
     disk_index: int,
     src_relative_path: str,
     os_type: OSType = OSType.LINUX,
-    is_physical: bool = False,
+    inject_virtio: bool = False,
     backoff_limit: int = 0,
     active_deadline_seconds: int = 30 * 60,
 ) -> str:
@@ -313,7 +353,7 @@ def submit_adapter_job(
         nfs_server=nfs_server,
         nfs_path=nfs_path,
         os_type=os_type,
-        is_physical=is_physical,
+        inject_virtio=inject_virtio,
         backoff_limit=backoff_limit,
         active_deadline_seconds=active_deadline_seconds,
     )
@@ -434,7 +474,7 @@ def _build_manifest(
     backoff_limit: int,
     active_deadline_seconds: int,
     os_type: OSType = OSType.LINUX,
-    is_physical: bool = False,
+    inject_virtio: bool = False,
 ) -> dict:
     labels = {
         _LABEL_APP: _LABEL_APP_VAL,
@@ -442,7 +482,7 @@ def _build_manifest(
         _LABEL_DISK: str(disk_index),
     }
     disk_path = f"/src/{src_relative_path.lstrip('/')}"
-    fixup_script = _fixup_script_for_os(os_type, is_physical=is_physical)
+    fixup_script = _fixup_script_for_os(os_type, inject_virtio=inject_virtio)
 
     return {
         "apiVersion": "batch/v1",

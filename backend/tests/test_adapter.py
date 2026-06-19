@@ -330,8 +330,10 @@ class TestAdapterServiceRun:
         kwargs = captured["submit"].call_args.kwargs
         assert kwargs["os_type"] == OSType.LINUX
 
-    def test_two_disks_means_two_jobs(self, db_session, seeded, monkeypatch):
-        # Add a second disk in the same group.
+    def test_only_boot_disk_is_adapted(self, db_session, seeded, monkeypatch):
+        # Add a second (data) disk in the same group. Only the boot disk
+        # (index 0) carries the guest OS — virt-customize on a data disk fails
+        # "no operating systems were found", so disk 1 must be skipped.
         j2 = ConversionJob(
             tenant_id=seeded["user"].tenant_id,
             group_id=seeded["group"].id,
@@ -349,7 +351,12 @@ class TestAdapterServiceRun:
         from app.services.adapter.service import AdapterService
         AdapterService().run(db_session, seeded["migration"].id)
 
-        assert captured["submit"].call_count == 2
+        # Exactly one adapter Job — for the boot disk only.
+        assert captured["submit"].call_count == 1
+        assert captured["submit"].call_args.kwargs["disk_index"] == 0
+        # Progress still reflects both disks processed (boot adapted, data skipped).
+        db_session.refresh(seeded["migration"])
+        assert seeded["migration"].progress_percentage > 55.0
 
     def test_failure_raises_typed_error(self, db_session, seeded, monkeypatch):
         captured = _patch_k8s(monkeypatch)
@@ -391,32 +398,63 @@ class TestAdapterServiceRun:
         assert excinfo.value.code == "ERR_ADAPT_QCOW2_MISSING"
 
 
-def test_physical_fixup_adds_virtio_initramfs():
+def test_linux_fixup_installs_efi_fallback_bootloader():
+    """UEFI guests need GRUB at the EFI removable-media fallback path so a
+    KubeVirt VM with empty NVRAM boots without the shim/fbx64 reset loop."""
+    from app.services.adapter.guestfish_job import _LINUX_FIXUP_SCRIPT
+    assert "/boot/efi/EFI/BOOT/BOOTX64.EFI" in _LINUX_FIXUP_SCRIPT
+    assert "grubx64.efi" in _LINUX_FIXUP_SCRIPT
+    # Self-gated on ESP presence so it is a no-op on BIOS guests.
+    assert "/boot/efi/EFI/BOOT" in _LINUX_FIXUP_SCRIPT
+
+
+def test_virtio_injection_adds_virtio_initramfs():
     from app.models.virtual_machine import OSType
     from app.services.adapter.guestfish_job import _fixup_script_for_os
-    script = _fixup_script_for_os(OSType.LINUX, is_physical=True)
+    script = _fixup_script_for_os(OSType.LINUX, inject_virtio=True)
     assert "update-initramfs -u" in script
     assert "dracut" in script
     assert "virtio_blk" in script and "virtio_net" in script
     assert "virtio_pci" in script and "virtio_scsi" in script
 
 
-def test_non_physical_linux_fixup_has_no_initramfs_step():
+def test_linux_fixup_without_virtio_injection_has_no_initramfs_step():
     from app.models.virtual_machine import OSType
     from app.services.adapter.guestfish_job import _fixup_script_for_os
-    script = _fixup_script_for_os(OSType.LINUX, is_physical=False)
+    script = _fixup_script_for_os(OSType.LINUX, inject_virtio=False)
     assert "update-initramfs -u" not in script
     assert "serial-getty@ttyS0" in script
 
 
-def test_windows_fixup_ignores_physical_flag():
+def test_windows_fixup_ignores_virtio_flag():
     from app.models.virtual_machine import OSType
     from app.services.adapter.guestfish_job import _fixup_script_for_os
-    script = _fixup_script_for_os(OSType.WINDOWS, is_physical=True)
+    script = _fixup_script_for_os(OSType.WINDOWS, inject_virtio=True)
     assert "virt-v2v-in-place" in script
 
 
-def test_build_manifest_physical_embeds_initramfs_script():
+def test_needs_virtio_injection_by_source_type():
+    """Only virtio-native sources skip the initramfs step; everything else,
+    including an unknown source, gets virtio forced in."""
+    from app.models.hypervisor import HypervisorType
+    from app.services.adapter.guestfish_job import _needs_virtio_injection
+
+    # Already on virtio at the source — no injection needed.
+    for native in (HypervisorType.KVM, HypervisorType.PROXMOX,
+                   HypervisorType.OVIRT):
+        assert _needs_virtio_injection(native) is False
+
+    # Non-virtio sources (the boot-stall class) — injection required.
+    for foreign in (HypervisorType.VSPHERE, HypervisorType.VMWARE_ESXi,
+                    HypervisorType.VMWARE_WORKSTATION, HypervisorType.HYPER_V,
+                    HypervisorType.PHYSICAL):
+        assert _needs_virtio_injection(foreign) is True
+
+    # Unknown / missing source — safe default is to inject.
+    assert _needs_virtio_injection(None) is True
+
+
+def test_build_manifest_virtio_embeds_initramfs_script():
     from app.models.virtual_machine import OSType
     from app.services.adapter.guestfish_job import _build_manifest
     manifest = _build_manifest(
@@ -428,7 +466,7 @@ def test_build_manifest_physical_embeds_initramfs_script():
         nfs_server="10.0.0.1",
         nfs_path="/export/transit",
         os_type=OSType.LINUX,
-        is_physical=True,
+        inject_virtio=True,
         backoff_limit=0,
         active_deadline_seconds=1800,
     )

@@ -30,11 +30,11 @@ from app.models.conversion import (
     ConversionJob,
     ConversionStatus,
 )
-from app.models.hypervisor import HypervisorType
 from app.models.virtual_machine import OSType
 from app.services.adapter.errors import AdapterError
 from app.services.adapter.guestfish_job import (
     AdapterOutcome,
+    _needs_virtio_injection,
     adapter_job_name,
     delete_adapter,
     get_adapter_logs,
@@ -43,6 +43,10 @@ from app.services.adapter.guestfish_job import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The OS-bearing disk. Index 0 is the boot disk by convention across every
+# connector (see DiskPuller protocol; the migrator also keys is_boot on it).
+_BOOT_DISK_INDEX = 0
 
 
 class AdapterService:
@@ -72,22 +76,41 @@ class AdapterService:
         # corrupt a non-Linux guest, just leaves it un-adapted).
         vm = crud_vm.get_vm(db, migration.vm_id)
         os_type = vm.os_type if vm is not None else OSType.LINUX
-        is_physical = (
-            vm is not None
-            and vm.source_hypervisor is not None
-            and vm.source_hypervisor.type == HypervisorType.PHYSICAL
+        # Whether the guest needs virtio forced into its initramfs. True for
+        # every source whose guest does not already boot on virtio (VMware
+        # ESXi/vSphere/Workstation, Hyper-V, physical P2V) — without it the
+        # migrated guest stalls at boot unable to find its root device on
+        # KubeVirt's virtio bus. Safe (idempotent) default when the source type
+        # is unknown.
+        source_type = (
+            vm.source_hypervisor.type
+            if vm is not None and vm.source_hypervisor is not None
+            else None
         )
+        inject_virtio = _needs_virtio_injection(source_type)
 
         for i, job in enumerate(jobs, start=1):
-            self._adapt_one(
-                migration_id=migration_id,
-                tenant_id=migration.tenant_id,
-                target_namespace=target_namespace,
-                job=job,
-                group_uuid=group.group_uuid,
-                os_type=os_type,
-                is_physical=is_physical,
-            )
+            # The guest-OS fixup (DHCP, serial console, GRUB, virtio-initramfs)
+            # only applies to the disk that holds the operating system — the
+            # boot disk, index 0 by convention across every connector. Running
+            # virt-customize on a data disk fails hard with "no operating
+            # systems were found in the guest image", so skip non-boot disks;
+            # they are copied verbatim into their PVC by the Migrator.
+            if job.disk_index != _BOOT_DISK_INDEX:
+                logger.info(
+                    "Adapter: skipping data disk %d (no guest OS to fix up)",
+                    job.disk_index,
+                )
+            else:
+                self._adapt_one(
+                    migration_id=migration_id,
+                    tenant_id=migration.tenant_id,
+                    target_namespace=target_namespace,
+                    job=job,
+                    group_uuid=group.group_uuid,
+                    os_type=os_type,
+                    inject_virtio=inject_virtio,
+                )
             crud_migration.update_migration_progress(
                 db, migration_id,
                 progress=55.0 + (10.0 * i / len(jobs)),
@@ -156,7 +179,7 @@ class AdapterService:
         job: ConversionJob,
         group_uuid: str,
         os_type: OSType,
-        is_physical: bool = False,
+        inject_virtio: bool = False,
     ) -> None:
         job_name = adapter_job_name(migration_id, job.disk_index)
         # Path on transit, relative to the NFS mount root.
@@ -170,7 +193,7 @@ class AdapterService:
             disk_index=job.disk_index,
             src_relative_path=rel,
             os_type=os_type,
-            is_physical=is_physical,
+            inject_virtio=inject_virtio,
             active_deadline_seconds=settings.ADAPTER_TIMEOUT,
         )
 
