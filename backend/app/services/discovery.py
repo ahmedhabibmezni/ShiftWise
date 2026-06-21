@@ -49,6 +49,28 @@ _VMRUN_CANDIDATES = [
 # Uses Get-VM (all power states) + Get-VHD for disk size.
 _HYPERV_PS_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
+
+function Get-ShiftwiseGuestOS($vm) {
+    # Guest OS is only knowable host-side through the KVP Data Exchange
+    # integration service (Msvm_KvpExchangeComponent.GuestIntrinsicExchangeItems).
+    # Returns nulls when the guest's integration services are not running.
+    # Never throws — discovery must not fail because OS info is unavailable.
+    $info = [PSCustomObject]@{ name = $null; version = $null }
+    try {
+        $cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "Name='$($vm.Id.Guid)'" -ErrorAction Stop
+        $kvp = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_KvpExchangeComponent -ErrorAction Stop
+        foreach ($raw in $kvp.GuestIntrinsicExchangeItems) {
+            if (-not $raw) { continue }
+            $x = [xml]$raw
+            $key = ($x.INSTANCE.PROPERTY | Where-Object { $_.NAME -eq 'Name' }).VALUE
+            $val = ($x.INSTANCE.PROPERTY | Where-Object { $_.NAME -eq 'Data' }).VALUE
+            if ($key -eq 'OSName')    { $info.name = $val }
+            if ($key -eq 'OSVersion') { $info.version = $val }
+        }
+    } catch {}
+    return $info
+}
+
 $vms = Get-VM
 $result = foreach ($vm in $vms) {
     $net   = $vm.NetworkAdapters | Select-Object -First 1
@@ -68,17 +90,21 @@ $result = foreach ($vm in $vms) {
         default   { 'unknown'  }
     }
 
+    $os = Get-ShiftwiseGuestOS $vm
+
     [PSCustomObject]@{
         name         = $vm.Name
         source_uuid  = ($vm.Id.ToString() -replace '-', '').ToLower()
         cpu_cores    = [int]$vm.ProcessorCount
-        memory_mb    = [int]($vm.MemoryAssigned / 1MB)
+        memory_mb    = [int]($vm.MemoryStartup / 1MB)
         disk_gb      = [int][Math]::Round($diskBytes / 1GB, 0)
         power_state  = $state
         ip_address   = $ip
         mac_address  = $mac
         hostname     = $vm.ComputerName
         generation   = [int]$vm.Generation
+        os_name      = $os.name
+        os_version   = $os.version
     }
 }
 $result | ConvertTo-Json -Depth 3
@@ -120,7 +146,10 @@ _HYPERV_REMOTE_PS_WRAPPER = r"""
 $pass = ConvertTo-SecureString $env:HV_PASS -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential($env:HV_USER, $pass)
 $sb   = [scriptblock]::Create($env:HV_SCRIPT)
-Invoke-Command -ComputerName $env:HV_HOST -Credential $cred -ScriptBlock $sb
+# -Authentication Negotiate: required for WinRM auth against a workgroup
+# (non-domain) host with an explicit PSCredential. Without it WinRM falls
+# back to a default that yields AccessDenied even with valid credentials.
+Invoke-Command -ComputerName $env:HV_HOST -Credential $cred -Authentication Negotiate -ScriptBlock $sb
 """
 
 
@@ -1122,6 +1151,30 @@ def _build_hyperv_command(
     return ["powershell", "-NonInteractive", "-Command", _HYPERV_REMOTE_PS_WRAPPER], extra_env
 
 
+_HYPERV_LINUX_OS_HINTS = (
+    "linux", "ubuntu", "debian", "centos", "red hat", "redhat", "rhel",
+    "suse", "fedora", "alpine", "rocky", "almalinux", "alma", "oracle linux",
+    "gentoo", "arch",
+)
+
+
+def _hyperv_os_type(os_name: Optional[str]) -> OSType:
+    """Classify the KVP-reported guest OS name into an ``OSType``.
+
+    The Hyper-V KVP Data Exchange surfaces a free-form ``OSName`` (e.g.
+    "Ubuntu 22.04.3 LTS", "Windows 10 Pro"). Returns ``UNKNOWN`` when the
+    guest reported nothing (integration services not running).
+    """
+    if not os_name:
+        return OSType.UNKNOWN
+    s = os_name.lower()
+    if "windows" in s:
+        return OSType.WINDOWS
+    if any(hint in s for hint in _HYPERV_LINUX_OS_HINTS):
+        return OSType.LINUX
+    return OSType.UNKNOWN
+
+
 def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
     """Parse la sortie JSON de PowerShell en liste de dicts VM standardisés."""
     try:
@@ -1135,6 +1188,9 @@ def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
 
     vms: List[Dict[str, Any]] = []
     for item in data:
+        # Guest OS comes from the KVP Data Exchange service; absent when the
+        # guest's integration services are down (os_name stays null → UNKNOWN).
+        os_name = item.get("os_name")
         vms.append({
             "source_uuid":          item.get("source_uuid") or "",
             "source_name":          item.get("name") or "unknown",
@@ -1142,9 +1198,9 @@ def _parse_hyperv_output(stdout: str) -> List[Dict[str, Any]]:
             "cpu_cores":            int(item.get("cpu_cores") or 0),
             "memory_mb":            int(item.get("memory_mb") or 0),
             "disk_gb":              int(item.get("disk_gb") or 0),
-            "os_type":              OSType.UNKNOWN,  # Hyper-V n'expose pas le type d'OS sans KVP
-            "os_version":           "N/A",
-            "os_name":              "N/A",
+            "os_type":              _hyperv_os_type(os_name),
+            "os_version":           item.get("os_version") or "N/A",
+            "os_name":              os_name or "N/A",
             "ip_address":           item.get("ip_address"),
             "mac_address":          item.get("mac_address"),
             "hostname":             item.get("hostname"),

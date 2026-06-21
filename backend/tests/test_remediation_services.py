@@ -151,6 +151,16 @@ class TestA17HypervHostValidation:
         )
         assert env is not None and env["HV_HOST"] == "hyperv01.corp.local"
 
+    def test_remote_wrapper_uses_negotiate_authentication(self):
+        """WinRM against a workgroup host with an explicit PSCredential needs
+        -Authentication Negotiate; without it Invoke-Command yields
+        AccessDenied even with valid credentials."""
+        from app.services.discovery import _build_hyperv_command
+
+        cmd, _ = _build_hyperv_command("hyperv01.corp.local", "remote", "u", "p")
+        wrapper = cmd[-1]
+        assert "-Authentication Negotiate" in wrapper
+
     def test_local_discovery_still_works(self):
         from app.services.discovery import _build_hyperv_command
 
