@@ -46,6 +46,11 @@ kind: ServiceAccount
 metadata:
   name: shiftwise-worker
   namespace: shiftwise
+# Authenticated Docker Hub pulls (avoid anonymous `toomanyrequests`). See the
+# shiftwise-api SA in backend-deployment.yaml for the rationale; `dockerhub-push`
+# exists in each target namespace.
+imagePullSecrets:
+  - name: dockerhub-push
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

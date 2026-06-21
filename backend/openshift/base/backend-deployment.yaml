@@ -14,6 +14,13 @@ kind: ServiceAccount
 metadata:
   name: shiftwise-api
   namespace: shiftwise
+# Authenticated Docker Hub pulls — nodes pulling docker.io anonymously hit
+# `toomanyrequests` (rate limit). The `dockerhub-push` Secret (dockerconfigjson)
+# exists in each target namespace (prod + staging); referencing it here means
+# every pod under this SA pulls authenticated, and the link survives Argo
+# reconciles (an `oc secrets link` would be wiped when Argo re-applies the SA).
+imagePullSecrets:
+  - name: dockerhub-push
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
