@@ -136,8 +136,8 @@ export function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       {/* ---------- Brand ---------- */}
-      <div className="relative z-[1] flex items-center px-4 pt-6 pb-4">
-        <BrandLogo className="h-24" />
+      <div className="relative z-[1] flex items-center px-5 pt-6 pb-5">
+        <BrandLogo className="h-11" />
       </div>
 
       <div className="relative z-[1] mx-5 border-b border-[var(--hairline)]" />
@@ -153,7 +153,7 @@ export function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             className={cn("flex flex-col", idx > 0 && "mt-6")}
           >
             {section.label && (
-              <div className="px-3 mb-2.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+              <div className="px-3 mb-2.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">
                 {section.label}
               </div>
             )}
@@ -218,9 +218,11 @@ function NavItemLink({
             aria-hidden
             className={cn(
               "shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-[10px] transition-all duration-150",
+              // Inactive icons stay muted so the single accent-gradient
+              // container on the active row reads as the current page.
               isActive
                 ? "icon-container icon-container--accent"
-                : "bg-[var(--surface-soft-strong)] text-[var(--accent-light)] group-hover:bg-[var(--surface-soft-strong)]",
+                : "bg-[var(--surface-soft)] text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] group-hover:bg-[var(--surface-soft-strong)]",
             )}
           >
             <Icon icon={item.icon} size={16} strokeWidth={1.75} />
@@ -249,7 +251,7 @@ function ProfileChip() {
 
   return (
     <div
-      className="flex items-center gap-3 px-3 py-3 rounded-card bg-[var(--surface-soft-strong)] border border-[var(--line-strong)]"
+      className="flex items-center gap-3 px-3 py-3 rounded-card bg-[var(--surface-soft-strong)] border border-[var(--hairline)]"
       style={{ boxShadow: "var(--shadow-card)" }}
     >
       <span
@@ -312,6 +314,9 @@ function SupportCard() {
             Need help?
           </span>
         </div>
+        <p className="text-[12px] leading-snug text-white/75">
+          OpenShift Virtualization guides and migration references.
+        </p>
         <a
           href="https://docs.openshift.com/container-platform/4.18/virt/about-virt.html"
           target="_blank"
