@@ -11,8 +11,8 @@ type LogoProps = { className?: string; style?: CSSProperties };
  *
  * Swaps between the two delivered brand assets so the wordmark text stays
  * legible on whatever surface it sits on:
- *   - dark theme  → `Horizontal_Dark_Mode.png`  (light text)
- *   - light theme → `Horizontal_Light_Mode.png` (dark text)
+ *   - dark theme  → `Horizontal_Dark_Mode.webp`  (light text)
+ *   - light theme → `Horizontal_Light_Mode.webp` (dark text)
  *
  * Height is caller-controlled via `className` (e.g. `h-10`); width is `auto`
  * so the source aspect ratio is preserved.
@@ -20,7 +20,7 @@ type LogoProps = { className?: string; style?: CSSProperties };
 export function BrandLogo({ className, style }: LogoProps) {
   const { theme } = useTheme();
   const src =
-    theme === "dark" ? "/Horizontal_Dark_Mode.png" : "/Horizontal_Light_Mode.png";
+    theme === "dark" ? "/Horizontal_Dark_Mode.webp" : "/Horizontal_Light_Mode.webp";
 
   return (
     <img
@@ -40,7 +40,7 @@ export function BrandLogo({ className, style }: LogoProps) {
 export function BrandMark({ className, style }: LogoProps) {
   return (
     <img
-      src="/Logo.png"
+      src="/Logo.webp"
       alt={ALT}
       className={cn("object-contain select-none", className)}
       style={style}
