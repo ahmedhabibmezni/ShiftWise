@@ -27,6 +27,16 @@ spec:
       labels: {app: celery-worker, component: orchestration}
     spec:
       serviceAccountName: shiftwise-worker   # needs RBAC to create K8s Jobs
+      # Anti-affinity (HA) — spread worker replicas across nodes (soft) so a node
+      # drain during an OpenShift upgrade never idles the whole migration queue.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: celery-worker}
       # securityContext pod-level (G8) — exécution non-root, profil seccomp.
       # NB : ce pod Celery ne fait qu'orchestrer ; il ne demande PAS
       # `privileged`. Les pods adapter/populator (libguestfs/virt-customize),

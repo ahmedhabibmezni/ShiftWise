@@ -26,6 +26,8 @@ resources:
   - frontend-deployment.yaml
   - celery-worker-deployment.yaml
   - flower-deployment.yaml
+  - pdb.yaml                     # HA — PodDisruptionBudgets (stateless tiers)
+  - hpa.yaml                     # HA — HorizontalPodAutoscalers (backend, worker)
 
 # secretGenerator / configMapGenerator (G25) :
 #   shiftwise-secrets et shiftwise-config NE sont volontairement PAS générés

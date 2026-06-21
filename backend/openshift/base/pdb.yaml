@@ -1,0 +1,44 @@
+# PodDisruptionBudgets (HA) — keep at least one replica of each stateless tier
+# serving during a VOLUNTARY disruption (node drain for an OpenShift upgrade,
+# `oc adm drain`, autoscaler compaction). `maxUnavailable: 1` lets the cluster
+# evict one pod at a time and wait for its replacement to go Ready before taking
+# the next — so a 3-node rolling upgrade never takes a whole tier down at once.
+#
+# Stateful single-replica workloads (postgresql, redis) deliberately have NO
+# PDB: a `minAvailable: 1` budget on a 1-replica Deployment would block node
+# drains entirely (the one pod can never be evicted), stalling cluster upgrades.
+# Their availability is a storage/replication concern, not a PDB concern — see
+# CICD-RUNBOOK.md "HA posture".
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  namespace: shiftwise
+  labels: {app: backend, component: api}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: backend}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+  namespace: shiftwise
+  labels: {app: frontend, component: ui}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: frontend}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: celery-worker
+  namespace: shiftwise
+  labels: {app: celery-worker, component: orchestration}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: celery-worker}

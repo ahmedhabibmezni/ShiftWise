@@ -57,6 +57,19 @@ spec:
       labels: {app: backend, component: api}
     spec:
       serviceAccountName: shiftwise-api
+      # Anti-affinity (HA) — spread the 2+ API replicas across distinct nodes so
+      # a single node failure / drain cannot take the whole API tier down.
+      # `preferred` (soft) not `required`: on a cluster with fewer schedulable
+      # nodes than replicas the pods still schedule (co-located) rather than
+      # going Pending — availability over strict spreading.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: backend}
       # securityContext pod-level (G8) — exécution non-root, profil seccomp.
       securityContext:
         runAsNonRoot: true

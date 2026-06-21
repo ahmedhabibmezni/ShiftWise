@@ -1,0 +1,81 @@
+# HorizontalPodAutoscalers (HA / elasticity) — scale the two load-bearing tiers
+# on CPU. Both Deployments declare CPU `requests` (backend 200m, worker 200m),
+# which the HPA needs to compute utilization; without a request the HPA reports
+# `<unknown>` and never scales.
+#
+# GitOps coexistence: the HPA owns `.spec.replicas` at runtime, so the Argo CD
+# Applications ignore `/spec/replicas` (see argocd/application-*.yaml
+# `ignoreDifferences`). The Deployment manifests keep their static `replicas`
+# as the INITIAL count Argo applies on first sync; the HPA takes over after.
+#
+# Frontend is intentionally NOT autoscaled: it serves a static SPA from nginx at
+# ~25m/pod, and 2 replicas already cover HA. Add an HPA only if real traffic
+# data shows it saturating.
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  namespace: shiftwise
+  labels: {app: backend, component: api}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Cool down before scaling in so a brief lull doesn't thrash replicas
+      # (and drop warm connections) right before the next request burst.
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 60}
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Pods, value: 2, periodSeconds: 60}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: celery-worker
+  namespace: shiftwise
+  labels: {app: celery-worker, component: orchestration}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: celery-worker
+  minReplicas: 3
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Workers are spiky (a conversion pins CPU, then idles). A slightly
+          # higher target than the API avoids over-provisioning on transient
+          # spikes; queue-depth-driven scaling (KEDA) is the future upgrade —
+          # see CICD-RUNBOOK.md "HA posture".
+          averageUtilization: 75
+  behavior:
+    scaleDown:
+      # Longer cooldown for workers: a task may be mid-flight: do not yank a
+      # worker the instant CPU dips. (KEDA + graceful drain is the real fix.)
+      stabilizationWindowSeconds: 600
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Pods, value: 2, periodSeconds: 60}

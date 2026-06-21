@@ -29,6 +29,16 @@ spec:
     metadata:
       labels: {app: frontend, component: ui}
     spec:
+      # Anti-affinity (HA) — spread the SPA replicas across nodes (soft). See the
+      # backend Deployment for the preferred-vs-required rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: frontend}
       # securityContext pod-level — exécution non-root, profil seccomp.
       # L'image nginx-unprivileged tourne en UID 101 ; sous SCC restricted
       # OpenShift réassigne un UID aléatoire du namespace avec GID 0.
