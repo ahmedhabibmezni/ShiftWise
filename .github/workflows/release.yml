@@ -1,9 +1,13 @@
 name: release
 
-# Trigger on semantic-version tags pushed to the default branch
-# (e.g. v1.0.0, v1.0.0-rc1). All quality gates run before the build /
-# push / deploy phase; any failure stops the workflow before a tag
-# becomes visible in the registry.
+# Trigger on semantic-version tags (e.g. v1.0.0, v1.0.0-rc1). This workflow
+# MINTS immutable, human-named `vX.Y.Z` images for archival and rollback
+# targets — it does NOT deploy. Continuous deployment is push-based and owned
+# by cd.yml (push develop → staging, push main → production). A tag here gives
+# you a stable, semantically-versioned image you can later pin an overlay to by
+# hand for a deliberate, named release; the everyday deploy path is a branch
+# push. All quality gates run before the build so a tag never points at a
+# red build.
 on:
   push:
     tags:
@@ -184,73 +188,22 @@ jobs:
             delay=$((delay * 4))
           done
 
-  bump-staging-image:
-    name: bump staging image tag (GitOps)
+  summary:
+    name: release summary
     runs-on: ubuntu-latest
     needs: build-push
-    # The cluster API is private (on-prem, behind a VPN) and unreachable from a
-    # GitHub-hosted runner — so we do NOT `oc apply` here. Instead we bump the
-    # staging overlay's image tag in git and let the in-cluster Argo CD
-    # Application (backend/openshift/argocd/application-staging.yaml) reconcile
-    # it. Pull-based: no cluster credentials in CI, no inbound to the cluster.
-    permissions:
-      contents: write              # this job pushes the tag-bump commit
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-        with:
-          # Need the token in .git/config to push the bump commit, and the
-          # full history of `develop` (not the detached tag) to commit onto it.
-          persist-credentials: true
-          fetch-depth: 0
-          ref: develop
-
-      - name: install kustomize
-        # Version-pinned binary. An operator may add a sha256 check against the
-        # published checksums file for full supply-chain parity with the SHA
-        # action pins above.
-        run: |
-          set -euo pipefail
-          VERSION=v5.4.3
-          curl -sSL -o kustomize.tar.gz \
-            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${VERSION}/kustomize_${VERSION}_linux_amd64.tar.gz"
-          tar xzf kustomize.tar.gz
-          sudo mv kustomize /usr/local/bin/kustomize
-          kustomize version
-
-      - name: bump staging overlay image tags
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          cd backend/openshift/overlays/staging
-          kustomize edit set image \
-            "docker.io/dida1609/shiftwise-backend:${TAG}" \
-            "docker.io/dida1609/shiftwise-frontend:${TAG}"
-          cd - >/dev/null
-          git --no-pager diff -- backend/openshift/overlays/staging/kustomization.yaml
-
-      - name: commit and push to develop
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- backend/openshift/overlays/staging/kustomization.yaml; then
-            echo "::notice::staging overlay already at ${TAG}; nothing to commit"
-            exit 0
-          fi
-          git config user.name  "shiftwise-ci"
-          git config user.email "ci@nextstep-it.com"
-          git add backend/openshift/overlays/staging/kustomization.yaml
-          git commit -m "chore(deploy): staging image tag ${TAG}"
-          # If `develop` is a protected branch requiring PRs, this push is
-          # rejected — switch to a PR-based bump in that case (see argocd/README.md).
-          git push origin develop
-
       - name: summary
         run: |
           {
             echo "## Released ${{ github.ref_name }}"
-            echo "Images pushed: shiftwise-backend:${{ github.ref_name }}, shiftwise-frontend:${{ github.ref_name }}"
-            echo "Staging: overlay tag bumped on develop → Argo CD auto-syncs shiftwise-staging."
-            echo "Production: manual — PR the tag into overlays/production on main, then sync shiftwise-production."
+            echo ""
+            echo "Immutable images pushed:"
+            echo "- \`docker.io/dida1609/shiftwise-backend:${{ github.ref_name }}\` (+ \`sha-${{ github.sha }}\`)"
+            echo "- \`docker.io/dida1609/shiftwise-frontend:${{ github.ref_name }}\` (+ \`sha-${{ github.sha }}\`)"
+            echo ""
+            echo "This workflow does NOT deploy. Continuous deployment is push-based (cd.yml):"
+            echo "push develop → staging, push main → production."
+            echo "To pin a named release by hand, bump the overlay image tag to \`${{ github.ref_name }}\`"
+            echo "via PR to the target branch (see backend/openshift/CICD-RUNBOOK.md)."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,12 +1,16 @@
-# Argo CD Application — ShiftWise PRODUCTION (pull-based GitOps, MANUAL sync).
+# Argo CD Application — ShiftWise PRODUCTION (pull-based GitOps, AUTO sync).
 #
-# Production promotion is deliberate (constitution Governance §4): there is NO
-# `automated` syncPolicy block, so Argo shows the new revision as OutOfSync and
-# waits. Promote by bumping overlays/production image tags via PR to `main`,
-# then clicking Sync (or `argocd app sync shiftwise-production`).
+# Continuous deployment: a push to `main` runs CI, then cd.yml builds/scans the
+# images, bumps overlays/production, and commits to `main`. Argo auto-syncs the
+# commit to the `shiftwise` namespace. This is full CD by deliberate choice —
+# the previous manual-promotion gate (constitution Governance §4) has been
+# traded for speed; promotion is now governed by what lands on `main` (i.e. by
+# the PR review + branch protection on `main`, NOT by a separate Argo click).
 #
-# selfHeal is still off here on purpose — an operator doing emergency
-# `oc` surgery on prod should not be fought by the controller mid-incident.
+# `selfHeal` is intentionally LEFT OFF on production: Argo still auto-syncs new
+# git revisions, but it will NOT revert live drift, so an operator doing
+# emergency `oc` surgery during an incident is not fought by the controller.
+# Staging keeps selfHeal on (cheap to lose, want it pristine).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -24,7 +28,9 @@ spec:
     server: https://kubernetes.default.svc
     namespace: shiftwise
   syncPolicy:
-    # No `automated:` — sync is manual.
+    automated:
+      prune: true                      # delete resources removed from git
+      selfHeal: false                  # do NOT fight emergency oc surgery on prod
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
@@ -34,3 +40,12 @@ spec:
         duration: 30s
         factor: 2
         maxDuration: 8m
+  # The HorizontalPodAutoscaler owns `.spec.replicas` at runtime. Without this,
+  # Argo sees the HPA-scaled replica count as drift from the manifest's static
+  # value and (on selfHeal) would scale it back — fighting the autoscaler.
+  # Ignoring the field lets the HPA win while everything else stays GitOps-managed.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

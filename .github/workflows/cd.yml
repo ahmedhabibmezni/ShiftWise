@@ -1,0 +1,261 @@
+name: cd
+
+# Continuous deployment (pull-based GitOps).
+#
+# Fires AFTER the `ci` workflow finishes on develop or main. CI is the quality
+# gate; CD never runs unless CI concluded `success` on that exact commit, so a
+# red test suite can never ship an image.
+#
+#   push develop ─► ci (tests) ──success──► cd ─► build+scan+sbom+push sha-<sha>
+#                                                 └─ bump overlays/staging  ─► commit develop ─► Argo CD → shiftwise-staging
+#   push main    ─► ci (tests) ──success──► cd ─► build+scan+sbom+push sha-<sha>
+#                                                 └─ bump overlays/production ─► commit main ─► Argo CD → shiftwise (prod)
+#
+# Why GitOps and not `oc apply` from here: the OpenShift API
+# (api.migration.nextstep-it.com:6443) is on a private on-prem network behind a
+# slow VPN, unreachable from a GitHub-hosted runner. Argo CD runs INSIDE the
+# cluster and reaches OUT to GitHub (egress only). CD's job ends at the git
+# commit; Argo does the cluster-side apply. No cluster credentials ever touch CI.
+#
+# BOOTSTRAP NOTE: `workflow_run` only triggers from the workflow file present on
+# the repository's DEFAULT branch (main). This file must be merged to main once
+# before CD activates for ANY branch — including develop. Until then, no CD run
+# fires. See backend/openshift/CICD-RUNBOOK.md.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+# contents: write — the deploy job pushes the overlay image-tag bump commit back
+# to the branch. No other scope is granted (least privilege, mirrors ci.yml G3).
+permissions:
+  contents: write
+
+# One deploy per branch at a time; never cancel a deploy mid-flight (a half-run
+# could push an image without bumping the overlay, or vice-versa).
+concurrency:
+  group: cd-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+# ----------------------------------------------------------------------------
+# Action pinning (G4) — every third-party action is pinned to a full 40-char
+# commit SHA (immutable), mirroring ci.yml / release.yml. SHAs are the ones
+# already verified in ci.yml on 2026-05-18; reuse keeps a single source of truth.
+#   actions/checkout@v4.2.2                 11bd71901bbe5b1630ceea73d27597364c9af683
+#   docker/login-action@v3.3.0              9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   docker/setup-buildx-action@v3.7.1       c47758b77c9736f4b2ef4073d4d51994fabfe349
+#   aquasecurity/trivy-action@v0.28.0       915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   anchore/sbom-action@v0.17.8             55dc4ee22412511ee8c3142cbea40418e6cec693
+# ----------------------------------------------------------------------------
+
+env:
+  # Image repo — hardcoded to match the overlay image names exactly. The
+  # overlays carry `docker.io/dida1609/shiftwise-{backend,frontend}`, and
+  # `kustomize edit set image` keys on that name, so the pushed image MUST use
+  # the same repo. Single-image scheme (CLAUDE.md): one `shiftwise-backend`
+  # image backs backend / worker / flower / db-init; `shiftwise-frontend` is
+  # the SPA. The `-api`/`-worker` split was never published — do not use it.
+  IMAGE_REPO: docker.io/dida1609
+
+jobs:
+  deploy:
+    name: build, scan, push, bump overlay
+    # Gate (all must hold):
+    #   - CI concluded success on this commit
+    #   - the commit is on a deployable branch (develop or main)
+    #   - the commit is NOT a CD-authored overlay bump (`chore(deploy):`) —
+    #     this is the loop-breaker: a bump commit re-runs CI, which would
+    #     re-trigger CD; excluding it terminates the cycle at the first bump.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_branch == 'develop' || github.event.workflow_run.head_branch == 'main') &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore(deploy):')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target environment
+        id: target
+        env:
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$BRANCH" = "main" ]; then
+            echo "overlay=production" >> "$GITHUB_OUTPUT"
+            echo "env=production"     >> "$GITHUB_OUTPUT"
+          else
+            echo "overlay=staging" >> "$GITHUB_OUTPUT"
+            echo "env=staging"     >> "$GITHUB_OUTPUT"
+          fi
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # Check out the branch tip (not the detached head_sha) so the bump
+          # commit lands on the branch Argo tracks. fetch-depth 0 keeps full
+          # history for a clean push. persist-credentials true — this job DOES
+          # do an authenticated git push (the overlay bump).
+          ref: ${{ steps.target.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          set -euo pipefail
+          SHORT="$(git rev-parse --short=7 HEAD)"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "Building images tagged sha-$SHORT for ${{ steps.target.outputs.env }}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v3.7.1
+
+      # Build BOTH images into the local docker daemon first (--load) so Trivy
+      # and syft can read them BEFORE anything is pushed. A vulnerable image is
+      # caught here and the push never happens — this closes the gap where the
+      # old release.yml pushed without scanning.
+      - name: Build backend image (load, no push)
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --tag "${IMAGE_REPO}/shiftwise-backend:sha-${{ steps.tag.outputs.short }}" \
+            --tag "${IMAGE_REPO}/shiftwise-backend:${{ steps.target.outputs.branch }}" \
+            --file backend/Dockerfile \
+            backend
+
+      - name: Build frontend image (load, no push)
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --tag "${IMAGE_REPO}/shiftwise-frontend:sha-${{ steps.tag.outputs.short }}" \
+            --tag "${IMAGE_REPO}/shiftwise-frontend:${{ steps.target.outputs.branch }}" \
+            --file frontend/Dockerfile \
+            frontend
+
+      # Vulnerability gate. Fails the job (exit-code 1) on a fixable HIGH/CRITICAL
+      # OS- or library-level CVE. ignore-unfixed:true keeps an unpatchable
+      # upstream advisory (no fixed version exists) from blocking every deploy —
+      # the same posture as the backend pip-audit ignore-list in ci.yml.
+      - name: Scan backend image (Trivy)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/shiftwise-backend:sha-${{ steps.tag.outputs.short }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Scan frontend image (Trivy)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/shiftwise-frontend:sha-${{ steps.tag.outputs.short }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      # SBOM (CycloneDX) per image — the supply-chain inventory. Uploaded as a
+      # build artifact (90-day retention) so a CVE disclosed later can be matched
+      # against exactly what shipped.
+      - name: SBOM — backend
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
+        with:
+          image: ${{ env.IMAGE_REPO }}/shiftwise-backend:sha-${{ steps.tag.outputs.short }}
+          format: cyclonedx-json
+          output-file: sbom-backend-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+          artifact-name: sbom-backend-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+
+      - name: SBOM — frontend
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
+        with:
+          image: ${{ env.IMAGE_REPO }}/shiftwise-frontend:sha-${{ steps.tag.outputs.short }}
+          format: cyclonedx-json
+          output-file: sbom-frontend-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+          artifact-name: sbom-frontend-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+
+      # Only now — scan + SBOM passed — push both tags (immutable sha + rolling
+      # branch tag) with a bounded retry to absorb registry hiccups.
+      - name: Push images
+        run: |
+          set -uo pipefail
+          push_one() {
+            local ref="$1" attempt=1 delay=15
+            while true; do
+              if docker push "$ref"; then
+                echo "::notice::pushed $ref (attempt $attempt)"; return 0
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                echo "::error::push failed after $attempt attempts: $ref"; return 1
+              fi
+              echo "::warning::push attempt $attempt failed: $ref; sleeping ${delay}s"
+              sleep "$delay"; attempt=$((attempt + 1)); delay=$((delay * 4))
+            done
+          }
+          SHORT="${{ steps.tag.outputs.short }}"
+          BR="${{ steps.target.outputs.branch }}"
+          push_one "${IMAGE_REPO}/shiftwise-backend:sha-${SHORT}"
+          push_one "${IMAGE_REPO}/shiftwise-backend:${BR}"
+          push_one "${IMAGE_REPO}/shiftwise-frontend:sha-${SHORT}"
+          push_one "${IMAGE_REPO}/shiftwise-frontend:${BR}"
+
+      - name: Install kustomize
+        run: |
+          set -euo pipefail
+          VERSION=v5.4.3
+          curl -sSL -o kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${VERSION}/kustomize_${VERSION}_linux_amd64.tar.gz"
+          tar xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/kustomize
+          kustomize version
+
+      # Pin the target overlay to the immutable sha tag. Both images share one
+      # `kustomize edit set image` invocation; the single shiftwise-backend tag
+      # retags backend / worker / flower / db-init at once.
+      - name: Bump overlay image tags
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.tag.outputs.short }}"
+          cd "backend/openshift/overlays/${{ steps.target.outputs.overlay }}"
+          kustomize edit set image \
+            "${IMAGE_REPO}/shiftwise-backend:sha-${SHORT}" \
+            "${IMAGE_REPO}/shiftwise-frontend:sha-${SHORT}"
+          cd - >/dev/null
+          git --no-pager diff -- "backend/openshift/overlays/${{ steps.target.outputs.overlay }}/kustomization.yaml"
+
+      - name: Commit and push overlay bump
+        run: |
+          set -euo pipefail
+          OVERLAY_FILE="backend/openshift/overlays/${{ steps.target.outputs.overlay }}/kustomization.yaml"
+          if git diff --quiet -- "$OVERLAY_FILE"; then
+            echo "::notice::overlay already at sha-${{ steps.tag.outputs.short }}; nothing to commit"
+            exit 0
+          fi
+          git config user.name  "shiftwise-ci"
+          git config user.email "ci@nextstep-it.com"
+          git add "$OVERLAY_FILE"
+          # The `chore(deploy):` prefix is load-bearing — the CD `if:` excludes
+          # it so this commit's own CI run does not re-trigger a deploy.
+          git commit -m "chore(deploy): ${{ steps.target.outputs.env }} image sha-${{ steps.tag.outputs.short }}"
+          # If the branch is protected and rejects direct pushes, switch to a
+          # PR-based bump (see CICD-RUNBOOK.md).
+          git push origin "${{ steps.target.outputs.branch }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Deployed to ${{ steps.target.outputs.env }}"
+            echo ""
+            echo "- Images: \`shiftwise-backend:sha-${{ steps.tag.outputs.short }}\`, \`shiftwise-frontend:sha-${{ steps.tag.outputs.short }}\`"
+            echo "- Overlay \`${{ steps.target.outputs.overlay }}\` bumped on \`${{ steps.target.outputs.branch }}\`."
+            echo "- Argo CD reconciles the commit and rolls out the new digest."
+          } >> "$GITHUB_STEP_SUMMARY"

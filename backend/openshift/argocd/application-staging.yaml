@@ -46,3 +46,11 @@ spec:
         duration: 30s
         factor: 2
         maxDuration: 8m
+  # The HPA owns `.spec.replicas`; with selfHeal on, Argo would otherwise revert
+  # an autoscaled replica count back to the manifest value. Ignore the field so
+  # the autoscaler and GitOps coexist (see application-production.yaml note).
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
