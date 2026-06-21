@@ -66,8 +66,11 @@ export function KPIPrimary({
           <div className="text-[12px] font-medium text-[var(--text-secondary)]">
             {label}
           </div>
-          <div className="flex items-baseline gap-2 mt-0.5">
-            <span className="text-[18px] font-bold tracking-[-0.01em] text-[var(--text-primary)] tabular leading-none">
+          {/* Reserve the kpi line-box height so the loading skeleton and the
+              resolved value occupy the same vertical space — no layout shift
+              when data arrives, regardless of the skeleton's own height. */}
+          <div className="flex items-baseline gap-2 mt-0.5 min-h-[34px]">
+            <span className="text-kpi text-[var(--text-primary)] tabular leading-none">
               {value}
             </span>
             {delta && (
