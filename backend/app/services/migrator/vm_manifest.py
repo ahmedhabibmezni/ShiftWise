@@ -19,12 +19,14 @@ The output is a plain dict suitable for
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from app.models.virtual_machine import OSType
 
+logger = logging.getLogger(__name__)
 
 _DNS_LABEL_RE = re.compile(r"[^a-z0-9-]")
 _MAX_VM_NAME_LEN = 63
@@ -166,6 +168,30 @@ def _build_volume(d: DiskSpec) -> dict:
     }
 
 
+def _normalize_mac(mac_address: Optional[str]) -> Optional[str]:
+    """Return a colon-separated 6-octet MAC, or ``None`` if not normalizable.
+
+    Sources hand MACs back in inconsistent shapes — Hyper-V/PowerShell yields the
+    bare hex form ``00155D380106`` (no separators), others use ``00:15:5d:38:01:06``
+    or ``00-15-5d-38-01-06``. KubeVirt's KubeMacPool admission webhook rejects any
+    value that is not canonical colon-separated form
+    (``invalid MAC address``), failing VM creation. Strip ``:`` / ``-`` / spaces,
+    validate exactly 12 hex digits, and re-join with colons. A malformed value
+    returns ``None`` so the caller omits ``macAddress`` and lets KubeVirt allocate
+    one — better a fresh MAC than a rejected VM.
+    """
+    if not mac_address:
+        return None
+    hexs = re.sub(r"[\s:\-]", "", mac_address).lower()
+    if len(hexs) != 12 or not all(c in "0123456789abcdef" for c in hexs):
+        logger.warning(
+            "Dropping unparseable source MAC %r — KubeVirt will allocate one",
+            mac_address,
+        )
+        return None
+    return ":".join(hexs[i:i + 2] for i in range(0, 12, 2))
+
+
 def _build_pod_network(mac_address: Optional[str]) -> tuple[dict, dict]:
     """Single masquerade-bound interface on the default pod network."""
     interface: dict = {
@@ -173,8 +199,9 @@ def _build_pod_network(mac_address: Optional[str]) -> tuple[dict, dict]:
         "masquerade": {},
         "model": "virtio",
     }
-    if mac_address:
-        interface["macAddress"] = mac_address
+    normalized = _normalize_mac(mac_address)
+    if normalized:
+        interface["macAddress"] = normalized
     network = {"name": "default", "pod": {}}
     return interface, network
 

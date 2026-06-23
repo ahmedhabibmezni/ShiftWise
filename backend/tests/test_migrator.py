@@ -178,6 +178,27 @@ class TestBuildVirtualMachine:
         assert ifaces[0]["macAddress"] == "aa:bb:cc:dd:ee:ff"
         assert m["spec"]["template"]["spec"]["networks"][0]["pod"] == {}
 
+    def test_colonless_hyperv_mac_is_normalized(self):
+        # Hyper-V/PowerShell yields the bare hex form; KubeMacPool rejects it.
+        m = build_virtual_machine(
+            name="vm1", namespace="ns",
+            cpu_cores=1, memory_mb=512,
+            disks=self._disks(), os_type=OSType.LINUX,
+            mac_address="00155D380106",
+        )
+        ifaces = m["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"]
+        assert ifaces[0]["macAddress"] == "00:15:5d:38:01:06"
+
+    def test_unparseable_mac_is_omitted(self):
+        m = build_virtual_machine(
+            name="vm1", namespace="ns",
+            cpu_cores=1, memory_mb=512,
+            disks=self._disks(), os_type=OSType.LINUX,
+            mac_address="not-a-mac",
+        )
+        ifaces = m["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"]
+        assert "macAddress" not in ifaces[0]  # KubeVirt allocates one
+
     def test_windows_gets_tablet_input(self):
         m = build_virtual_machine(
             name="vm1", namespace="ns",
@@ -457,3 +478,37 @@ class TestMigratorServiceRun:
         with pytest.raises(MigratorError) as excinfo:
             MigratorService().run(db_session, seeded["migration"].id)
         assert excinfo.value.code == "ERR_MIG_QCOW2_MISSING"
+
+    def test_result_metrics_stamped_on_completion(
+        self, db_session, seeded, monkeypatch,
+    ):
+        """Target node + sizes + throughput are recorded on the row when the
+        VM reaches Running (Issue 3 — these were left as '—' in the UI)."""
+        from datetime import datetime, timedelta, timezone
+
+        captured = _patch_k8s_layer(monkeypatch)
+        # VMI lands on a named node.
+        captured["wait_vmi_running"].return_value = {
+            "status": {"phase": "Running", "nodeName": "node02"},
+        }
+        # 12 GiB provisioned source, compressed to a 4 GiB qcow2 actually moved.
+        seeded["job"].source_size_bytes = 12 * 1024 ** 3
+        seeded["job"].output_size_bytes = 4 * 1024 ** 3
+        # Migration started 200s ago so a positive rate is computable.
+        seeded["migration"].started_at = datetime.now(timezone.utc) - timedelta(seconds=200)
+        db_session.commit()
+
+        from app.services.migrator.service import MigratorService
+
+        MigratorService().run(db_session, seeded["migration"].id)
+
+        m = seeded["migration"]
+        db_session.refresh(m)
+        assert m.target_node == "node02"
+        assert m.source_size_gb == pytest.approx(12.0, abs=0.01)
+        assert m.transferred_gb == pytest.approx(4.0, abs=0.01)
+        # 4 GiB * 8 bits / 200 s / 1e6 ≈ 171.8 Mbps.
+        assert m.transfer_rate_mbps is not None
+        assert m.transfer_rate_mbps == pytest.approx(
+            (4 * 1024 ** 3 * 8) / 200 / 1_000_000, rel=0.01,
+        )
