@@ -42,12 +42,25 @@ from app.services.converter.protocol import (
     ProgressCallback,
     PullResult,
 )
+from app.services.ovirt_rest import (
+    OvirtRestClient,
+    OvirtRestError,
+    ovirt_sdk_available,
+    to_int,
+)
 
 logger = logging.getLogger(__name__)
 
 _HASH_CHUNK = 1024 * 1024  # 1 MiB
 # Bound the wait for the engine to move a transfer out of INITIALIZING.
 _TRANSFER_READY_TIMEOUT = 120  # seconds
+# Bound the wait for a VM to reach 'down' after a stop request.
+_STOP_WAIT_TIMEOUT = 300  # seconds
+_STOP_POLL = 2.0  # seconds
+# oVirt status values that mean the VM is (or is becoming) up.
+_OVIRT_RUNNING_STATES = frozenset({
+    "up", "powering_up", "wait_for_launch", "reboot_in_progress", "restoring_state",
+})
 
 
 def _normalise_uuid(raw: str) -> str:
@@ -137,6 +150,8 @@ class OvirtPuller:
     """:class:`DiskPuller` for oVirt/RHV via the ImageTransfer download API."""
 
     def list_disks(self, hv: Hypervisor, vm: VirtualMachine) -> List[DiskDescriptor]:
+        if not ovirt_sdk_available():
+            return self._list_disks_rest(hv, vm)
         connection = _connect(hv)
         try:
             o_vm = _resolve_vm(connection, vm)
@@ -203,6 +218,10 @@ class OvirtPuller:
                 "ERR_VM_RUNNING_NEEDS_COLD",
                 "Live download not implemented for oVirt; power VM off first",
             )
+        if not ovirt_sdk_available():
+            return self._pull_disk_rest(
+                hv, vm, descriptor, dest_path, progress_cb=progress_cb,
+            )
         connection = _connect(hv)
         try:
             sha256 = self._download_disk(
@@ -245,6 +264,11 @@ class OvirtPuller:
                 "ERR_VM_RUNNING_NEEDS_COLD",
                 "Live download not implemented for oVirt; power VM off first",
             )
+        if not ovirt_sdk_available():
+            return self._convert_on_source_rest(
+                hv, vm, descriptor, dest_path,
+                target_format=target_format, progress_cb=progress_cb,
+            )
         raw_tmp = dest_path.with_suffix(dest_path.suffix + ".download")
         connection = _connect(hv)
         try:
@@ -278,6 +302,237 @@ class OvirtPuller:
             size_bytes=dest_path.stat().st_size,
             sha256=sha256,
         )
+
+    # --- REST implementation (SDK-free fallback) ----------------------------
+
+    def _list_disks_rest(self, hv: Hypervisor, vm: VirtualMachine) -> List[DiskDescriptor]:
+        client = OvirtRestClient(hv)
+        try:
+            vm_id = self._rest_resolve_vm_id(client, vm)
+            try:
+                attachments = client.list_disk_attachments(vm_id)
+            except OvirtRestError as e:
+                raise ConversionError(
+                    "ERR_DISK_NOT_FOUND",
+                    f"could not list disk attachments for VM {vm.name!r}: {e}",
+                    cause=e,
+                ) from e
+
+            descriptors: list[DiskDescriptor] = []
+            index = 0
+            for att in attachments:
+                disk_id = (att.get("disk") or {}).get("id")
+                if not disk_id:
+                    continue
+                try:
+                    disk = client.get_disk(disk_id)
+                except OvirtRestError:  # NOSONAR — skip a disk that cannot be read
+                    logger.warning("oVirt (REST): could not read disk %s", disk_id)
+                    continue
+                size = to_int(disk.get("provisioned_size")) or to_int(disk.get("total_size"))
+                fmt = (
+                    SourceFormat.QCOW2
+                    if "cow" in str(disk.get("format") or "").lower()
+                    else SourceFormat.RAW
+                )
+                descriptors.append(DiskDescriptor(index, fmt, size, str(disk_id)))
+                index += 1
+            if not descriptors:
+                raise ConversionError(
+                    "ERR_DISK_NOT_FOUND",
+                    f"VM {vm.name!r}: no disks discovered on oVirt",
+                )
+            return descriptors
+        finally:
+            client.close()
+
+    def _pull_disk_rest(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        progress_cb: Optional[ProgressCallback],
+    ) -> PullResult:
+        client = OvirtRestClient(hv)
+        stopped_here = False
+        try:
+            vm_id = self._rest_resolve_vm_id(client, vm)
+            stopped_here = self._rest_stop_if_running(client, vm_id)
+            try:
+                sha256 = self._rest_download_disk(
+                    client, descriptor.locator, dest_path,
+                    descriptor.size_bytes, hv, progress_cb,
+                )
+            finally:
+                if stopped_here:
+                    self._rest_start(client, vm_id)
+            return PullResult(
+                staged_path=dest_path,
+                source_format=descriptor.source_format,
+                size_bytes=dest_path.stat().st_size,
+                sha256=sha256,
+            )
+        finally:
+            client.close()
+
+    def _convert_on_source_rest(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        dest_path: Path,
+        *,
+        target_format: str,
+        progress_cb: Optional[ProgressCallback],
+    ) -> PullResult:
+        client = OvirtRestClient(hv)
+        stopped_here = False
+        raw_tmp = dest_path.with_suffix(dest_path.suffix + ".download")
+        try:
+            vm_id = self._rest_resolve_vm_id(client, vm)
+            stopped_here = self._rest_stop_if_running(client, vm_id)
+            try:
+                self._rest_download_disk(
+                    client, descriptor.locator, raw_tmp,
+                    descriptor.size_bytes, hv, progress_cb,
+                )
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                partial = dest_path.with_suffix(dest_path.suffix + ".partial")
+                try:
+                    local_qemu_img_convert(raw_tmp, partial, target_format)
+                    partial.replace(dest_path)
+                except ConversionError:
+                    partial.unlink(missing_ok=True)
+                    raise
+                finally:
+                    raw_tmp.unlink(missing_ok=True)
+            finally:
+                if stopped_here:
+                    self._rest_start(client, vm_id)
+
+            sha256 = sha256_file(dest_path)
+            out_fmt = SourceFormat.QCOW2 if target_format == "qcow2" else SourceFormat.RAW
+            return PullResult(
+                staged_path=dest_path,
+                source_format=out_fmt,
+                size_bytes=dest_path.stat().st_size,
+                sha256=sha256,
+            )
+        finally:
+            client.close()
+
+    @staticmethod
+    def _rest_resolve_vm_id(client: OvirtRestClient, vm: VirtualMachine) -> str:
+        """Return the dashed oVirt VM id matching ``vm`` (by uuid, then name)."""
+        try:
+            ovirt_vms = client.list_vms()
+        except OvirtRestError as e:
+            raise ConversionError(
+                "ERR_HV_UNREACHABLE", f"could not list oVirt VMs: {e}", cause=e,
+            ) from e
+        if vm.source_uuid:
+            want = _normalise_uuid(vm.source_uuid)
+            for o in ovirt_vms:
+                if _normalise_uuid(o.get("id", "")) == want:
+                    return o["id"]
+        for o in ovirt_vms:
+            if o.get("name") == vm.name:
+                return o["id"]
+        raise ConversionError(
+            "ERR_VM_NOT_FOUND",
+            f"VM {vm.name!r} (uuid={vm.source_uuid}) not found on oVirt engine",
+        )
+
+    @staticmethod
+    def _rest_stop_if_running(client: OvirtRestClient, vm_id: str) -> bool:
+        """Power the VM off if it is up, waiting until it reaches 'down'.
+
+        Returns True iff this call issued the stop (so the caller restarts it
+        afterwards). A cold ImageTransfer download requires the disk unlocked,
+        which means the VM must be down.
+        """
+        status = client.vm_status(vm_id).lower()
+        if status not in _OVIRT_RUNNING_STATES:
+            return False
+        logger.info("oVirt (REST): powering off VM %s before cold disk transfer", vm_id)
+        client.stop_vm(vm_id)
+        deadline = time.monotonic() + _STOP_WAIT_TIMEOUT
+        while time.monotonic() < deadline:
+            if client.vm_status(vm_id).lower() == "down":
+                return True
+            time.sleep(_STOP_POLL)
+        raise ConversionError(
+            "ERR_HV_TRANSIENT",
+            f"oVirt VM {vm_id} did not power off within {_STOP_WAIT_TIMEOUT}s",
+        )
+
+    @staticmethod
+    def _rest_start(client: OvirtRestClient, vm_id: str) -> None:
+        """Best-effort restart of a source VM we powered off."""
+        try:
+            client.start_vm(vm_id)
+        except OvirtRestError:  # NOSONAR — restart failure must not fail the migration
+            logger.warning("oVirt (REST): failed to restart source VM %s", vm_id, exc_info=True)
+
+    @classmethod
+    def _rest_download_disk(
+        cls,
+        client: OvirtRestClient,
+        disk_id: str,
+        dest_path: Path,
+        expected_size: int,
+        hv: Hypervisor,
+        progress_cb: Optional[ProgressCallback],
+    ) -> str:
+        """Run a full ImageTransfer download of ``disk_id`` into ``dest_path`` (REST)."""
+        try:
+            transfer = client.start_image_transfer(disk_id, "download")
+        except OvirtRestError as e:
+            raise ConversionError(
+                "ERR_HV_UNREACHABLE",
+                f"oVirt: could not start image transfer for disk {disk_id}: {e}",
+                cause=e,
+            ) from e
+        transfer_id = transfer.get("id")
+        if not transfer_id:
+            raise ConversionError(
+                "ERR_HV_UNREACHABLE", "oVirt: image transfer returned no id",
+            )
+        try:
+            url = cls._rest_await_transfer_url(client, transfer_id)
+            return cls._stream_url(
+                url, dest_path=dest_path, expected_size=expected_size,
+                hv=hv, progress_cb=progress_cb,
+            )
+        finally:
+            try:
+                client.finalize_image_transfer(transfer_id)
+            except OvirtRestError:  # NOSONAR — finalize failure must not mask result
+                logger.debug("oVirt (REST): transfer finalize failed", exc_info=True)
+
+    @staticmethod
+    def _rest_await_transfer_url(client: OvirtRestClient, transfer_id: str) -> str:
+        """Poll until the transfer leaves INITIALIZING and return its URL."""
+        deadline = time.monotonic() + _TRANSFER_READY_TIMEOUT
+        while True:
+            transfer = client.get_image_transfer(transfer_id)
+            phase = str(transfer.get("phase") or "").lower()
+            if phase and phase != "initializing":
+                url = transfer.get("proxy_url") or transfer.get("transfer_url")
+                if not url:
+                    raise ConversionError(
+                        "ERR_HV_UNREACHABLE",
+                        "oVirt image transfer exposed no proxy_url/transfer_url",
+                    )
+                return url
+            if time.monotonic() >= deadline:
+                raise ConversionError(
+                    "ERR_HV_TRANSIENT",
+                    "oVirt image transfer stuck in INITIALIZING",
+                )
+            time.sleep(1)
 
     # --- internal helpers ---------------------------------------------------
 

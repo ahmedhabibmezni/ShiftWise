@@ -28,6 +28,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,6 +37,7 @@ from app.models.hypervisor import Hypervisor
 from app.models.virtual_machine import VirtualMachine
 from app.services.converter.connectors.base import (
     local_qemu_img_convert,
+    replay_vhdx_log,
     sha256_file,
     stream_copy,
 )
@@ -51,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 _HASH_CHUNK = 1024 * 1024  # 1 MiB
 _PS_TIMEOUT = 120  # seconds for metadata / control PowerShell calls
+# Max wait, after Stop-VM, for the automatic-checkpoint .avhdx to finish merging
+# into its base .vhdx and the file handle to be released (qemu-img can open it).
+_DISK_SETTLE_TIMEOUT = 600.0
 
 
 def _ps_lit(value: str) -> str:
@@ -298,7 +303,15 @@ class HyperVPuller:
         raw_tmp: Optional[Path] = None
         try:
             if _is_local(hv):
-                src = Path(descriptor.locator)
+                if cold and stopped_here:
+                    # Stopping the VM makes Hyper-V merge its automatic-checkpoint
+                    # .avhdx back into the base .vhdx and delete it, so the disk
+                    # captured while the VM ran is now stale. Re-resolve the live
+                    # active disk and wait for the merge + handle release to
+                    # settle before converting.
+                    src = self._await_local_source_after_stop(hv, vm, descriptor)
+                else:
+                    src = Path(descriptor.locator)
                 if not src.is_file():
                     raise ConversionError(
                         "ERR_DISK_NOT_FOUND", f"VHD(X) not found on host: {src}",
@@ -310,6 +323,9 @@ class HyperVPuller:
                     descriptor.size_bytes, progress_cb,
                 )
                 src = raw_tmp
+                # The pulled copy may carry a dirty journal log (hard power-off);
+                # replay it before qemu-img opens it read-only.
+                replay_vhdx_log(src)
 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             partial = dest_path.with_suffix(dest_path.suffix + ".partial")
@@ -335,6 +351,47 @@ class HyperVPuller:
         )
 
     # --- internal helpers ---------------------------------------------------
+
+    def _await_local_source_after_stop(
+        self,
+        hv: Hypervisor,
+        vm: VirtualMachine,
+        descriptor: DiskDescriptor,
+        *,
+        timeout: float = _DISK_SETTLE_TIMEOUT,
+        poll: float = 1.0,
+    ) -> Path:
+        """Resolve the local disk to convert after a cold ``Stop-VM``.
+
+        Stopping the VM makes Hyper-V merge its automatic-checkpoint ``.avhdx``
+        back into the base ``.vhdx`` and delete it, so ``descriptor.locator``
+        (captured while the VM ran) is stale. Re-resolve the live active disk for
+        this index and wait until ``qemu-img`` can open it — covering the async
+        VHDX file-handle release **and** the checkpoint merge — replaying any
+        dirty journal log in the process. Returns the ready ``Path``; on timeout
+        returns the best path seen so the convert surfaces a clear error.
+        """
+        deadline = time.monotonic() + timeout
+        src = Path(descriptor.locator)
+        while True:
+            try:
+                descs = self.list_disks(hv, vm)
+                match = next(
+                    (d for d in descs if d.disk_index == descriptor.disk_index),
+                    None,
+                )
+                if match:
+                    src = Path(match.locator)
+            except ConversionError:  # NOSONAR — transient during merge; retry
+                logger.debug("disk re-resolve failed, will retry", exc_info=True)
+            if src.is_file() and replay_vhdx_log(src):
+                return src
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "Hyper-V source disk not ready after %ss: %s", timeout, src,
+                )
+                return src
+            time.sleep(poll)
 
     @staticmethod
     def _stop_vm_if_running(hv: Hypervisor, vm: VirtualMachine) -> bool:

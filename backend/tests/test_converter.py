@@ -819,6 +819,8 @@ class TestOvirtConnector:
         from app.services.converter.connectors.ovirt import OvirtPuller
         from app.services.converter.protocol import DiskDescriptor
 
+        # Force the SDK path so the SDK-internal monkeypatches below apply.
+        monkeypatch.setattr(ovirt, "ovirt_sdk_available", lambda: True)
         monkeypatch.setattr(ovirt, "_connect", lambda hv: _DummySSH())
         monkeypatch.setattr(ovirt, "_close", lambda c: None)
 
@@ -855,6 +857,131 @@ class TestOvirtConnector:
                 _HVStub(), _VMStub2(), desc, Path("/tmp/x"), cold=False,
             )
         assert ei.value.code == "ERR_VM_RUNNING_NEEDS_COLD"
+
+
+class _FakeOvirtRest:
+    """In-memory stand-in for OvirtRestClient used by REST-path connector tests."""
+
+    def __init__(self, *, vms=None, attachments=None, disks=None, statuses=None):
+        self._vms = vms or []
+        self._attachments = attachments or []
+        self._disks = disks or {}
+        self._statuses = list(statuses or ["down"])
+        self.stopped = False
+        self.started = False
+        self.finalized = False
+        self.closed = False
+
+    def list_vms(self):
+        return self._vms
+
+    def list_disk_attachments(self, vm_id):
+        return self._attachments
+
+    def get_disk(self, disk_id):
+        return self._disks[disk_id]
+
+    def vm_status(self, vm_id):
+        # Pop through the queue, holding the last value once exhausted.
+        return self._statuses.pop(0) if len(self._statuses) > 1 else self._statuses[0]
+
+    def stop_vm(self, vm_id):
+        self.stopped = True
+
+    def start_vm(self, vm_id):
+        self.started = True
+
+    def start_image_transfer(self, disk_id, direction="download"):
+        return {"id": "t1"}
+
+    def get_image_transfer(self, transfer_id):
+        return {"phase": "transferring", "proxy_url": "https://engine/img/t1"}
+
+    def finalize_image_transfer(self, transfer_id):
+        self.finalized = True
+
+    def close(self):
+        self.closed = True
+
+
+class TestOvirtRestConnector:
+    def _patch(self, monkeypatch, fake):
+        from app.services.converter.connectors import ovirt
+        monkeypatch.setattr(ovirt, "ovirt_sdk_available", lambda: False)
+        monkeypatch.setattr(ovirt, "OvirtRestClient", lambda hv, **kw: fake)
+        return ovirt
+
+    def test_resolve_vm_id_by_uuid(self):
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        fake = _FakeOvirtRest(vms=[
+            {"id": "11111111-0000-0000-0000-000000000000", "name": "other"},
+            {"id": "85fd0955-f674-4858-b1eb-c26e569f4fa7", "name": "shiftwise-testvm"},
+        ])
+        vm = _VMStub2("anything", source_uuid="85FD0955f6744858b1ebc26e569f4fa7")
+        assert OvirtPuller._rest_resolve_vm_id(fake, vm) == \
+            "85fd0955-f674-4858-b1eb-c26e569f4fa7"
+
+    def test_list_disks_rest(self, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        fake = _FakeOvirtRest(
+            vms=[{"id": "vm-1", "name": "shiftwise-testvm"}],
+            attachments=[{"disk": {"id": "d99627a7"}}],
+            disks={"d99627a7": {"format": "cow", "provisioned_size": 117440512}},
+        )
+        self._patch(monkeypatch, fake)
+        vm = _VMStub2("shiftwise-testvm", source_uuid="vm-1")
+        descs = OvirtPuller().list_disks(_HVStub(), vm)
+        assert len(descs) == 1
+        assert descs[0].source_format == SourceFormat.QCOW2
+        assert descs[0].size_bytes == 117440512
+        assert descs[0].locator == "d99627a7"
+
+    def test_convert_on_source_rest_stops_downloads_restarts(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        fake = _FakeOvirtRest(
+            vms=[{"id": "vm-1", "name": "shiftwise-testvm"}],
+            statuses=["up", "down"],
+        )
+        ovirt = self._patch(monkeypatch, fake)
+
+        def fake_stream(url, *, dest_path, expected_size, hv, progress_cb):
+            Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest_path).write_bytes(b"RAW-DATA")
+            return "rawsha"
+
+        monkeypatch.setattr(OvirtPuller, "_stream_url", staticmethod(fake_stream))
+        monkeypatch.setattr(
+            ovirt, "local_qemu_img_convert",
+            lambda src, dest, fmt: Path(dest).write_bytes(b"QCOW2-rest"),
+        )
+
+        desc = DiskDescriptor(0, SourceFormat.QCOW2, 8, "d99627a7")
+        dest = tmp_path / "0.qcow2"
+        vm = _VMStub2("shiftwise-testvm", source_uuid="vm-1")
+        result = OvirtPuller().convert_on_source(_HVStub(), vm, desc, dest, cold=True)
+
+        assert dest.read_bytes() == b"QCOW2-rest"
+        assert result.source_format == SourceFormat.QCOW2
+        # Running VM was stopped before transfer and restarted after.
+        assert fake.stopped and fake.started and fake.finalized
+        # Intermediate download file cleaned up.
+        assert not dest.with_suffix(dest.suffix + ".download").exists()
+
+    def test_stop_if_running_noop_when_down(self):
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        fake = _FakeOvirtRest(statuses=["down"])
+        assert OvirtPuller._rest_stop_if_running(fake, "vm-1") is False
+        assert fake.stopped is False
+
+    def test_await_transfer_url_prefers_proxy(self):
+        from app.services.converter.connectors.ovirt import OvirtPuller
+        fake = _FakeOvirtRest()
+        url = OvirtPuller._rest_await_transfer_url(fake, "t1")
+        assert url == "https://engine/img/t1"
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +1045,113 @@ class TestHyperVConnector:
         )
         assert dest.read_bytes() == b"QCOW2-hv"
         assert result.source_format == SourceFormat.QCOW2
+
+    def test_convert_on_source_local_reresolves_disk_after_stop(
+        self, tmp_path, monkeypatch
+    ):
+        """When the connector stops the VM, Hyper-V merges the automatic-checkpoint
+        .avhdx into the base .vhdx (the .avhdx is deleted). The disk captured while
+        running is stale, so convert_on_source must re-resolve the live active disk
+        (the base .vhdx) and convert that, not the recorded .avhdx.
+        """
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import hyperv
+        from app.services.converter.connectors.hyperv import HyperVPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        stale_avhdx = tmp_path / "Migration_ABC.avhdx"   # recorded while running
+        base_vhdx = tmp_path / "Migration.vhdx"          # active after the merge
+        base_vhdx.write_bytes(b"x" * 64)
+
+        monkeypatch.setattr(
+            HyperVPuller, "_stop_vm_if_running", staticmethod(lambda hv, vm: True)
+        )
+        # After the stop, list_disks reports the merged base .vhdx for index 0.
+        monkeypatch.setattr(
+            HyperVPuller, "list_disks",
+            lambda self, hv, vm: [
+                DiskDescriptor(0, SourceFormat.VHDX, 64, str(base_vhdx))
+            ],
+        )
+        monkeypatch.setattr(hyperv, "replay_vhdx_log", lambda s: True)
+
+        converted_from: dict[str, str] = {}
+
+        def _fake_convert(s, dest, fmt):
+            converted_from["src"] = str(s)
+            Path(dest).write_bytes(b"QCOW2-hv")
+
+        monkeypatch.setattr(hyperv, "local_qemu_img_convert", _fake_convert)
+        desc = DiskDescriptor(0, SourceFormat.VHDX, 64, str(stale_avhdx))
+        dest = tmp_path / "0.qcow2"
+        HyperVPuller().convert_on_source(
+            _HVStub(connection_config={"auth_mode": "local"}),
+            _VMStub2(), desc, dest, cold=True,
+        )
+        assert converted_from["src"] == str(base_vhdx), \
+            "must convert the re-resolved base .vhdx, not the stale .avhdx"
+
+
+class TestReplayVhdxLog:
+    """``replay_vhdx_log`` is the single-shot openability probe: True only when
+    ``qemu-img check -r all`` opens the image and returns 0 (log replayed)."""
+
+    def _result(self, rc, err=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=rc, stdout="", stderr=err)
+
+    def test_returns_true_when_check_succeeds(self, tmp_path, monkeypatch):
+        from app.services.converter.connectors import base
+        monkeypatch.setattr(
+            base.subprocess, "run",
+            lambda *a, **k: self._result(0, "No errors were found on the image."),
+        )
+        assert base.replay_vhdx_log(tmp_path / "0.vhdx") is True
+
+    def test_returns_false_when_locked(self, tmp_path, monkeypatch):
+        from app.services.converter.connectors import base
+        monkeypatch.setattr(
+            base.subprocess, "run",
+            lambda *a, **k: self._result(1, "Could not open 'x': Unknown error"),
+        )
+        assert base.replay_vhdx_log(tmp_path / "0.avhdx") is False
+
+    def test_returns_false_when_qemu_missing(self, tmp_path, monkeypatch):
+        from app.services.converter.connectors import base
+
+        def _raise(*a, **k):
+            raise FileNotFoundError("qemu-img")
+
+        monkeypatch.setattr(base.subprocess, "run", _raise)
+        assert base.replay_vhdx_log(tmp_path / "0.vhdx") is False
+
+
+class TestAwaitLocalSourceAfterStop:
+    """``_await_local_source_after_stop`` polls until the re-resolved disk is
+    openable, tolerating the merge window where it is locked / changing path."""
+
+    def test_polls_until_disk_ready(self, tmp_path, monkeypatch):
+        from app.models.conversion import SourceFormat
+        from app.services.converter.connectors import hyperv
+        from app.services.converter.connectors.hyperv import HyperVPuller
+        from app.services.converter.protocol import DiskDescriptor
+
+        base_vhdx = tmp_path / "Migration.vhdx"
+        base_vhdx.write_bytes(b"x" * 16)
+        monkeypatch.setattr(
+            HyperVPuller, "list_disks",
+            lambda self, hv, vm: [DiskDescriptor(0, SourceFormat.VHDX, 16, str(base_vhdx))],
+        )
+        # replay returns False twice (still merging/locked) then True.
+        seq = iter([False, False, True])
+        monkeypatch.setattr(hyperv, "replay_vhdx_log", lambda s: next(seq))
+        monkeypatch.setattr(hyperv.time, "sleep", lambda *_: None)
+
+        desc = DiskDescriptor(0, SourceFormat.VHDX, 16, str(tmp_path / "stale.avhdx"))
+        out = HyperVPuller()._await_local_source_after_stop(
+            _HVStub(), _VMStub2(), desc, timeout=10, poll=0,
+        )
+        assert out == base_vhdx
 
 
 # ---------------------------------------------------------------------------

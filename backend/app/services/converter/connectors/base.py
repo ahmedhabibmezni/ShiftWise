@@ -158,6 +158,46 @@ def local_qemu_img_convert(
         )
 
 
+def replay_vhdx_log(src: Path, *, timeout: int = 1800) -> bool:
+    """Single-shot ``qemu-img check -r all`` — replay a dirty VHDX log and report
+    whether the image is now openable.
+
+    A Hyper-V VM powered off with ``Stop-VM -Force`` (a hard turn-off — required
+    when the guest has no integration services for a graceful ACPI shutdown)
+    leaves its VHDX with an unreplayed journal log; ``qemu-img`` opens a
+    conversion *source* read-only and refuses such an image
+    (``contains a log that needs to be replayed``). ``check -r all`` opens it
+    read-write and replays the log — idempotent, exactly what the guest's next
+    boot would do, so it does not alter guest data.
+
+    Returns ``True`` iff qemu-img opened the image and the check returned 0 (log
+    replayed or already clean). Returns ``False`` on a transient open failure —
+    the file handle is still held (``Stop-VM`` releases the VHDX handle
+    asynchronously) or the file is momentarily absent (an automatic-checkpoint
+    ``.avhdx`` mid-merge into its base) — or on real corruption. Best-effort: a
+    missing ``qemu-img`` or a timeout also yields ``False``. A caller that just
+    stopped a VM should poll this until ``True``
+    (see :meth:`HyperVPuller._await_local_source_after_stop`).
+    """
+    qemu_img = settings.CONVERTER_LOCAL_QEMU_IMG
+    cmd = [qemu_img, "check", "-r", "all", str(src)]
+    try:
+        result = subprocess.run(  # NOSONAR — local trusted tool, fixed argv
+            cmd, capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:  # NOSONAR
+        logger.warning("VHDX check/replay skipped for %s: %s", src, e)
+        return False
+    if result.returncode == 0:
+        return True
+    logger.debug(
+        "qemu-img check -r all on %s rc=%s: %s",
+        src, result.returncode,
+        (result.stderr or result.stdout or "").strip()[:300],
+    )
+    return False
+
+
 def free_space_bytes(path: Path) -> int:
     """Return free bytes on the filesystem hosting ``path`` (creating parents if needed)."""
     path.parent.mkdir(parents=True, exist_ok=True)
