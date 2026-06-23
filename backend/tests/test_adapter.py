@@ -80,6 +80,89 @@ class TestAdapterJobNaming:
         assert adapter_job_name(42, 0) != adapter_job_name(42, 1)
 
 
+class TestSubmitAdapterJobRetry:
+    """A leftover Job from a failed run (deterministic name) must be deleted and
+    recreated on retry — never reused, or its terminal failure resurfaces."""
+
+    def _kv_with_create(self, create_side_effects, job_status):
+        from kubernetes.client.rest import ApiException
+        kv = MagicMock()
+        kv.batch_api.create_namespaced_job.side_effect = create_side_effects
+        job = MagicMock()
+        job.status = job_status
+        # read returns the terminal job once (for is-active check), then 404
+        # (after delete) so the wait loop sees it gone.
+        kv.batch_api.read_namespaced_job_status.side_effect = [
+            job, ApiException(status=404),
+        ]
+        return kv
+
+    def _patch(self, monkeypatch, kv):
+        from app.services.adapter import guestfish_job as gj
+        monkeypatch.setattr(gj, "get_kubevirt_client", lambda: kv)
+        monkeypatch.setattr(gj, "discover_transit_nfs", lambda _kv: ("nfs.local", "/export"))
+
+    def test_failed_stale_job_is_deleted_and_recreated(self, monkeypatch):
+        from kubernetes.client.rest import ApiException
+        from app.services.adapter import guestfish_job as gj
+
+        # First create -> 409 (exists, failed); after delete, second create -> ok.
+        failed_status = MagicMock(succeeded=0, failed=1)
+        kv = self._kv_with_create([ApiException(status=409), MagicMock()], failed_status)
+        self._patch(monkeypatch, kv)
+
+        out = gj.submit_adapter_job(
+            namespace="shiftwise-t", job_name="shiftwise-adapt-17-d0",
+            migration_id=17, disk_index=0,
+            src_relative_path="t/outputs/g/0.qcow2", os_type=OSType.LINUX,
+        )
+        assert out == "shiftwise-adapt-17-d0"
+        assert kv.batch_api.create_namespaced_job.call_count == 2
+        kv.batch_api.delete_namespaced_job.assert_called_once()
+
+    def test_succeeded_job_is_reused_not_rerun(self, monkeypatch):
+        from kubernetes.client.rest import ApiException
+        from app.services.adapter import guestfish_job as gj
+
+        succeeded_status = MagicMock(succeeded=1, failed=0)
+        kv = MagicMock()
+        kv.batch_api.create_namespaced_job.side_effect = [ApiException(status=409)]
+        done = MagicMock()
+        done.status = succeeded_status
+        kv.batch_api.read_namespaced_job_status.side_effect = [done]
+        self._patch(monkeypatch, kv)
+
+        out = gj.submit_adapter_job(
+            namespace="shiftwise-t", job_name="shiftwise-adapt-17-d0",
+            migration_id=17, disk_index=0,
+            src_relative_path="t/outputs/g/0.qcow2", os_type=OSType.LINUX,
+        )
+        assert out == "shiftwise-adapt-17-d0"
+        assert kv.batch_api.create_namespaced_job.call_count == 1  # not re-run
+        kv.batch_api.delete_namespaced_job.assert_not_called()
+
+    def test_active_job_is_reused_not_deleted(self, monkeypatch):
+        from kubernetes.client.rest import ApiException
+        from app.services.adapter import guestfish_job as gj
+
+        active_status = MagicMock(succeeded=0, failed=0)  # still running
+        kv = MagicMock()
+        kv.batch_api.create_namespaced_job.side_effect = [ApiException(status=409)]
+        running = MagicMock()
+        running.status = active_status
+        kv.batch_api.read_namespaced_job_status.side_effect = [running]
+        self._patch(monkeypatch, kv)
+
+        out = gj.submit_adapter_job(
+            namespace="shiftwise-t", job_name="shiftwise-adapt-17-d0",
+            migration_id=17, disk_index=0,
+            src_relative_path="t/outputs/g/0.qcow2", os_type=OSType.LINUX,
+        )
+        assert out == "shiftwise-adapt-17-d0"
+        assert kv.batch_api.create_namespaced_job.call_count == 1  # not recreated
+        kv.batch_api.delete_namespaced_job.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Job manifest
 # ---------------------------------------------------------------------------

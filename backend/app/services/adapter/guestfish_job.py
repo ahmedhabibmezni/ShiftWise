@@ -190,18 +190,21 @@ echo ">>> Adapter done"
 # built for that platform's storage/network drivers (vmw_pvscsi, mptspi,
 # hv_storvsc, …) and NO virtio modules. Under KubeVirt the root disk sits on
 # the virtio bus, so such a guest cannot find its root device and stalls/panics
-# on first boot. Regenerate the initramfs with virtio forced in. Both tool
-# families are attempted; the one that exists for the guest distro runs, the
-# other is a no-op (|| true). Idempotent — harmless on a guest that already
-# ships virtio (KVM/Proxmox/oVirt sources), so it is gated off there only to
-# avoid a redundant (slow, TCG) second virt-customize launch, not for safety.
+# on first boot. Regenerate the initramfs with virtio forced in. Exactly one
+# regenerator runs, selected by the guest's init tooling: initramfs-tools
+# (`update-initramfs`, Debian/Ubuntu) is preferred, else dracut (RHEL/Fedora).
+# They are mutually exclusive on purpose — running BOTH double-regenerates and,
+# under the TCG appliance, `dracut --regenerate-all` (every installed kernel) on
+# a guest that also ships update-initramfs OOM-kills the appliance. Idempotent —
+# harmless on a guest that already ships virtio (KVM/Proxmox/oVirt sources), so
+# it is gated off there only to avoid a redundant (slow, TCG) second
+# virt-customize launch, not for safety.
 _VIRTIO_INITRAMFS_FIXUP = r"""
 echo ">>> virtio: forcing virtio drivers into the initramfs"
 virt-customize -a "$DISK" \
   --run-command 'echo "virtio_blk virtio_net virtio_pci virtio_scsi" | tr " " "\n" >> /etc/initramfs-tools/modules 2>/dev/null || true' \
   --run-command 'mkdir -p /etc/dracut.conf.d && echo '\''add_drivers+=" virtio_blk virtio_net virtio_pci virtio_scsi "'\'' > /etc/dracut.conf.d/99-shiftwise-virtio.conf 2>/dev/null || true' \
-  --run-command 'update-initramfs -u 2>/dev/null || true' \
-  --run-command 'dracut --regenerate-all --force 2>/dev/null || true' \
+  --run-command 'if command -v update-initramfs >/dev/null 2>&1; then update-initramfs -u; elif command -v dracut >/dev/null 2>&1; then dracut --regenerate-all --force; fi 2>/dev/null || true' \
   || {
     echo "ERROR virtio initramfs virt-customize exit $?"
     exit 1
@@ -320,6 +323,72 @@ def adapter_job_name(migration_id: int, disk_index: int) -> str:
     return f"shiftwise-adapt-{int(migration_id)}-d{int(disk_index)}"
 
 
+def _existing_job_is_reusable(kv, namespace: str, job_name: str) -> bool:
+    """True if the named Job can be reused as-is (active or already succeeded).
+
+    Only a Job that has ``failed`` (and not succeeded) is a stale leftover from a
+    failed run that must be deleted + recreated for the retry — re-running an
+    already-succeeded adaptation would waste ~15 min under the TCG appliance, and
+    reusing it lets the orchestrator move straight to the next stage. A read
+    failure is treated as non-reusable so the caller deletes + recreates (safe:
+    delete is idempotent).
+    """
+    try:
+        job = kv.batch_api.read_namespaced_job_status(
+            name=job_name, namespace=namespace,
+            _request_timeout=_K8S_READ_TIMEOUT_SECONDS,
+        )
+    except ApiException:
+        return False
+    status = job.status
+    if (status.failed or 0) >= 1 and (status.succeeded or 0) < 1:
+        return False  # stale failed Job — retry needs a fresh one
+    return True  # active, or already succeeded — reuse
+
+
+def _delete_job_and_wait(
+    kv, namespace: str, job_name: str,
+    *, timeout_seconds: float = 60.0, poll_seconds: float = 1.0,
+) -> None:
+    """Delete a Job (and its pods, Foreground propagation) and wait until gone.
+
+    Foreground propagation ensures the pods are reaped before we recreate a Job
+    of the same name, avoiding an orphaned pod racing the new one.
+    """
+    from kubernetes import client as k8s_client
+
+    try:
+        kv.batch_api.delete_namespaced_job(
+            name=job_name, namespace=namespace,
+            body=k8s_client.V1DeleteOptions(propagation_policy="Foreground"),
+            _request_timeout=_K8S_READ_TIMEOUT_SECONDS,
+        )
+    except ApiException as e:
+        if e.status == 404:
+            return
+        raise AdapterError(
+            "ERR_ADAPT_K8S_TIMEOUT",
+            f"Could not delete stale adapter Job {namespace}/{job_name}: {e}",
+            cause=e,
+        ) from e
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            kv.batch_api.read_namespaced_job_status(
+                name=job_name, namespace=namespace,
+                _request_timeout=_K8S_READ_TIMEOUT_SECONDS,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return  # fully deleted
+        time.sleep(poll_seconds)
+    raise AdapterError(
+        "ERR_ADAPT_K8S_TIMEOUT",
+        f"Stale adapter Job {namespace}/{job_name} not deleted within "
+        f"{timeout_seconds}s",
+    )
+
+
 def submit_adapter_job(
     *,
     namespace: str,
@@ -362,8 +431,21 @@ def submit_adapter_job(
         logger.info("Submitted adapter Job %s/%s", namespace, job_name)
     except ApiException as e:
         if e.status == 409:
-            logger.info("Adapter Job %s/%s already exists — reusing",
-                        namespace, job_name)
+            # A Job with this (deterministic) name already exists. If it is still
+            # active it is a re-delivered in-flight task — reuse it. If it already
+            # reached a terminal state it is a stale Job from a previous *failed*
+            # run; reusing it would instantly resurface that old failure (e.g. a
+            # DeadlineExceeded), so delete it and recreate fresh for the retry.
+            if _existing_job_is_reusable(kv, namespace, job_name):
+                logger.info("Adapter Job %s/%s reusable — reusing", namespace, job_name)
+                return job_name
+            logger.info(
+                "Adapter Job %s/%s exists in a failed state — deleting and "
+                "recreating for retry", namespace, job_name,
+            )
+            _delete_job_and_wait(kv, namespace, job_name)
+            kv.batch_api.create_namespaced_job(namespace=namespace, body=manifest)
+            logger.info("Resubmitted adapter Job %s/%s", namespace, job_name)
             return job_name
         if e.status in (401, 403):
             raise AdapterError(
