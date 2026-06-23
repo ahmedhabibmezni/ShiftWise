@@ -24,6 +24,7 @@ import logging
 
 from app.models.hypervisor import Hypervisor, HypervisorType, HypervisorStatus
 from app.models.virtual_machine import VirtualMachine, VMStatus, CompatibilityStatus, OSType
+from app.services.ovirt_rest import build_base_url, to_int
 
 logger = logging.getLogger(__name__)
 
@@ -1305,6 +1306,7 @@ def _parse_proxmox_vm(
     resource: Dict[str, Any],
     config: Dict[str, Any],
     agent_net: Optional[List[Dict[str, Any]]] = None,
+    agent_hostname: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a ShiftWise VM dict from Proxmox cluster resource + qemu config."""
     vmid = resource.get("vmid")
@@ -1370,7 +1372,10 @@ def _parse_proxmox_vm(
         "os_name":              os_name,
         "ip_address":           ip_address,
         "mac_address":          mac_address,
-        "hostname":             None,
+        # Real guest OS hostname when the agent reports it; the Proxmox API
+        # otherwise exposes no hostname (the config "name" is the inventory
+        # label, not the guest hostname), so it stays null.
+        "hostname":             agent_hostname,
         "power_state":          power_state,
         "compatibility_status": CompatibilityStatus.UNKNOWN,
     }
@@ -1485,6 +1490,85 @@ def _parse_ovirt_vm(
         "os_type":              os_type,
         "os_version":           os_version,
         "os_name":              os_name,
+        "ip_address":           ip_address,
+        "mac_address":          mac_address,
+        "hostname":             hostname,
+        "power_state":          power_state,
+        "compatibility_status": CompatibilityStatus.UNKNOWN,
+    }
+
+
+def _ovirt_rest_first_ipv4(devices: Optional[List[dict]]) -> tuple[Optional[str], Optional[str]]:
+    """Pull the first non-loopback IPv4 + MAC from oVirt reported-device JSON.
+
+    oVirt nests addresses as ``{"ips": {"ip": [{"address": ..., "version": ...}]}}``
+    on a running guest with the agent up; on older payloads ``ips`` may already be
+    a list. Both shapes are handled.
+    """
+    ip_address: Optional[str] = None
+    mac_address: Optional[str] = None
+    for dev in devices or []:
+        mac = (dev.get("mac") or {}).get("address")
+        if mac and not mac_address:
+            mac_address = mac
+        ips = dev.get("ips")
+        ip_list = ips.get("ip") if isinstance(ips, dict) else ips
+        for ip in ip_list or []:
+            addr = ip.get("address")
+            version = str(ip.get("version") or "")
+            if addr and version.lower() in ("v4", "ipv4", "") and not addr.startswith("127."):
+                ip_address = addr
+                break
+        if ip_address:
+            break
+    return ip_address, mac_address
+
+
+def _parse_ovirt_vm_rest(
+    vm: dict,
+    disk_gb: int,
+    devices: Optional[List[dict]] = None,
+) -> Dict[str, Any]:
+    """Build a ShiftWise VM dict from an oVirt REST VM JSON object.
+
+    Mirrors :func:`_parse_ovirt_vm` (the SDK-object variant) but reads JSON dicts
+    and coerces oVirt's stringly-typed numerics via :func:`to_int`.
+    """
+    uuid = (vm.get("id") or "").replace("-", "").lower()
+    name = vm.get("name") or "unknown"
+
+    topo = (vm.get("cpu") or {}).get("topology") or {}
+    cpu_cores = (
+        to_int(topo.get("cores"), 1)
+        * to_int(topo.get("sockets"), 1)
+        * to_int(topo.get("threads"), 1)
+    ) or 1
+
+    memory_mb = to_int(vm.get("memory"), 0) // (1024 * 1024)
+
+    status_str = str(vm.get("status") or "").lower()
+    power_state = _OVIRT_STATE_MAP.get(status_str, "unknown")
+
+    os_type_raw = (vm.get("os") or {}).get("type") or ""
+    os_type = _ovirt_os_type(os_type_raw)
+
+    bios_type = (vm.get("bios") or {}).get("type")
+    firmware = _normalize_firmware(bios_type)
+
+    hostname = vm.get("fqdn") or None
+    ip_address, mac_address = _ovirt_rest_first_ipv4(devices)
+
+    return {
+        "source_uuid":          uuid,
+        "source_name":          name,
+        "name":                 name,
+        "firmware":             firmware,
+        "cpu_cores":            cpu_cores,
+        "memory_mb":            memory_mb,
+        "disk_gb":              disk_gb,
+        "os_type":              os_type,
+        "os_version":           os_type_raw or "unknown",
+        "os_name":              os_type_raw or "unknown",
         "ip_address":           ip_address,
         "mac_address":          mac_address,
         "hostname":             hostname,
@@ -1827,12 +1911,67 @@ class DiscoveryService:
         disk_sizes = self._kvm_disk_sizes(run, disk_paths)
 
         vm_dict = _parse_kvm_domain_xml(xml_out, state_str, disk_sizes)
+
+        # Best-effort live network/hostname via the QEMU guest agent. Only a
+        # running domain with the agent installed answers; failures are silent
+        # (a powered-off VM or a guest without qemu-guest-agent legitimately
+        # exposes neither). virsh XML carries no IP/hostname, so without this
+        # both fields stay null on every KVM VM.
+        if vm_dict["power_state"] == "running":
+            ip_addr = self._kvm_guest_ipv4(run, safe_name)
+            if ip_addr:
+                vm_dict["ip_address"] = ip_addr
+            hostname = self._kvm_guest_hostname(run, safe_name)
+            if hostname:
+                vm_dict["hostname"] = hostname
+
         logger.info(
             f"  KVM '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
             f"mem={vm_dict['memory_mb']}MB, power={vm_dict['power_state']}, "
-            f"disk={vm_dict['disk_gb']}GB, uuid={vm_dict['source_uuid']}"
+            f"disk={vm_dict['disk_gb']}GB, uuid={vm_dict['source_uuid']}, "
+            f"ip={vm_dict['ip_address']}"
         )
         return vm_dict
+
+    @staticmethod
+    def _kvm_guest_ipv4(run, safe_name: str) -> Optional[str]:
+        """First non-loopback IPv4 from ``virsh domifaddr`` (agent then lease).
+
+        Returns None when neither source answers (guest agent absent, no DHCP
+        lease yet). Parses the tabular ``Name MAC Protocol Address`` output,
+        skipping loopback addresses.
+        """
+        virsh = "virsh --connect qemu:///system"
+        for source in ("agent", "lease"):
+            out, _, rc = run(f"{virsh} domifaddr {safe_name} --source {source} 2>/dev/null")
+            if rc != 0 or not out:
+                continue
+            for line in out.splitlines():
+                parts = line.split()
+                # Address column is "ip/prefix"; protocol column reads "ipv4".
+                if len(parts) >= 4 and parts[2].lower() == "ipv4":
+                    addr = parts[3].split("/")[0]
+                    if addr and not addr.startswith("127."):
+                        return addr
+        return None
+
+    @staticmethod
+    def _kvm_guest_hostname(run, safe_name: str) -> Optional[str]:
+        """Guest OS hostname via the QEMU guest agent, or None when unavailable."""
+        virsh = "virsh --connect qemu:///system"
+        cmd = (
+            f"{virsh} qemu-agent-command {safe_name} "
+            f"'{{\"execute\":\"guest-get-host-name\"}}' 2>/dev/null"
+        )
+        out, _, rc = run(cmd)
+        if rc != 0 or not out:
+            return None
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            return None
+        hostname = (data.get("return") or {}).get("host-name")
+        return hostname or None
 
     def _discover_kvm(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
         """Discover KVM/QEMU VMs via SSH + virsh using paramiko.
@@ -2028,6 +2167,25 @@ class DiscoveryService:
             # Guest agent not installed / not running — perfectly normal.
             return None
 
+    @staticmethod
+    def _proxmox_agent_hostname(proxmox, resource, node, vmid) -> Optional[str]:
+        """Return the guest OS hostname via the agent, or None when unavailable.
+
+        Only a running VM with qemu-guest-agent answers ``get-host-name``; any
+        failure is swallowed (the Proxmox API exposes no hostname otherwise).
+        """
+        if (resource.get("status") or "").lower() != "running":
+            return None
+        try:
+            agent_resp = proxmox.nodes(node).qemu(vmid).agent(
+                "get-host-name"
+            ).get() or {}
+            result = agent_resp.get("result") or {}
+            hostname = result.get("host-name")
+            return hostname or None
+        except Exception:
+            return None
+
     def _proxmox_collect_vm(self, proxmox, resource, node, vmid) -> Optional[Dict[str, Any]]:
         """Discover a single Proxmox QEMU VM. Returns the VM dict or None."""
         try:
@@ -2037,9 +2195,10 @@ class DiscoveryService:
             config = {}
 
         agent_net = self._proxmox_agent_net(proxmox, resource, node, vmid)
+        agent_hostname = self._proxmox_agent_hostname(proxmox, resource, node, vmid)
 
         try:
-            vm_dict = _parse_proxmox_vm(resource, config, agent_net)
+            vm_dict = _parse_proxmox_vm(resource, config, agent_net, agent_hostname)
         except Exception as exc:
             logger.error(f"Proxmox: parse échoué {node}/{vmid}: {exc}")
             return None
@@ -2053,19 +2212,24 @@ class DiscoveryService:
         return vm_dict
 
     def _discover_ovirt(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
-        """Discover VMs from oVirt / RHV via ``ovirt-engine-sdk-python``.
+        """Discover VMs from oVirt / RHV.
+
+        Uses ``ovirt-engine-sdk-python`` when it is importable (in-cluster Linux
+        worker); otherwise falls back to the SDK-free REST client
+        (:mod:`app.services.ovirt_rest`) — the SDK is a native C-extension that
+        cannot be installed on the Windows dev worker, which is the only host
+        able to reach the engine in the laptop topology.
 
         connection_config keys (all optional):
           ca_file   — PEM CA bundle for TLS verification
           api_path  — override '/ovirt-engine/api' (default)
         """
-        try:
-            import ovirtsdk4 as sdk
-        except ImportError as exc:
-            raise DiscoveryError(
-                f"ovirt-engine-sdk-python n'est pas installé: {exc}. "
-                "Ajoutez 'ovirt-engine-sdk-python' à requirements.txt."
-            ) from None
+        from app.services.ovirt_rest import ovirt_sdk_available
+
+        if not ovirt_sdk_available():
+            return self._discover_ovirt_rest(hypervisor)
+
+        import ovirtsdk4 as sdk
 
         cfg: Dict[str, Any] = hypervisor.connection_config or {}
         host: str = hypervisor.host or "localhost"
@@ -2263,6 +2427,86 @@ class DiscoveryService:
             logger.error(
                 f"oVirt: parse échoué pour '{getattr(vm, 'name', '?')}': {exc}"
             )
+            return None
+
+    # --- REST fallback (SDK-free) -------------------------------------------
+
+    def _discover_ovirt_rest(self, hypervisor: Hypervisor) -> List[Dict[str, Any]]:
+        """Discover oVirt VMs over the SDK-free REST client."""
+        from app.services.ovirt_rest import OvirtRestClient, OvirtRestError
+
+        try:
+            client = OvirtRestClient(hypervisor)
+        except OvirtRestError as exc:
+            raise DiscoveryError(f"oVirt REST: {exc}") from None
+
+        logger.info(
+            f"oVirt (REST): {build_base_url(hypervisor)}, "
+            f"user={hypervisor.username}, verify_ssl={hypervisor.verify_ssl}"
+        )
+        try:
+            try:
+                ovirt_vms = client.list_vms()
+            except OvirtRestError as exc:
+                raise DiscoveryError(
+                    f"oVirt REST: échec de connexion à {hypervisor.host}: {exc}"
+                ) from None
+
+            if not ovirt_vms:
+                logger.info("oVirt (REST): aucune VM trouvée — retour liste vide")
+                return []
+
+            vms: List[Dict[str, Any]] = []
+            for vm in ovirt_vms:
+                vm_dict = self._ovirt_collect_vm_rest(client, vm)
+                if vm_dict is None:
+                    continue
+                vms.append(vm_dict)
+                logger.info(
+                    f"  oVirt '{vm_dict['name']}': cpus={vm_dict['cpu_cores']}, "
+                    f"mem={vm_dict['memory_mb']}MB, disk={vm_dict['disk_gb']}GB, "
+                    f"power={vm_dict['power_state']}, ip={vm_dict['ip_address']}"
+                )
+            return vms
+        finally:
+            client.close()
+
+    def _ovirt_disk_gb_rest(self, client, vm_id: str) -> int:
+        """Sum provisioned size across an oVirt VM's disks (REST)."""
+        disk_bytes = 0
+        try:
+            for att in client.list_disk_attachments(vm_id):
+                disk_id = (att.get("disk") or {}).get("id")
+                if not disk_id:
+                    continue
+                try:
+                    disk = client.get_disk(disk_id)
+                except Exception:  # NOSONAR — skip a disk that cannot be read
+                    continue
+                disk_bytes += to_int(disk.get("provisioned_size")) or to_int(
+                    disk.get("total_size")
+                )
+        except Exception as exc:  # NOSONAR
+            logger.debug(f"oVirt (REST): disk attachments indisponibles pour {vm_id}: {exc}")
+        disk_gb = round(disk_bytes / 1_073_741_824) if disk_bytes else 0
+        if disk_bytes and disk_gb == 0:
+            disk_gb = 1
+        return disk_gb
+
+    def _ovirt_collect_vm_rest(self, client, vm: dict) -> Optional[Dict[str, Any]]:
+        """Discover a single oVirt VM via REST. Returns the VM dict or None."""
+        from app.services.ovirt_rest import OvirtRestError
+
+        try:
+            vm_id = vm.get("id")
+            disk_gb = self._ovirt_disk_gb_rest(client, vm_id)
+            try:
+                devices = client.list_reported_devices(vm_id)
+            except OvirtRestError:
+                devices = []
+            return _parse_ovirt_vm_rest(vm, disk_gb, devices)
+        except Exception as exc:  # NOSONAR
+            logger.error(f"oVirt (REST): parse échoué pour '{vm.get('name', '?')}': {exc}")
             return None
 
     # ========================================================================
