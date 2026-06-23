@@ -1,6 +1,9 @@
 import { api } from "@/lib/axios";
 import type { Paginated } from "@/api/types";
 
+// Full set of types the backend understands. Kept complete so existing
+// hypervisor rows of any type still render and remain filterable — do not trim
+// this list.
 export const HYPERVISOR_TYPES = [
   "vsphere",
   "vmware_workstation",
@@ -14,6 +17,20 @@ export const HYPERVISOR_TYPES = [
   "physical",
   "other",
 ] as const;
+
+// Source hypervisors the enterprise actually migrates from — the only types
+// offered in the "Add hypervisor" dropdown. The platform was validated
+// end-to-end against each of these (vSphere/ESXi, Hyper-V, Proxmox, oVirt/RHV,
+// and bare-metal physical P2V). Excluded on purpose: VMware Workstation,
+// VirtualBox, KVM, Xen, and "other" (not in the enterprise's supported set).
+export const CREATABLE_HYPERVISOR_TYPES = [
+  "vsphere",
+  "vmware_esxi",
+  "hyper_v",
+  "proxmox",
+  "ovirt",
+  "physical",
+] as const satisfies readonly HypervisorType[];
 
 export const HYPERVISOR_STATUSES = [
   "active",
@@ -139,6 +156,18 @@ export async function testHypervisorConnection(
   const res = await api.post<TestConnectionResult>(
     "/hypervisors/test-connection",
     payload,
+  );
+  return res.data;
+}
+
+// Test connectivity of an already-registered hypervisor using its stored
+// (encrypted) credentials — no password in the request body. Mirrors backend
+// `POST /hypervisors/{id}/test-connection`.
+export async function testHypervisorConnectionById(
+  id: number,
+): Promise<TestConnectionResult> {
+  const res = await api.post<TestConnectionResult>(
+    `/hypervisors/${id}/test-connection`,
   );
   return res.data;
 }

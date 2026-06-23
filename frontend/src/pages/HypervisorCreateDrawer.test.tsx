@@ -94,7 +94,7 @@ describe("HypervisorCreateDrawer", () => {
             id: 99,
             name: "lab-kvm",
             description: null,
-            type: "kvm",
+            type: "vsphere",
             host: "qemu+ssh://user@10.0.0.5/system",
             port: 22,
             username: "root",
@@ -127,9 +127,9 @@ describe("HypervisorCreateDrawer", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(createPayload).toMatchObject({
       name: "lab-kvm",
-      type: "kvm",
+      type: "vsphere",
       host: "qemu+ssh://user@10.0.0.5/system",
-      port: 22,
+      port: 443,
       username: "root",
     });
   });
@@ -151,12 +151,12 @@ describe("HypervisorCreateDrawer", () => {
     renderDrawer();
 
     const portInput = screen.getByLabelText<HTMLInputElement>(/^port$/i);
-    expect(portInput.value).toBe("22");
+    expect(portInput.value).toBe("443"); // vSphere default
 
     await user.selectOptions(screen.getByLabelText(/^type$/i), "proxmox");
     await waitFor(() => expect(portInput.value).toBe("8006"));
 
-    await user.selectOptions(screen.getByLabelText(/^type$/i), "vmware_workstation");
-    await waitFor(() => expect(portInput.value).toBe(""));
+    await user.selectOptions(screen.getByLabelText(/^type$/i), "physical");
+    await waitFor(() => expect(portInput.value).toBe("22"));
   });
 });

@@ -13,7 +13,7 @@ import { Select } from "@/components/ui/Select";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Textarea } from "@/components/ui/Textarea";
 import {
-  HYPERVISOR_TYPES,
+  CREATABLE_HYPERVISOR_TYPES,
   createHypervisor,
   testHypervisorConnection,
   type HypervisorType,
@@ -72,9 +72,9 @@ export function HypervisorCreateDrawer({
     defaultValues: {
       name: "",
       description: "",
-      type: "kvm",
+      type: "vsphere",
       host: "",
-      port: DEFAULT_PORT.kvm,
+      port: DEFAULT_PORT.vsphere,
       username: "",
       password: "",
       verify_ssl: false,
@@ -195,13 +195,23 @@ export function HypervisorCreateDrawer({
 
           <Field label="Type" id="hv-type" error={errors.type?.message}>
             <Select id="hv-type" invalid={!!errors.type} {...register("type")}>
-              {HYPERVISOR_TYPES.map((t) => (
+              {CREATABLE_HYPERVISOR_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
                 </option>
               ))}
             </Select>
           </Field>
+
+          {selectedType === "physical" && (
+            <Callout tone="info" kicker="Physical server (P2V)">
+              Enter the bare-metal Linux host's SSH connection in the fields
+              below — <strong>Host</strong> (IP or hostname), <strong>Username</strong>,
+              and <strong>Password</strong>. The migration logs in over SSH with
+              these credentials to inventory the host and stream its disks; no
+              hypervisor or agent is required on the source.
+            </Callout>
+          )}
 
           <Field
             label="Description"
