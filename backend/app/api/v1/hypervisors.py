@@ -415,6 +415,69 @@ def get_hypervisor_vms(
 
 
 @router.post(
+    "/{hypervisor_id}/test-connection",
+    response_model=HypervisorTestConnectionResponse,
+)
+def test_existing_hypervisor_connection(
+        hypervisor_id: int,
+        db: Annotated[Session, Depends(get_db)] = None,
+        current_user: Annotated[User, Depends(check_permission(RESOURCE_HYPERVISORS, "update"))] = None
+):
+    """
+    Teste la connexion d'un hypervisor déjà enregistré (credentials stockés).
+
+    **Permissions requises :** hypervisors:update
+
+    Contrairement à ``POST /hypervisors/test-connection`` (avant création, le
+    mot de passe est dans le corps), cet endpoint réutilise le credential
+    chiffré déjà persisté : il permet de revérifier la connectivité d'un
+    hyperviseur ajouté précédemment sans ressaisir le mot de passe. Le
+    résultat met à jour ``status`` / ``last_successful_connection`` /
+    ``last_error`` afin que le catalogue reflète l'état réel.
+    """
+    # Audit B21 — même budget anti-abus que le test pré-création : la sonde
+    # déclenche une connexion sortante.
+    if _test_connection_rate_limited(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de tests de connexion — réessayez plus tard.",
+        )
+
+    tenant_id = None if current_user.is_superuser else current_user.tenant_id
+    hypervisor = crud_hypervisor.get_hypervisor(db, hypervisor_id, tenant_id=tenant_id)
+
+    if not hypervisor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Hypervisor avec l'ID {hypervisor_id} introuvable"
+        )
+
+    service = create_discovery_service(db)
+    result = service.test_connection(hypervisor)
+
+    # Refléter le résultat de la sonde sur la ligne (le badge du catalogue
+    # suit ainsi l'état réel). On ne touche pas à last_sync_at : tester la
+    # connexion n'est pas une découverte.
+    if result["success"]:
+        hypervisor.update_status(HypervisorStatus.ACTIVE)
+        message = f"Connexion réussie · {result['vms_count']} VMs détectées"
+    else:
+        hypervisor.update_status(
+            HypervisorStatus.UNREACHABLE,
+            error_message=result["error"] or "Échec de la connexion",
+        )
+        message = "Échec de la connexion"
+    db.commit()
+
+    return HypervisorTestConnectionResponse(
+        success=result["success"],
+        message=message,
+        vms_count=result["vms_count"],
+        error=result["error"],
+    )
+
+
+@router.post(
     "/{hypervisor_id}/sync",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=HypervisorSyncResponse,

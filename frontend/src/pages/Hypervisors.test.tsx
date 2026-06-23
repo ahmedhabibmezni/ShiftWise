@@ -195,6 +195,46 @@ describe("Hypervisors page", () => {
     expect(screen.getByText(/4 new/)).toBeInTheDocument();
   });
 
+  it("tests connectivity of an existing hypervisor from the drawer", async () => {
+    const target = makeHypervisor({ id: 8, name: "pve-lab" });
+    server.use(
+      http.get("/api/v1/hypervisors", () =>
+        HttpResponse.json({ total: 1, page: 1, page_size: 25, items: [target] }),
+      ),
+      http.get("/api/v1/hypervisors/8", () => HttpResponse.json(target)),
+      http.get("/api/v1/hypervisors/8/vms", () =>
+        HttpResponse.json({
+          hypervisor_id: 8,
+          hypervisor_name: "pve-lab",
+          total_vms: 0,
+          vms: [],
+        }),
+      ),
+      http.post("/api/v1/hypervisors/8/test-connection", () =>
+        HttpResponse.json({
+          success: true,
+          message: "Connexion réussie · 9 VMs détectées",
+          vms_count: 9,
+          error: null,
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "pve-lab" }));
+    const dialog = await screen.findByRole("dialog", { name: /pve-lab/i });
+
+    await user.click(
+      within(dialog).getByRole("button", { name: /test connection/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/9 VMs détectées/)).toBeInTheDocument();
+    });
+  });
+
   it("submits a partial update from the edit mode (only changed fields)", async () => {
     let captured: unknown = null;
     const target = makeHypervisor({ id: 5, name: "kvm-old", host: "10.0.0.55" });
@@ -324,5 +364,8 @@ describe("Hypervisors page", () => {
     await user.click(screen.getByRole("button", { name: "view-only-host" }));
     const dialog = await screen.findByRole("dialog", { name: /view-only-host/i });
     expect(within(dialog).queryByRole("button", { name: /sync now/i })).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: /test connection/i }),
+    ).toBeNull();
   });
 });

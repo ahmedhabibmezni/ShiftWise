@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Pencil,
+  Plug,
   Plus,
   RefreshCw,
   Save,
@@ -45,6 +46,7 @@ import {
   listHypervisorVms,
   listHypervisors,
   syncHypervisor,
+  testHypervisorConnectionById,
   updateHypervisor,
   type Hypervisor,
   type HypervisorStatus,
@@ -537,6 +539,25 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
     },
   });
 
+  const testMutation = useMutation({
+    mutationFn: () => testHypervisorConnectionById(id!),
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success(data.message);
+      } else {
+        toast.error(data.error || data.message);
+      }
+      // The probe updates the row's status / last_error; refresh so the
+      // badge and detail grid reflect it.
+      queryClient.invalidateQueries({ queryKey: ["hypervisors"] });
+      queryClient.invalidateQueries({ queryKey: ["hypervisor", id] });
+      queryClient.invalidateQueries({ queryKey: ["stats", "hypervisors"] });
+    },
+    onError: (err) => {
+      toast.error(describeError(err, "Connection test failed"));
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteHypervisor(id!),
     onSuccess: () => {
@@ -603,6 +624,16 @@ function DetailDrawer({ id, onClose }: { id: number | null; onClose: () => void 
                   leadingIcon={<Icon icon={Pencil} size={14} />}
                 >
                   Edit
+                </Button>
+              )}
+              {canUpdate && (
+                <Button
+                  variant="secondary"
+                  loading={testMutation.isPending}
+                  onClick={() => testMutation.mutate()}
+                  leadingIcon={<Icon icon={Plug} size={14} />}
+                >
+                  Test Connection
                 </Button>
               )}
               {canUpdate && (
