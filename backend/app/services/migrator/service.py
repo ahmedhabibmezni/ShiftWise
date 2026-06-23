@@ -27,6 +27,7 @@ Failure handling:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from kubernetes.client.rest import ApiException
@@ -72,7 +73,7 @@ logger = logging.getLogger(__name__)
 
 def _wait_vmi_running_with_reauth(
     *, namespace: str, name: str, timeout_seconds: int,
-) -> None:
+) -> dict:
     """``wait_vmi_running`` avec une relance unique sur 401/403 (Audit E20).
 
     En mode ``custom`` le jeton porteur KubeVirt peut expirer pendant le
@@ -80,19 +81,25 @@ def _wait_vmi_running_with_reauth(
     invalide le client singleton mis en cache ; on relance alors une fois
     avec un client fraîchement reconstruit. Le poll est idempotent — un
     redémarrage est sans danger.
+
+    Retourne la VMI à l'état Running (utilisée pour lire ``status.nodeName``).
     """
     try:
-        get_kubevirt_client().wait_vmi_running(
+        return get_kubevirt_client().wait_vmi_running(
             name=name, namespace=namespace, timeout_seconds=timeout_seconds,
         )
     except KubeVirtClientError as exc:
         cause = exc.__cause__
         if isinstance(cause, ApiException) and reauth_on_401(cause):
-            get_kubevirt_client().wait_vmi_running(
+            return get_kubevirt_client().wait_vmi_running(
                 name=name, namespace=namespace, timeout_seconds=timeout_seconds,
             )
-        else:
-            raise
+        raise
+
+
+# Bytes per GiB — disk sizes are reported in binary gigabytes everywhere else
+# in the migrator (compute_pvc_size_bytes), so the stamped GB metrics match.
+_BYTES_PER_GIB = 1024 ** 3
 
 
 class MigratorService:
@@ -187,9 +194,10 @@ class MigratorService:
             current_step=f"Waiting for VMI {target_vm_name} to reach Running",
             step_number=7,
         )
-        self._verify_running(namespace=target_namespace, name=target_vm_name)
+        vmi = self._verify_running(namespace=target_namespace, name=target_vm_name)
 
         # ---- 4. Done ---------------------------------------------------------
+        self._stamp_metrics(db, migration, jobs, vmi)
         self._stamp_success_on_vm_row(db, vm, target_namespace, target_vm_name)
         self._set_status(db, migration_id, MigrationStatus.COMPLETED)
         self._update_progress(
@@ -478,9 +486,9 @@ class MigratorService:
                 cause=e,
             ) from e
 
-    def _verify_running(self, *, namespace: str, name: str) -> None:
+    def _verify_running(self, *, namespace: str, name: str) -> dict:
         try:
-            _wait_vmi_running_with_reauth(
+            return _wait_vmi_running_with_reauth(
                 namespace=namespace,
                 name=name,
                 timeout_seconds=settings.MIGRATOR_VMI_RUNNING_TIMEOUT,
@@ -491,6 +499,77 @@ class MigratorService:
                 f"VMI {namespace}/{name} did not reach Running: {e}",
                 cause=e,
             ) from e
+
+    def _stamp_metrics(
+        self,
+        db: Session,
+        migration: Migration,
+        jobs: list[ConversionJob],
+        vmi: dict | None,
+    ) -> None:
+        """Record the result metrics (target node, sizes, throughput).
+
+        Best-effort: a measurement gap must never fail an otherwise successful
+        migration — these fields are display-only. ``source_size_bytes`` is the
+        provisioned source capacity; ``output_size_bytes`` is the qcow2 actually
+        produced and copied into the PVC (the data that crossed the wire).
+        """
+        try:
+            source_bytes = sum(j.source_size_bytes or 0 for j in jobs)
+            transferred_bytes = sum(j.output_size_bytes or 0 for j in jobs)
+            if not transferred_bytes:
+                transferred_bytes = source_bytes
+
+            target_node = None
+            if isinstance(vmi, dict):
+                target_node = (vmi.get("status") or {}).get("nodeName")
+
+            source_size_gb = (
+                source_bytes / _BYTES_PER_GIB if source_bytes else None
+            )
+            transferred_gb = (
+                transferred_bytes / _BYTES_PER_GIB if transferred_bytes else None
+            )
+            transfer_rate_mbps = self._effective_rate_mbps(
+                migration, transferred_bytes,
+            )
+
+            crud_migration.set_migration_metrics(
+                db,
+                migration.id,
+                target_node=target_node,
+                source_size_gb=source_size_gb,
+                transferred_gb=transferred_gb,
+                transfer_rate_mbps=transfer_rate_mbps,
+            )
+        except Exception:  # NOSONAR — metrics are display-only, never fatal
+            # A failed commit leaves the session in a failed-transaction state;
+            # roll back so the subsequent success/status commits still run.
+            db.rollback()
+            logger.warning(
+                "Failed to stamp result metrics on migration %s",
+                migration.id, exc_info=True,
+            )
+
+    @staticmethod
+    def _effective_rate_mbps(
+        migration: Migration, transferred_bytes: int,
+    ) -> float | None:
+        """Throughput in Mbps over the elapsed migration time, or None.
+
+        Uses ``started_at`` (stamped at VALIDATING) to now. Returns None when
+        no data moved or the elapsed time is non-positive (clock skew / a
+        re-delivered task), so a bogus rate never reaches the UI.
+        """
+        if not transferred_bytes or migration.started_at is None:
+            return None
+        started = migration.started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
+        if elapsed_s <= 0:
+            return None
+        return (transferred_bytes * 8) / elapsed_s / 1_000_000
 
     def _stamp_success_on_vm_row(
         self,

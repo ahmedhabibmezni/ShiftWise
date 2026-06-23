@@ -352,6 +352,40 @@ def update_migration_progress(
     return migration
 
 
+def set_migration_metrics(
+    db: Session,
+    migration_id: int,
+    *,
+    target_node: Optional[str] = None,
+    source_size_gb: Optional[float] = None,
+    transferred_gb: Optional[float] = None,
+    transfer_rate_mbps: Optional[float] = None,
+) -> Optional[Migration]:
+    """Privileged setter for the migration result metrics (worker only).
+
+    Stamped by the Migrator once the VM is Running so the UI can show the
+    target node, the data moved and the effective throughput. Only non-None
+    arguments are written, so a partial measurement never clobbers a value
+    already recorded by another stage.
+    """
+    migration = db.query(Migration).filter(Migration.id == migration_id).first()
+    if not migration:
+        return None
+
+    if target_node is not None:
+        migration.target_node = target_node
+    if source_size_gb is not None:
+        migration.source_size_gb = source_size_gb
+    if transferred_gb is not None:
+        migration.transferred_gb = transferred_gb
+    if transfer_rate_mbps is not None:
+        migration.transfer_rate_mbps = transfer_rate_mbps
+
+    db.commit()
+    db.refresh(migration)
+    return migration
+
+
 def fail_migration(
     db: Session,
     migration_id: int,
