@@ -586,7 +586,9 @@ def _build_manifest(
                     "containers": [{
                         "name": "adapter",
                         "image": settings.ADAPTER_IMAGE,
-                        "imagePullPolicy": "IfNotPresent",
+                        # Always: ADAPTER_IMAGE is a rolling branch tag CD
+                        # re-pushes each deploy (see converter k8s_jobs note).
+                        "imagePullPolicy": "Always",
                         "command": ["/bin/bash", "-c", fixup_script],
                         "env": [
                             {"name": "DISK_PATH", "value": disk_path},

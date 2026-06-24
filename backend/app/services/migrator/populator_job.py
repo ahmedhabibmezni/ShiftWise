@@ -254,7 +254,9 @@ def _build_manifest(
                     "containers": [{
                         "name": "populator",
                         "image": settings.MIGRATOR_POPULATOR_IMAGE,
-                        "imagePullPolicy": "IfNotPresent",
+                        # Always: MIGRATOR_POPULATOR_IMAGE is a rolling branch tag
+                        # CD re-pushes each deploy (see converter k8s_jobs note).
+                        "imagePullPolicy": "Always",
                         "command": cmd,
                         "volumeMounts": [
                             {"name": "src", "mountPath": "/src", "readOnly": True},

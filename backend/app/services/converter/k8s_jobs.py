@@ -315,7 +315,11 @@ class ConversionJobRunner:
                         "containers": [{
                             "name": "converter",
                             "image": self._image,
-                            "imagePullPolicy": "IfNotPresent",
+                            # Always: the *_IMAGE settings point at a rolling
+                            # branch tag (shiftwise-backend-worker:<branch>) CD
+                            # re-pushes each deploy; IfNotPresent would pin a node
+                            # to a stale layer of a moved tag.
+                            "imagePullPolicy": "Always",
                             "command": command,
                             "securityContext": {
                                 "privileged": privileged,
