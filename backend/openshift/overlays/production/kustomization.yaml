@@ -28,35 +28,16 @@ namespace: shiftwise
 # base that is an ancestor directory ("cycle detected"), which is why the
 # previous `- ../` (pointing at openshift/, the parent) never built.
 resources:
-  - ../../base
+- ../../base
 
 # Patch the backend Deployment to flip KUBERNETES_VERIFY_SSL from the
 # dev-time False to the production-mandatory True. The base overlay
 # leaves it False because OpenShift CI uses self-signed certs.
-patches:
   # B-3 — les Deployments de base s'appellent `backend` et `celery-worker`
   # (pas de namePrefix dans la kustomization de base). Cibler les anciens noms
   # `shiftwise-backend` / `shiftwise-worker` faisait échouer `oc apply -k`
   # (no matches for Id) — donc KUBERNETES_VERIFY_SSL=True n'était jamais
   # appliqué en production.
-  - target:
-      kind: Deployment
-      name: backend
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: KUBERNETES_VERIFY_SSL
-          value: "True"
-  - target:
-      kind: Deployment
-      name: celery-worker
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: KUBERNETES_VERIFY_SSL
-          value: "True"
 
   # --- Small-cluster right-sizing -------------------------------------------
   # This 3-node bare-metal cluster runs the OpenShift control plane + CNV;
@@ -66,40 +47,75 @@ patches:
   # headroom. CPU requests are scheduling RESERVATIONS, not limits (limits are
   # unchanged), so throughput is unaffected — only the scheduler's bin-packing
   # is. Revisit (raise back toward the HA defaults) when the cluster grows.
-  - target: {kind: HorizontalPodAutoscaler, name: backend}
-    patch: |-
-      - {op: replace, path: /spec/minReplicas, value: 1}
-      - {op: replace, path: /spec/maxReplicas, value: 2}
-  - target: {kind: HorizontalPodAutoscaler, name: celery-worker}
-    patch: |-
-      - {op: replace, path: /spec/minReplicas, value: 1}
-      - {op: replace, path: /spec/maxReplicas, value: 2}
-  - target: {kind: Deployment, name: frontend}
-    patch: |-
-      - {op: replace, path: /spec/replicas, value: 1}
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 15m}
-  - target: {kind: Deployment, name: postgresql}
-    patch: |-
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
-  - target: {kind: Deployment, name: redis}
-    patch: |-
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 25m}
-  - target: {kind: Deployment, name: backend}
-    patch: |-
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
-  - target: {kind: Deployment, name: celery-worker}
-    patch: |-
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
-  - target: {kind: Deployment, name: flower}
-    patch: |-
-      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 20m}
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: KUBERNETES_VERIFY_SSL
+        value: "True"
+  target:
+    kind: Deployment
+    name: backend
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: KUBERNETES_VERIFY_SSL
+        value: "True"
+  target:
+    kind: Deployment
+    name: celery-worker
+- patch: |-
+    - {op: replace, path: /spec/minReplicas, value: 1}
+    - {op: replace, path: /spec/maxReplicas, value: 2}
+  target:
+    kind: HorizontalPodAutoscaler
+    name: backend
+- patch: |-
+    - {op: replace, path: /spec/minReplicas, value: 1}
+    - {op: replace, path: /spec/maxReplicas, value: 2}
+  target:
+    kind: HorizontalPodAutoscaler
+    name: celery-worker
+- patch: |-
+    - {op: replace, path: /spec/replicas, value: 1}
+    - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 15m}
+  target:
+    kind: Deployment
+    name: frontend
+- patch: '- {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu,
+    value: 50m}'
+  target:
+    kind: Deployment
+    name: postgresql
+- patch: '- {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu,
+    value: 25m}'
+  target:
+    kind: Deployment
+    name: redis
+- patch: '- {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu,
+    value: 50m}'
+  target:
+    kind: Deployment
+    name: backend
+- patch: '- {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu,
+    value: 50m}'
+  target:
+    kind: Deployment
+    name: celery-worker
+- patch: '- {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu,
+    value: 20m}'
+  target:
+    kind: Deployment
+    name: flower
 
 # Image tags — production promotion is MANUAL (constitution Governance §4):
 # bump these to the validated `vX.Y.Z` via PR to `main`, then sync the
 # production Argo CD Application by hand. The single `shiftwise-backend` image
 # backs backend / flower / db-init / worker; `shiftwise-frontend` backs the SPA.
 images:
-  - name: docker.io/dida1609/shiftwise-backend
-    newTag: latest
-  - name: docker.io/dida1609/shiftwise-frontend
-    newTag: latest
+- name: docker.io/dida1609/shiftwise-backend
+  newTag: sha-7e30a08
+- name: docker.io/dida1609/shiftwise-frontend
+  newTag: sha-7e30a08
