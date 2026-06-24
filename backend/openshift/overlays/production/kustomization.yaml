@@ -116,6 +116,6 @@ patches:
 # backs backend / flower / db-init / worker; `shiftwise-frontend` backs the SPA.
 images:
 - name: docker.io/dida1609/shiftwise-backend
-  newTag: sha-7e30a08
+  newTag: sha-f384d47
 - name: docker.io/dida1609/shiftwise-frontend
-  newTag: sha-7e30a08
+  newTag: sha-f384d47
