@@ -212,6 +212,50 @@ jobs:
           push_one "${IMAGE_REPO}/shiftwise-frontend:sha-${SHORT}"
           push_one "${IMAGE_REPO}/shiftwise-frontend:${BR}"
 
+      # Worker / migration-tooling image: the slim API image (just pushed) plus
+      # the heavy guest-tooling layer (qemu-utils + libguestfs-tools + a kernel
+      # for the libguestfs appliance). The converter / adapter / migrator-
+      # populator Kubernetes Jobs run from THIS image (settings.*_IMAGE), not the
+      # slim API image — without it the migration pipeline fails (no qemu-img /
+      # virt-customize). Built FROM the immutable API sha so code never diverges.
+      # virtio-win stays OFF (Linux pipeline); flip INSTALL_VIRTIO_WIN for Windows.
+      - name: Build & push worker image (migration tooling)
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.tag.outputs.short }}"
+          BR="${{ steps.target.outputs.branch }}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --build-arg API_IMAGE="${IMAGE_REPO}/shiftwise-backend:sha-${SHORT}" \
+            --tag "${IMAGE_REPO}/shiftwise-backend-worker:sha-${SHORT}" \
+            --tag "${IMAGE_REPO}/shiftwise-backend-worker:${BR}" \
+            --file backend/Dockerfile.worker \
+            backend
+
+      # Worker scan is INFORMATIONAL (exit-code 0): the image ships a full kernel
+      # (linux-image-amd64, required by the libguestfs appliance), whose CVEs
+      # cannot all be cleared by a bump. This image is internal migration tooling
+      # run as short-lived Jobs — never exposed via a Route — so it is not gated
+      # like the API/frontend images, but is still scanned + SBOM'd for visibility.
+      - name: Scan worker image (Trivy, informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/shiftwise-backend-worker:sha-${{ steps.tag.outputs.short }}
+          format: table
+          exit-code: "0"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore
+
+      - name: SBOM — worker
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
+        with:
+          image: ${{ env.IMAGE_REPO }}/shiftwise-backend-worker:sha-${{ steps.tag.outputs.short }}
+          format: cyclonedx-json
+          output-file: sbom-worker-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+          artifact-name: sbom-worker-sha-${{ steps.tag.outputs.short }}.cyclonedx.json
+
       - name: Install kustomize
         run: |
           set -euo pipefail
