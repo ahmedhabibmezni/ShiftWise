@@ -57,6 +57,10 @@ spec:
           envFrom:
             - secretRef:    {name: shiftwise-secrets}
             - configMapRef: {name: shiftwise-config}
+            # Settings() validates SHIFTWISE_FERNET_KEY at import of
+            # app.core.celery_app — without the credential-key Secret Flower
+            # crashes at boot (CrashLoopBackOff), same as backend/worker (B-1).
+            - secretRef:    {name: shiftwise-credential-key}
           env:
             - {name: DATABASE_HOST, value: postgresql}
             # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
