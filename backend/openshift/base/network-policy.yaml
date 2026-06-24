@@ -85,9 +85,13 @@ spec:
         - {protocol: TCP, port: 6379}
 ---
 # 4. Backend :8000 — accepte le trafic HTTP du routeur OpenShift (la Route
-#    `backend` est TLS edge ; le routeur vit dans le namespace
-#    `openshift-ingress`). `kubernetes.io/metadata.name` est un label posé
-#    automatiquement par Kubernetes sur chaque namespace.
+#    `backend` est TLS edge). Sur ce cluster bare-metal UPI le routeur tourne en
+#    `endpointPublishingStrategy: HostNetwork` : son trafic vers les pods sort
+#    du réseau de l'hôte, PAS du réseau de pods d'`openshift-ingress`. Un
+#    namespaceSelector sur `openshift-ingress` seul ne matche donc pas (→ 503).
+#    On autorise EN PLUS le groupe `host-network` d'OVNKubernetes (namespace
+#    `openshift-host-network`, label `policy-group.network.openshift.io/host-network`)
+#    qui couvre précisément le trafic source-hôte du routeur.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -105,6 +109,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/host-network: ""
       ports:
         - {protocol: TCP, port: 8000}
 ---
@@ -128,5 +135,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
+        # HostNetwork router (bare-metal UPI) — voir la note du backend ci-dessus.
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/host-network: ""
       ports:
         - {protocol: TCP, port: 8080}
