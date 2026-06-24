@@ -45,7 +45,7 @@ concurrency:
 #   actions/checkout@v4.2.2                 11bd71901bbe5b1630ceea73d27597364c9af683
 #   docker/login-action@v3.3.0              9780b0c442fbb1117ed29e0efdff1e18412f7567
 #   docker/setup-buildx-action@v3.7.1       c47758b77c9736f4b2ef4073d4d51994fabfe349
-#   aquasecurity/trivy-action@v0.28.0       915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   aquasecurity/trivy-action@v0.36.0       ed142fd0673e97e23eac54620cfb913e5ce36c25
 #   anchore/sbom-action@v0.17.8             55dc4ee22412511ee8c3142cbea40418e6cec693
 # ----------------------------------------------------------------------------
 
@@ -147,7 +147,7 @@ jobs:
       # upstream advisory (no fixed version exists) from blocking every deploy —
       # the same posture as the backend pip-audit ignore-list in ci.yml.
       - name: Scan backend image (Trivy)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_REPO }}/shiftwise-backend:sha-${{ steps.tag.outputs.short }}
           format: table
@@ -156,7 +156,7 @@ jobs:
           severity: HIGH,CRITICAL
 
       - name: Scan frontend image (Trivy)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2  # v0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_REPO }}/shiftwise-frontend:sha-${{ steps.tag.outputs.short }}
           format: table
