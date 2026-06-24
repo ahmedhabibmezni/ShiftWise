@@ -38,6 +38,12 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # OpenShift assigns an arbitrary UID per namespace; group 0 is always
 # included in the supplementary GIDs so any UID can read the bundle.
 USER 0
-RUN chgrp -R 0 /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx/conf.d \
+# Patch the Alpine base packages to clear fixable OS CVEs. The published
+# nginx-unprivileged:1.27-alpine tag lags Alpine's security stream (stale
+# libssl3/libcrypto3, libxml2, musl, zlib, libpng, expat, nghttp2), and the CD
+# Trivy gate blocks on fixable HIGH/CRITICAL. apk upgrade pulls the latest
+# patched packages from the pinned Alpine branch.
+RUN apk upgrade --no-cache \
+    && chgrp -R 0 /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx/conf.d \
     && chmod -R g=u /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx/conf.d
 USER 101
