@@ -16,3 +16,14 @@ CVE-2025-66418
 CVE-2025-66471
 CVE-2026-21441
 CVE-2026-44431
+#
+# wheel / jaraco.context — build/packaging tooling pre-installed in the base
+# python image (and not removable by a requirements pin under pip
+# --no-index). Both advisories require an attacker-supplied malicious wheel or
+# tar at BUILD time — outside the runtime threat model of the deployed image
+# (no build/packaging happens in the running container). Tracked for cleanup
+# via a base-image tooling refresh.
+#   wheel          CVE-2026-24049 — priv-esc via malicious wheel (fix 0.46.2)
+#   jaraco.context CVE-2026-23949 — path traversal via malicious tar (fix 6.1.0)
+CVE-2026-24049
+CVE-2026-23949

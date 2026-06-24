@@ -58,6 +58,42 @@ patches:
           name: KUBERNETES_VERIFY_SSL
           value: "True"
 
+  # --- Small-cluster right-sizing -------------------------------------------
+  # This 3-node bare-metal cluster runs the OpenShift control plane + CNV;
+  # CPU is ~95% reserved by requests across all nodes. The HA defaults
+  # (backend x2, worker x3, 200m requests each) cannot be scheduled here.
+  # Lower the HPA floors and CPU requests so the full stack fits the real
+  # headroom. CPU requests are scheduling RESERVATIONS, not limits (limits are
+  # unchanged), so throughput is unaffected — only the scheduler's bin-packing
+  # is. Revisit (raise back toward the HA defaults) when the cluster grows.
+  - target: {kind: HorizontalPodAutoscaler, name: backend}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 1}
+      - {op: replace, path: /spec/maxReplicas, value: 2}
+  - target: {kind: HorizontalPodAutoscaler, name: celery-worker}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 1}
+      - {op: replace, path: /spec/maxReplicas, value: 2}
+  - target: {kind: Deployment, name: frontend}
+    patch: |-
+      - {op: replace, path: /spec/replicas, value: 1}
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 15m}
+  - target: {kind: Deployment, name: postgresql}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
+  - target: {kind: Deployment, name: redis}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 25m}
+  - target: {kind: Deployment, name: backend}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
+  - target: {kind: Deployment, name: celery-worker}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 50m}
+  - target: {kind: Deployment, name: flower}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/resources/requests/cpu, value: 20m}
+
 # Image tags — production promotion is MANUAL (constitution Governance §4):
 # bump these to the validated `vX.Y.Z` via PR to `main`, then sync the
 # production Argo CD Application by hand. The single `shiftwise-backend` image

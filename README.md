@@ -1,9 +1,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/Horizontal_Dark_Mode.png">
-  <source media="(prefers-color-scheme: light)" srcset="frontend/public/Horizontal_Light_Mode.png">
-  <img src="frontend/public/Horizontal_Light_Mode.png" alt="ShiftWise" width="420">
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/Horizontal_Dark_Mode.webp">
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/Horizontal_Light_Mode.webp">
+  <img src="frontend/public/Horizontal_Light_Mode.webp" alt="ShiftWise" width="420">
 </picture>
 
 # 🔄 ShiftWise
