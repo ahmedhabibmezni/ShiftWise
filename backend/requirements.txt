@@ -82,6 +82,15 @@ requests==2.33.0
 # CVE-2025-66418 / CVE-2025-66471 / CVE-2026-21441 (all fixed only in the 2.x
 # line). pip-audit flags these until the kubernetes 28->35 bump lifts the cap.
 urllib3>=1.26.20,<2.0.0
+# Build/packaging tooling pre-installed in the base image — pinned to their
+# patched releases so the CD Trivy gate (HIGH/CRITICAL, ignore-unfixed) does
+# not block on them. Not imported at runtime, but present in site-packages and
+# therefore scanned. wheel: CVE-2026-24049 (priv-esc via malicious wheel,
+# fixed 0.46.2). jaraco.context: CVE-2026-23949 (path traversal via malicious
+# tar, fixed 6.1.0). Adding them to requirements makes pip build/install the
+# patched versions into the image.
+wheel>=0.46.2
+jaraco.context>=6.1.0
 # oVirt / RHV engine SDK
 ovirt-engine-sdk-python==4.6.3
 # Hyper-V remote (Linux in-cluster worker): WinRM for PowerShell control +
