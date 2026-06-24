@@ -1,0 +1,122 @@
+# ServiceAccount + RBAC for the Celery workers.
+#
+# ── Why ClusterRole and not a namespace-scoped Role (G15) ─────────────────────
+# The audit (G15) recommends namespace-scoped per-tenant Roles. That is not
+# applicable to the migrator's resource model, and here is the precise reason:
+#
+#   Tenant namespaces are DYNAMIC — `shiftwise-{tenant_id}` is created on the
+#   fly by `services/migrator/namespace.py` the first time a tenant runs a
+#   migration. The worker must then, IN THAT SAME NAMESPACE: create a PVC,
+#   submit a populator Job (qemu-img) and an adapter Job (virt-customize),
+#   create a KubeVirt VirtualMachine, and watch the resulting VMI.
+#
+#   A namespace-scoped Role would require a matching Role + RoleBinding to be
+#   provisioned in every tenant namespace BEFORE the worker can act there. The
+#   worker itself would need cluster-wide `roles`/`rolebindings` create — which
+#   is a strictly WIDER and more dangerous grant (the power to mint arbitrary
+#   RBAC) than the resource verbs below. So "namespace-scoped Roles" here would
+#   trade a bounded resource grant for an unbounded RBAC-granting one. The
+#   ClusterRole is the smaller blast radius.
+#
+# ── How the blast radius is nonetheless bounded ───────────────────────────────
+#   1. NO `*` apiGroups, NO `*` resources, NO `*` verbs anywhere. Every rule
+#      names an explicit resource kind and an explicit verb list.
+#   2. The verb set is the minimum each pipeline stage actually calls — verified
+#      against the migrator/converter source (see per-rule notes). `list` was
+#      dropped from `persistentvolumes` (G15): transit_discovery.py reads the
+#      bound PV BY NAME (`read_persistent_volume`), it never lists PVs.
+#   3. Mutating verbs are confined to the resource kinds ShiftWise owns and
+#      creates: PVCs, Jobs, KubeVirt VMs. The worker cannot touch Secrets,
+#      ConfigMaps, Deployments, Nodes, RBAC objects, etc.
+#   4. Read-only kinds (pods, VMIs, PVs, storageclasses) carry get/list/watch
+#      only — no write.
+#
+# ── Production hardening path (not done here — needs an operator) ─────────────
+#   The cleanest long-term tightening is an admission-policy / ValidatingAdmis-
+#   sionPolicy (or a Kyverno/Gatekeeper rule) that restricts this SA's writes
+#   to namespaces carrying the label `app.shiftwise.io/purpose=tenant-workload`
+#   (the label `namespace.py` already stamps on every namespace it creates).
+#   That keeps the single ClusterRole but denies writes to non-ShiftWise
+#   namespaces at admission time. It is intentionally NOT inlined here: an
+#   admission policy is a cluster-singleton an operator owns, not a per-app
+#   manifest, and a half-configured policy would silently break migrations.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shiftwise-worker
+  namespace: shiftwise
+# Authenticated Docker Hub pulls (avoid anonymous `toomanyrequests`). See the
+# shiftwise-api SA in backend-deployment.yaml for the rationale; `dockerhub-push`
+# exists in each target namespace.
+imagePullSecrets:
+  - name: dockerhub-push
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shiftwise-worker
+rules:
+  # Migrator: PVC provisioning in tenant namespaces.
+  # create/delete/patch are required — the migrator creates the tenant PVC,
+  # patches it, and deletes it on rollback (services/migrator/pvc.py).
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+
+  # Migrator + Converter: Jobs (populator + qemu-img/virt-v2v converter).
+  # jobs/status est une sous-ressource distincte — l'API client.kubernetes
+  # appelle /jobs/{name}/status pour read_namespaced_job_status, ce qui
+  # exige `get` sur jobs/status indépendamment de jobs.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "jobs/status"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+
+  # Both stages: pods + logs (status surfacing). Read-only.
+  # pods/status pour read_namespaced_pod_status si on l'utilise un jour.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Migrator: KubeVirt VirtualMachine create/patch/delete.
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachines/status"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Migrator: VirtualMachineInstance read-only (status verification).
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances", "virtualmachineinstances/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Transit NFS auto-discovery: read the PV backing transit-pvc.
+  # transit_discovery.py reads the PV BY NAME (read_persistent_volume) after
+  # resolving spec.volumeName from the transit PVC — it never enumerates PVs.
+  # `list` was therefore dropped here (G15): `get` is the exact need.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get"]
+
+  # Tenant namespace auto-create: check existence + create if absent.
+  # Required by namespace.py at the start of each migration. `get` + `create`
+  # only — the worker never deletes or relabels a namespace.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create"]
+
+  # Discovery / utility: StorageClass lookup. Cluster-scoped kind, read-only.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shiftwise-worker
+subjects:
+  - kind: ServiceAccount
+    name: shiftwise-worker
+    namespace: shiftwise
+roleRef:
+  kind: ClusterRole
+  name: shiftwise-worker
+  apiGroup: rbac.authorization.k8s.io

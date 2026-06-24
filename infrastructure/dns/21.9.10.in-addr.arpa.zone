@@ -1,0 +1,25 @@
+# /var/named/21.9.10.in-addr.arpa.zone
+$TTL 1D
+@       IN SOA  bastion.migration.nextstep-it.com. admin.migration.nextstep-it.com. (
+                    2026020502  ; Serial
+                    1D          ; Refresh
+                    1H          ; Retry
+                    1W          ; Expire
+                    3H )        ; Minimum
+
+        IN NS   bastion.migration.nextstep-it.com.
+
+; Bastion
+150     IN PTR  bastion.migration.nextstep-it.com.
+
+; Bootstrap
+156     IN PTR  bootstrap.migration.nextstep-it.com.
+
+; Control Plane Nodes
+151     IN PTR  node01.migration.nextstep-it.com.
+152     IN PTR  node02.migration.nextstep-it.com.
+153     IN PTR  node03.migration.nextstep-it.com.
+
+; API endpoints
+150     IN PTR  api.migration.nextstep-it.com.
+150     IN PTR  api-int.migration.nextstep-it.com.

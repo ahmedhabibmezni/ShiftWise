@@ -1,0 +1,104 @@
+# Flower — Celery monitoring UI. Read-only view of queues, workers, tasks.
+#
+# Exposition (G18) :
+#   Flower N'EST PLUS exposé via une Route publique. La Route précédente
+#   plaçait une UI d'introspection complète des tâches (payloads, IDs tenant,
+#   erreurs) sur l'Internet public sans aucune authentification.
+#   Accès désormais réservé aux opérateurs via port-forward :
+#       oc port-forward -n shiftwise svc/flower 5555:5555
+#       # puis http://localhost:5555
+#   Défense en profondeur : Flower est aussi démarré avec `--basic-auth`
+#   (identifiants depuis le Secret, clé FLOWER_BASIC_AUTH) — donc même un
+#   port-forward ou une ré-exposition accidentelle exige une authentification.
+#   Si une Route publique est un jour réellement nécessaire, garder le
+#   basic-auth ET ajouter une Route OAuth-proxy sidecar.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flower
+  namespace: shiftwise
+  labels: {app: flower, component: monitoring}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: flower}
+  template:
+    metadata:
+      labels: {app: flower, component: monitoring}
+    spec:
+      # Désactive les vars d'env auto FLOWER_* injectées par le Service "flower"
+      # (FLOWER_PORT=tcp://x.x.x.x:5555 collide avec l'option --port de Flower).
+      enableServiceLinks: false
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: flower
+          # Image unique ShiftWise — `shiftwise-backend` (cf. note dans
+          # backend-deployment.yaml). Flower ne fait qu'introspecter les files
+          # Celery ; il partage l'image unique réellement publiée.
+          # imagePullPolicy explicite (G14). `:latest` mutable — voir note
+          # dans backend-deployment.yaml.
+          image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
+          # --basic-auth lit FLOWER_BASIC_AUTH depuis l'env (Secret). On passe
+          # par `sh -c` pour expanser la variable. Format user:password.
+          command:
+            - sh
+            - -c
+            - >-
+              exec celery -A app.core.celery_app flower
+              --port=5555 --address=0.0.0.0
+              --basic-auth="$FLOWER_BASIC_AUTH"
+          # envFrom requis : app.core.config.Settings() exige DATABASE_*/SECRET_KEY
+          # à l'import de app.core.celery_app, même si Flower ne les utilise pas.
+          envFrom:
+            - secretRef:    {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+          env:
+            - {name: DATABASE_HOST, value: postgresql}
+            # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
+            # (ils embarquent le mot de passe Redis — durcissement G20).
+          ports:
+            - {name: http, containerPort: 5555}
+          resources:
+            requests: {cpu: 50m,  memory: 128Mi}
+            limits:   {cpu: 200m, memory: 256Mi}
+          # securityContext conteneur (G8). Flower (sans --persistent)
+          # garde son état en mémoire et n'écrit rien sur / ; /tmp via emptyDir.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          # Probes (G19) — Flower n'en avait aucune. L'UID HTTP sert / sur 5555.
+          # /healthcheck est un endpoint non authentifié exposé par Flower.
+          livenessProbe:
+            httpGet: {path: /healthcheck, port: 5555}
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: {path: /healthcheck, port: 5555}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flower
+  namespace: shiftwise
+spec:
+  selector: {app: flower}
+  ports:
+    - {name: http, port: 5555, targetPort: 5555}
+  type: ClusterIP
+# Route publique supprimée volontairement (G18) — accès via
+# `oc port-forward svc/flower 5555:5555`. Ne PAS ré-ajouter de Route sans
+# OAuth-proxy.

@@ -1,0 +1,174 @@
+(.venv) PS C:\Users\PC\OneDrive\Bureau\Stage PFE\ShiftWise-Develop\backend> python .\tests\test_hyperv_sync.py                                                 
+
+============================================================
+  ShiftWise — Hyper-V Discovery Sync Test Suite
+  Server        : http://localhost:8000
+  Hypervisor ID : 35
+  Platform      : Windows 11
+============================================================
+
+  ✅ Server is up — healthy
+
+============================================================
+  AUTH — Getting JWT token
+============================================================
+  ✅ Logged in as 'ahmed.mezni@nextstep.tn'
+  ℹ  Hypervisor found: id=35  name='LAPTOP-8UHDQUA9'  type='hyper_v'
+
+============================================================
+  SCENARIO 1 — INSERT: VM in Hyper-V, not yet in DB
+============================================================
+  ℹ  State BEFORE sync:
+  ℹ    VMs in DB for this hypervisor: 1
+  ℹ    hypervisor.total_vms_discovered = 1
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-17T01:19:19.740754+01:00
+
+  ℹ  Running sync …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 35,                                                                                                                                                              
+  "hypervisor_name": "LAPTOP-8UHDQUA9",                                                                                                                                             
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 1,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 1,                                                                                                                                                               
+    "archived_vms": 0,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ℹ  State AFTER sync:
+  ℹ    VMs in DB for this hypervisor: 1
+  ℹ    hypervisor.total_vms_discovered = 1
+  ℹ    hypervisor.status               = active
+  ℹ    hypervisor.last_sync_at         = 2026-04-17T01:20:27.161287+01:00
+
+  ⚠  new_vms = 0 — OK only if 'migrator' was already in DB before this run.
+             Delete the row and re-run for a clean INSERT test.                                                                                                                     
+  ⚠  VM count unchanged — DB was already populated (not an error).
+  ✅ hypervisor.status after sync: 'active'
+  ✅ hypervisor.last_sync_at is set: 2026-04-17T01:20:27.161287+01:00
+  ✅ hypervisor.total_vms_discovered = 1 (matches live VM count)
+  ✅ Expected VM 'migrator' found in DB (id=126)
+  ✅ name: 'migrator'
+  ✅ source_uuid: '95b48096df704999978eb374f8ddaeb7'
+  ✅ cpu_cores: 8
+  ✅ memory_mb: 1024
+  ✅ disk_gb: 25
+  ✅ os_type = 'unknown' — correctly set to UNKNOWN (not LINUX)
+  ✅ os_version: 'N/A'
+  ✅ os_name: 'N/A'
+  ✅ status: 'discovered'
+  ⚠  custom_metadata.power_state = 'running' (expected 'stopped' — VM may be running)
+
+  ℹ  Discovered VMs:
+  ℹ    [126] 'migrator'            uuid=95b48096df704999978eb374f8ddaeb7      os_type='unknown'  status='discovered'  ip=None
+
+============================================================
+  SCENARIO 2 — UPDATE: VM in Hyper-V AND in DB
+============================================================
+  ℹ  Running a second sync immediately …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 35,                                                                                                                                                              
+  "hypervisor_name": "LAPTOP-8UHDQUA9",                                                                                                                                             
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 1,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 1,                                                                                                                                                               
+    "archived_vms": 0,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ new_vms=0  updated_vms=1  unchanged_vms=0  archived_vms=0
+  ✅ No duplicate INSERTs on second sync — source_uuid dedup working correctly
+  ✅ All 1 existing VMs processed (updated or unchanged)
+  ✅ last_seen_at updated for 'migrator': 2026-04-17T01:20:27.156218+01:00 → 2026-04-17T01:20:29.223448+01:00
+  ✅ 'migrator' still has status='discovered' after second sync
+  ✅ os_type still = 'unknown' after second sync (not overwritten)
+
+============================================================
+  SCENARIO 3 — ARCHIVE: VM in DB, gone from Hyper-V
+============================================================
+  ℹ  Injecting a fake VM into the DB: name='ghost-hyperv-vm-test'  uuid='deadbeef000000000000000000000035'
+  ℹ  This VM does NOT exist on the real Hyper-V host.
+  ℹ  Cleaned up leftover ghost VM (id=125) from previous run
+  ✅ Fake VM injected: id=128  uuid=deadbeef000000000000000000000035
+  ℹ  Fake VM created: id=128, status='discovered'
+
+  ℹ  Running sync — fake VM should be marked ARCHIVED …
+  ℹ  Calling POST /hypervisors/{id}/sync …
+  ℹ  Sync response: {
+  "hypervisor_id": 35,                                                                                                                                                              
+  "hypervisor_name": "LAPTOP-8UHDQUA9",                                                                                                                                             
+  "status": "success",                                                                                                                                                              
+  "message": "D\u00e9couverte termin\u00e9e avec succ\u00e8s",                                                                                                                      
+  "statistics": {                                                                                                                                                                   
+    "total_discovered": 1,                                                                                                                                                          
+    "new_vms": 0,                                                                                                                                                                   
+    "updated_vms": 1,                                                                                                                                                               
+    "archived_vms": 1,                                                                                                                                                              
+    "errors": 0                                                                                                                                                                     
+  }                                                                                                                                                                                 
+}                                                                                                                                                                                   
+
+  ✅ archived_vms = 1 (≥1 VM was archived)
+  ✅ VM id=128 status is now 'archived' — correct behavior
+  ✅ Fake VM still exists in DB (id=128) — not deleted, only archived
+  ✅ 'migrator' still 'discovered' — only the ghost VM was archived
+  ✅ Archived VM no longer appears in the live VM list for this hypervisor
+  ℹ  hypervisor.total_vms_discovered after archive = 1 (should NOT count the ghost VM)
+
+============================================================
+  BONUS — Verify hypervisors ↔ virtual_machines JOIN
+============================================================
+  ℹ  Hypervisor  id               : 35
+  ℹ  Hypervisor  name             : 'LAPTOP-8UHDQUA9'
+  ℹ  Hypervisor  type             : 'hyper_v'
+  ℹ  Hypervisor  total_vms_disc.  : 1
+  ℹ  Hypervisor  last_sync_at     : 2026-04-17T01:20:31.320758+01:00
+  ℹ    /hypervisors/35/vms  → total_vms = 1
+  ℹ    /vms?hypervisor_id=35 → count     = 2
+
+  ✅ All VMs from /hypervisors/35/vms have correct source_hypervisor_id
+  ✅ hypervisor.total_vms_discovered (1) matches non-archived VM count (1)
+  ✅ All VMs have a source_uuid
+  ✅ No Hyper-V VMs have os_type='linux' — OSType.UNKNOWN policy respected (Task 5)
+
+  ℹ  'migrator' VM final state:
+  ℹ    id               : 126
+  ℹ    name             : 'migrator'
+  ℹ    source_uuid      : '95b48096df704999978eb374f8ddaeb7'
+  ℹ    cpu_cores        : 8
+  ℹ    memory_mb        : 1024
+  ℹ    disk_gb          : 25
+  ℹ    os_type          : 'unknown'
+  ℹ    os_version       : 'N/A'
+  ℹ    os_name          : 'N/A'
+  ℹ    status           : 'discovered'
+  ℹ    custom_metadata  : {'power_state': 'running'}
+  ℹ    ip_address       : None
+  ℹ    discovered_at    : 2026-04-17T01:19:12.447209+01:00
+  ℹ    last_seen_at     : 2026-04-17T01:20:31.314173+01:00
+
+  ℹ  VM snapshot (id | name | uuid | os_type | status | ip):
+  ℹ    [ 126] 'migrator'              95b48096df704999978eb374f8ddaeb7      os=unknown   discovered    N/A
+  ℹ    [ 128] 'ghost-hyperv-vm-test'  deadbeef000000000000000000000035      os=unknown   archived      N/A
+
+============================================================
+  FINAL SUMMARY
+============================================================
+  ✅ Hypervisor status            : active
+  ✅ Hypervisor last_sync_at      : 2026-04-17T01:20:31.320758+01:00
+  ✅ Hypervisor total_vms_disc.   : 1
+  ✅ Live VMs in DB               : 1
+  ✅ Archived VMs in DB           : 1
+  ✅ /hypervisors/35/vms total : 1
+
+All Hyper-V sync scenarios completed.

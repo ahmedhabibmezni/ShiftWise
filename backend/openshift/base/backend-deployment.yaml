@@ -1,0 +1,175 @@
+# Backend FastAPI — sert l'API REST sur 8000.
+#
+# 2 répliques pour HA. Pas d'état local : tout passe par PostgreSQL et Redis.
+# Exposé via Route TLS edge.
+#
+# Le ServiceAccount est différent du worker : l'API ne crée pas de Jobs K8s
+# elle-même (c'est le worker qui le fait). Elle a juste besoin de lire le
+# statut des Jobs de conversion. H-1 — ces Jobs tournent dans le namespace
+# `shiftwise` (CONVERTER_K8S_NAMESPACE="shiftwise"), pas dans un namespace
+# `shiftwise-converter` désormais inexistant.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shiftwise-api
+  namespace: shiftwise
+# Authenticated Docker Hub pulls — nodes pulling docker.io anonymously hit
+# `toomanyrequests` (rate limit). The `dockerhub-push` Secret (dockerconfigjson)
+# exists in each target namespace (prod + staging); referencing it here means
+# every pod under this SA pulls authenticated, and the link survives Argo
+# reconciles (an `oc secrets link` would be wiped when Argo re-applies the SA).
+imagePullSecrets:
+  - name: dockerhub-push
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-reader
+  namespace: shiftwise
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-can-read-jobs
+  namespace: shiftwise
+subjects:
+  - kind: ServiceAccount
+    name: shiftwise-api
+    namespace: shiftwise
+roleRef:
+  kind: Role
+  name: api-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: shiftwise
+  labels: {app: backend, component: api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: backend}
+  template:
+    metadata:
+      labels: {app: backend, component: api}
+    spec:
+      serviceAccountName: shiftwise-api
+      # Anti-affinity (HA) — spread the 2+ API replicas across distinct nodes so
+      # a single node failure / drain cannot take the whole API tier down.
+      # `preferred` (soft) not `required`: on a cluster with fewer schedulable
+      # nodes than replicas the pods still schedule (co-located) rather than
+      # going Pending — availability over strict spreading.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: backend}
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          # Image unique ShiftWise — `shiftwise-backend`, construite par
+          # backend/Dockerfile. C'est la SEULE image publiée sur le registre
+          # (le découpage api/worker n'a jamais été poussé) ; backend, flower,
+          # db-init ET worker la partagent. Elle embarque le guest-tooling
+          # (qemu-img / libguestfs / kernel) — surdimensionnée pour l'API mais
+          # cohérente avec ce qui existe réellement.
+          # imagePullPolicy explicite (G14). NOTE : `:latest` est mutable —
+          # remplacer par un tag immuable `:v<semver>` pour des rollouts
+          # déterministes (le pipeline CI le fera, cf. ci.yml job image-build).
+          image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - uvicorn
+            - app.main:app
+            - --host=0.0.0.0
+            - --port=8000
+            - --workers=2
+          envFrom:
+            - secretRef:    {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+            # B-1 — la clé du vault de credentials (Fernet) vit dans son propre
+            # Secret hors-Git. SHIFTWISE_FERNET_KEY est un champ Settings SANS
+            # défaut : sans cet envFrom, `Settings()` lève une ValidationError
+            # à l'import et le pod crashe au boot. Créé par l'opérateur :
+            #   oc -n shiftwise create secret generic shiftwise-credential-key \
+            #     --from-literal=SHIFTWISE_FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+            - secretRef:    {name: shiftwise-credential-key}
+          env:
+            - {name: DATABASE_HOST,         value: postgresql}
+            # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
+            # (ils embarquent le mot de passe Redis depuis le durcissement
+            # G20) — on ne les surcharge plus ici en clair.
+          ports:
+            - {name: http, containerPort: 8000}
+          resources:
+            requests: {cpu: 200m, memory: 384Mi}
+            limits:   {cpu: 1000m, memory: 768Mi}
+          # securityContext conteneur (G8). rootfs en lecture seule : l'API
+          # n'écrit rien sous / (PYTHONDONTWRITEBYTECODE=1) ; /tmp est fourni
+          # par un emptyDir pour les fichiers temporaires éventuels.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: shiftwise
+spec:
+  selector: {app: backend}
+  ports:
+    - {name: http, port: 8000, targetPort: 8000}
+  type: ClusterIP
+---
+# Route backend — host PARTAGÉ avec le frontend, dispatch par path (G — auth).
+# Le routeur OpenShift résout par longest-match : `/api` → backend, `/` →
+# frontend (cf. frontend-deployment.yaml). Frontend et backend DOIVENT partager
+# le même host : le cookie refresh est host-only (REFRESH_COOKIE_DOMAIN vide),
+# SameSite=Strict, Path=/api/v1/auth — un host distinct le ferait tomber.
+# Le host est figé sur l'URL publique de prod (= BACKEND_CORS_ORIGINS dans le
+# ConfigMap) ; le surcharger par overlay pour un autre environnement.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: backend
+  namespace: shiftwise
+spec:
+  host: shiftwise.apps.migration.nextstep-it.com
+  path: /api
+  to: {kind: Service, name: backend}
+  port: {targetPort: http}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

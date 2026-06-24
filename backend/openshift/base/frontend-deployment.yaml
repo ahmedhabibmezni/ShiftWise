@@ -1,0 +1,107 @@
+# Frontend SPA — React/Vite servi par nginx-unprivileged sur 8080.
+#
+# Construit par frontend/Dockerfile (multi-stage : build Vite → nginx
+# unprivileged). L'API est appelée en chemin relatif `/api/v1` (cf.
+# frontend/src/lib/axios.ts) : aucune URL backend en dur, donc la MÊME image
+# fonctionne en local (proxy Vite) et en cluster (Route host partagé).
+#
+# Routage host partagé : la Route `frontend` (path `/`) et la Route `backend`
+# (path `/api`, cf. backend-deployment.yaml) portent le MÊME host. Le routeur
+# OpenShift dispatch par longest-match. Host partagé OBLIGATOIRE pour que le
+# cookie refresh host-only / SameSite=Strict soit émis (cf. note Route backend).
+#
+# Image : `shiftwise-frontend` n'est PAS encore publiée sur le registre. La
+# construire et la pousser avant le premier déploiement :
+#   docker build -t docker.io/dida1609/shiftwise-frontend:latest -f frontend/Dockerfile frontend
+#   docker push docker.io/dida1609/shiftwise-frontend:latest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: shiftwise
+  labels: {app: frontend, component: ui}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: frontend}
+  template:
+    metadata:
+      labels: {app: frontend, component: ui}
+    spec:
+      # Anti-affinity (HA) — spread the SPA replicas across nodes (soft). See the
+      # backend Deployment for the preferred-vs-required rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: frontend}
+      # securityContext pod-level — exécution non-root, profil seccomp.
+      # L'image nginx-unprivileged tourne en UID 101 ; sous SCC restricted
+      # OpenShift réassigne un UID aléatoire du namespace avec GID 0.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: nginx
+          image: docker.io/dida1609/shiftwise-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          resources:
+            requests: {cpu: 25m,  memory: 32Mi}
+            limits:   {cpu: 200m, memory: 128Mi}
+          # rootfs en lecture seule : nginx n'écrit que son pid (/tmp) et ses
+          # caches temporaires (/var/cache/nginx), fournis par des emptyDir.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: tmp,         mountPath: /tmp}
+            - {name: nginx-cache, mountPath: /var/cache/nginx}
+          livenessProbe:
+            httpGet: {path: /, port: 8080}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: {path: /, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: shiftwise
+spec:
+  selector: {app: frontend}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+  type: ClusterIP
+---
+# Route frontend — MÊME host que la Route backend, path `/` (catch-all). Le
+# routeur OpenShift envoie `/api*` au backend (path plus spécifique) et tout le
+# reste au frontend.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: frontend
+  namespace: shiftwise
+spec:
+  host: shiftwise.apps.migration.nextstep-it.com
+  path: /
+  to: {kind: Service, name: frontend}
+  port: {targetPort: http}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,108 @@
+﻿# ShiftWise Global .gitignore
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Filled secret overlays — templates such as secrets.example.yaml stay tracked
+secrets.local.yaml
+secrets.local.yml
+
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.class
+venv/
+.venv/
+ENV/
+env/
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Internal tooling (never commit)
+.claude/
+.claudeignore
+CLAUDE.md
+NEXT_STEPS.md
+Shiftwise_session_handoff.md
+WARP.md
+*_session_handoff.md
+commit_rules.md
+start.txt
+scenario.txt
+security-vulnerabilities.md
+security-vulnerabilities-fix.md
+DEPLOY_RUNBOOK.md
+DEPLOYMENT-REFERENCE.md
+FRESH_INIT_BUG.md
+*.rdb
+DESIGN.md
+PRODUCT.md
+screenshot.mjs
+frontend/verify-redesign.mjs
+screenshots/
+audits/
+.specify/
+specs/
+
+# Agent / IDE assistant artefacts (per-tool config + caches, never commit)
+.agents/
+.impeccable/
+.kiro/
+.mcp.json
+.qoder/
+.qwen/
+.windsurf/
+skills/
+skills-lock.json
+.sixth/
+
+# Documentations
+docs/
+
+# Obsidian
+.obsidian/
+*.canvas
+*.canvas~
+.obsidian.vimrc
+# Converter worker scratch zone (large staged qcow2 disks — never commit)
+backend/.shiftwise-scratch/
+.shiftwise-scratch/

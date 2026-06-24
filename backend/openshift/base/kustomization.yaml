@@ -1,0 +1,67 @@
+# Une seule commande pour tout déployer :
+#
+#   ./deploy.sh
+#
+# Le script enchaîne : oc apply -k base → wait postgres → db-init Job →
+# wait db-init → wait backend/worker/flower. Idempotent.
+#
+# Layout canonique (B-3) : cette kustomization de base vit dans
+# openshift/base/ ; les overlays env-spécifiques sont dans
+# openshift/overlays/{production,staging}/ et référencent ../../base.
+#
+# Si tu préfères piloter à la main : `oc apply -k base` puis `oc apply -f
+# base/db-init-job.yaml` une fois Postgres prêt. db-init n'est PAS dans la
+# kustomization parce qu'un Job est immutable et casserait au re-apply.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shiftwise
+resources:
+  - postgresql-deployment.yaml
+  - redis-deployment.yaml
+  - transit-pvc.yaml
+  - worker-rbac.yaml
+  - populator-scc.yaml
+  - network-policy.yaml          # G17 — default-deny + flux scopés
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  - celery-worker-deployment.yaml
+  - flower-deployment.yaml
+  - pdb.yaml                     # HA — PodDisruptionBudgets (stateless tiers)
+  - hpa.yaml                     # HA — HorizontalPodAutoscalers (backend, worker)
+
+# secretGenerator / configMapGenerator (G25) :
+#   shiftwise-secrets et shiftwise-config NE sont volontairement PAS générés
+#   par kustomize. Un secretGenerator exigerait soit les valeurs en clair
+#   dans ce fichier, soit un fichier d'env référencé — dans les deux cas le
+#   secret entrerait dans Git, ce que le durcissement G6 interdit. Ces objets
+#   sont gérés hors-Git : `oc apply -f secrets.yaml` (cf. secrets.example.yaml)
+#   avant `./deploy.sh`. Le ConfigMap redis-config (non sensible) reste défini
+#   inline dans redis-deployment.yaml — pas de gain à le générer.
+
+# Découpage des images API / worker (G12) :
+#   Le backend est désormais publié en DEUX images depuis backend/ :
+#     - shiftwise-backend-api    (Dockerfile)        — API / Flower / db-init,
+#                                                      slim, sans guest-tooling
+#     - shiftwise-backend-worker (Dockerfile.worker) — worker Celery + Jobs
+#                                                      populator/adapter, image
+#                                                      API + libguestfs/qemu
+#   backend / flower / db-init référencent l'image API ; celery-worker
+#   référence l'image worker. Le pipeline CI doit construire l'API d'abord,
+#   puis le worker avec `--build-arg API_IMAGE=<image API taguée>`.
+#
+# Épinglage des images par digest (G14 / G26) :
+#   postgres et redis sont désormais épinglés PAR DIGEST directement dans
+#   postgresql-deployment.yaml et redis-deployment.yaml (tag + @sha256: figés,
+#   imagePullPolicy: IfNotPresent). Pas de bloc `images:` ici — un override
+#   kustomize ferait doublon avec le pinning inline et `digest`/`newTag` sont
+#   mutuellement exclusifs pour une même image.
+#
+#   Restent NON épinglées (images applicatives ShiftWise) :
+#     docker.io/dida1609/shiftwise-backend-api    (db-init, backend, flower)
+#     docker.io/dida1609/shiftwise-backend-worker (celery-worker, Jobs)
+#   Elles utilisent encore `:latest` car aucun schéma de tag immuable
+#   `v<semver>` n'est publié — le push registre du workflow CI est en stub.
+#   À activer le push CI, puis épingler ces deux images par
+#   `...:v<semver>@sha256:<digest>` dans leurs manifests respectifs ; résoudre
+#   le digest après push avec :
+#       docker buildx imagetools inspect docker.io/dida1609/shiftwise-backend-api:v<semver>

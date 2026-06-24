@@ -1,0 +1,42 @@
+# .dockerignore — restreint le contexte de build envoyé au daemon Docker.
+#
+# Le Dockerfile fait des COPY explicites (app/, alembic/, bootstrap.py,
+# init_db.py, alembic.ini, requirements.txt). Ce fichier est une défense en
+# profondeur : il garantit qu'un secret ou un artefact lourd ne fuit pas dans
+# le contexte même si un futur `COPY` est ajouté par erreur.
+
+# VCS / IDE.
+.git
+.gitignore
+.idea
+.vscode
+
+# Python build artefacts / caches.
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov/
+
+# Tests — pas nécessaires au runtime.
+tests/
+test_main.http
+
+# Secrets — NE JAMAIS embarquer dans l'image.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.kubeconfig
+config/
+
+# Docs / déploiement — pas requis dans l'image.
+*.md
+docs/
+openshift/
+alembic/env.py.backup

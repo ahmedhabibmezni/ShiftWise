@@ -1,0 +1,32 @@
+# Transit PVC — zone de staging NFS partagée entre Converter et Migrator.
+#
+# Pourquoi RWX ?
+#   Le converter Job écrit le QCOW2 ; l'adapter Job le patche en place ;
+#   le populator Job (cross-namespace) le lit. Trois pods, parfois sur
+#   nodes différents, accèdent au même répertoire — RWX obligatoire.
+#
+# Pourquoi 50Gi ?
+#   Couvre des disques source jusqu'à ~20-25Gi (avec headroom 2.2x du
+#   converter). Pour des VMs plus grosses, augmenter la capacité OU
+#   nettoyer plus agressivement les outputs READY (CONVERTER_OUTPUT_TTL_DAYS).
+#
+# Découverte automatique :
+#   Le migrator lit cette PVC au runtime via transit_discovery.py et
+#   en déduit (server, path) du NFS sous-jacent. L'admin n'a donc pas
+#   besoin de set MIGRATOR_NFS_SERVER / MIGRATOR_NFS_PATH dans le
+#   Deployment — sauf override d'urgence.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: transit-pvc
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+    app.kubernetes.io/component: transit
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 50Gi

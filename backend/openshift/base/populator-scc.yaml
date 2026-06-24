@@ -1,0 +1,98 @@
+# SecurityContextConstraints custom — autorise les volumes `nfs` directs
+# pour le populator du migrator UNIQUEMENT.
+#
+# Pourquoi un SCC custom ?
+# Aucun SCC built-in OpenShift n'autorise volumes.nfs direct sauf
+# `privileged`, qui est trop permissif (capabilities, host*, runAsUser=root).
+# Ce SCC clone les contraintes de `restricted-v2` et n'ajoute QUE `nfs` à
+# allowedVolumeTypes — toutes les autres restrictions sont conservées.
+#
+# Pourquoi besoin de NFS direct ?
+# Le populator copie un QCOW2 du PVC de transit (namespace shiftwise) vers
+# un PVC tenant (namespace shiftwise-{tenant_id}). Les PVC sont
+# namespace-scoped — pas franchissables. Le NFS direct atteint la même
+# donnée physique sans passer par un PVC cross-namespace.
+#
+# Image des Jobs populator/adapter (G12) :
+# Ces Jobs exécutent qemu-img / virt-customize — ils DOIVENT tourner sur
+# l'image worker (`shiftwise-backend-worker`, cf. backend/Dockerfile.worker),
+# pas sur l'image API slim. Le code worker qui les crée lit l'image via les
+# réglages ADAPTER_IMAGE / MIGRATOR_POPULATOR_IMAGE : pointer ces variables
+# sur l'image worker.
+#
+# Liaison (G9) :
+# Ce SCC est lié à un ServiceAccount DÉDIÉ et nommé — `shiftwise-populator`
+# dans le namespace `shiftwise` — et NON au SA générique `default`. Lier
+# `default` aurait accordé le droit `privileged` à TOUT pod du namespace
+# tournant sous ce SA, pas seulement aux pods populator/adapter. Le worker
+# lance les Jobs populator/adapter avec ce SA via le réglage
+# `MIGRATOR_POPULATOR_SA=shiftwise-populator`.
+# En production multi-tenant, le migrator devra provisionner un SA équivalent
+# dans chaque namespace tenant et l'ajouter à la liste `users` de ce SCC
+# (ou utiliser un RoleBinding sur le SCC). Le SA committé ci-dessous couvre
+# le namespace de contrôle `shiftwise`.
+---
+# ServiceAccount dédié (G9) — porte le droit `privileged` accordé par le SCC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shiftwise-populator
+  namespace: shiftwise
+  labels:
+    app.kubernetes.io/managed-by: shiftwise
+    app.kubernetes.io/component: populator
+---
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: shiftwise-populator
+  annotations:
+    kubernetes.io/description: >-
+      Cloned from restricted-v2 with `nfs` volume type added.
+      Used by the ShiftWise migrator populator pods only.
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: true
+# Le populator lui-même ne demande pas privileged (qemu-img convert tourne
+# en restricted). C'est le pod adapter (libguestfs/virt-customize) qui en
+# a besoin pour faire tourner son appliance qemu interne — sans privileged
+# guestfs_launch échoue avec "appliance failed to start" parce que le
+# seccomp + capabilities par défaut bloquent les syscalls que qemu utilise.
+# Le SCC est lié au seul SA dédié `shiftwise-populator` (cf. `users` plus
+# bas), donc le blast radius reste contenu à ce SA — pas tout le namespace.
+allowPrivilegedContainer: true
+allowedCapabilities: null
+defaultAddCapabilities: null
+fsGroup:
+  type: MustRunAs
+groups: []
+priority: 10                # higher than restricted-v2 (default = null) to win selection
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+  - ALL
+runAsUser:
+  type: MustRunAsRange
+seLinuxContext:
+  type: MustRunAs
+seccompProfiles:
+  - runtime/default
+supplementalGroups:
+  type: RunAsAny
+allowedVolumeTypes:
+  - configMap
+  - csi
+  - downwardAPI
+  - emptyDir
+  - ephemeral
+  - nfs                     # <- LA seule différence vs restricted-v2
+  - persistentVolumeClaim
+  - projected
+  - secret
+users:
+  # SA DÉDIÉ (G9) — uniquement les pods populator/adapter lancés sous ce SA
+  # obtiennent `privileged`. Pas le SA `default` du namespace.
+  # Format : system:serviceaccount:<namespace>:<sa-name>
+  - system:serviceaccount:shiftwise:shiftwise-populator

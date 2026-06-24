@@ -1,0 +1,136 @@
+# Redis broker for Celery (orchestration des migrations).
+#
+# Single-replica Deployment with a PVC backed by nfs-client. Persistence is
+# enabled via appendonly + appendfsync everysec — durable enough that a Redis
+# pod restart does not lose in-flight migration tasks. The authoritative state
+# remains in PostgreSQL; Redis is just the work-queue buffer.
+#
+# Authentication (G20) :
+#   Redis tourne avec `requirepass` (mot de passe depuis le Secret
+#   shiftwise-secrets, clé REDIS_PASSWORD) et `protected-mode yes`. Sans
+#   mot de passe, n'importe quel pod du cluster pouvait lire/écrire la file
+#   Celery et le store des refresh tokens.
+#   CONSEQUENCE : REDIS_AUTH_URL, CELERY_BROKER_URL et CELERY_RESULT_BACKEND
+#   doivent tous inclure le mot de passe — format :
+#       redis://:<REDIS_PASSWORD>@redis:6379/<db>
+#   Voir secrets.example.yaml : les trois URLs y sont définies AVEC le
+#   password et doivent rester cohérentes avec la clé REDIS_PASSWORD.
+#
+# Apply with:  oc apply -f redis-deployment.yaml -n shiftwise
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: shiftwise
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: shiftwise
+data:
+  # Le mot de passe N'EST PAS dans ce fichier — `requirepass` est injecté
+  # via l'argument CLI `--requirepass "$REDIS_PASSWORD"` (cf. command du
+  # conteneur), pour que le secret reste dans le Secret et hors du ConfigMap.
+  redis.conf: |
+    bind 0.0.0.0
+    protected-mode yes
+    appendonly yes
+    appendfsync everysec
+    dir /data
+    maxmemory 512mb
+    maxmemory-policy noeviction
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: shiftwise
+  labels: {app: redis, component: broker}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate            # PVC is RWO — never two pods at once.
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis, component: broker}
+    spec:
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          # Image épinglée par digest (G14 / G26) — un tag mutable
+          # (`7.2-alpine`, `7.4.9-alpine`) peut être ré-poussé : build
+          # non-reproductible + fenêtre supply-chain. Le digest est immuable.
+          # Tag de référence : redis:7.4.9-alpine (Redis 7.4.9, Alpine).
+          # Bump de 7.2 → 7.4 : compatible — Celery/redis-py n'utilisent que
+          # les commandes core + AOF, inchangées entre 7.2 et 7.4.
+          # Digest résolu via l'API registre Docker Hub le 2026-05-18 :
+          #   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/redis:pull" | jq -r .token)
+          #   curl -sI -H "Authorization: Bearer $TOKEN" \
+          #     -H "Accept: application/vnd.oci.image.index.v1+json" \
+          #     https://registry-1.docker.io/v2/library/redis/manifests/7.4.9-alpine \
+          #     | grep -i docker-content-digest
+          image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+          imagePullPolicy: IfNotPresent
+          # `requirepass` injecté via l'arg CLI (G20). On passe par `sh -c`
+          # pour que $REDIS_PASSWORD (issu du Secret) soit expansé. L'arg CLI
+          # surcharge / complète le fichier de conf.
+          command:
+            - sh
+            - -c
+            - exec redis-server /etc/redis/redis.conf --requirepass "$REDIS_PASSWORD"
+          env:
+            - {name: REDIS_PASSWORD, valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: REDIS_PASSWORD}}}
+          ports:
+            - {name: redis, containerPort: 6379}
+          volumeMounts:
+            - {name: data,   mountPath: /data}
+            - {name: config, mountPath: /etc/redis}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: 500m, memory: 768Mi}
+          # securityContext conteneur (G8) — Redis n'écrit que dans /data
+          # (PVC), donc le rootfs peut être en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            tcpSocket: {port: 6379}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            # redis-cli doit s'authentifier — sinon NOAUTH fait échouer la probe.
+            exec:
+              command: [sh, -c, 'redis-cli -a "$REDIS_PASSWORD" ping']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: redis-data}
+        - name: config
+          configMap: {name: redis-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: shiftwise
+spec:
+  selector: {app: redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: 6379}
+  type: ClusterIP

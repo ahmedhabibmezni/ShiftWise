@@ -1,0 +1,125 @@
+# ShiftWise - Requirements
+# Backend dependencies for intelligent VM migration platform
+#
+# Dev / test tooling (black, flake8, mypy, pytest, ...) lives in
+# requirements-dev.txt — keep this file production-only so the runtime
+# image stays slim and its dependency surface auditable (audit G23).
+
+# FastAPI Framework
+# Audit A14 — FastAPI >= 0.115 pulls Starlette >= 0.40, closing the
+# multipart DoS CVE-2024-47874 in older Starlette releases.
+# SV-012 — FastAPI 0.115.6 resolved Starlette ~0.41.x, still vulnerable to
+# CVE-2025-54121 (MultiPartParser blocking/temp-file DoS, fixed in Starlette
+# 0.47.2). Bumped to the version the test suite is actually validated against;
+# it pulls a Starlette well past the fix. A Starlette floor is pinned so the
+# fix can never regress on a transitive re-resolve.
+fastapi==0.136.3
+starlette>=0.47.2
+# Audit G30 — uvicorn bumped 0.27.0 -> 0.47.0 (ASGI server only; no app
+# API surface change). paramiko (3.4 -> 5.x) and the kubernetes client
+# (28 -> 35) are intentionally NOT bumped here: both are major-version
+# jumps that change APIs the SSH connectors and the KubeVirt/migrator
+# code depend on, and must be validated against a real KVM host and the
+# OpenShift cluster before shipping. Tracked as a planned upgrade.
+uvicorn[standard]==0.47.0
+# Audit A13 — python-multipart 0.0.18 fixed the ReDoS/DoS chain
+# (CVE-2024-24762 / CVE-2024-53981). Bumped to 0.0.31 to clear a later
+# path-traversal + DoS set (CVE-2026-24486 / -40347 / -42561 / -53538 /
+# -53539 / -53540).
+python-multipart==0.0.31
+
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# Authentication & Security
+# 2.13.0 clears 7 advisories against 2.10.1 (PYSEC-2025-183 + PYSEC-2026-120/
+# 175/176/177/178/179).
+PyJWT==2.13.0
+# SV-022 — passlib 1.7.4 is abandoned and pinned bcrypt to 4.0.1 (it reads the
+# removed bcrypt.__about__ shim, breaking on bcrypt >= 4.1). We hash via the
+# `bcrypt` library directly now (app/core/security.py), so passlib is dropped
+# and bcrypt floats to a maintained release that can take future fixes.
+bcrypt>=4.2.0,<5.0.0
+# 1.2.2 fixes CVE-2026-28684 (set_key/unset_key follow symlinks across a
+# cross-device rename, enabling arbitrary-file overwrite).
+python-dotenv==1.2.2
+# SV-012 — pydantic bumped 2.5.3 -> 2.13.4 to match the version the suite is
+# validated against; FastAPI 0.136.3 (Starlette CVE-2025-54121 fix) requires
+# pydantic >= 2.9, and the old 2.5.3 pin never matched the working env anyway.
+pydantic[email]==2.13.4
+pydantic-settings==2.1.0
+# Audit G24 — cryptography is pinned explicitly (it is a transitive
+# dependency of paramiko); an unpinned transitive makes the build
+# non-reproducible. Bump deliberately, never implicitly.
+# 48.0.1 clears CVE-2024-12797, CVE-2026-26007, PYSEC-2026-35 and
+# GHSA-537c-gmf6-5ccf (OpenSSL-in-wheel + EC subgroup + name-constraint
+# bypass). paramiko 3.4 has no cryptography upper bound; the Fernet vault
+# uses only the stable high-level recipe API.
+cryptography==48.0.1
+
+# Utilities
+python-dateutil==2.8.2
+
+# Hypervisor APIs (for future implementation)
+pyvmomi==8.0.1.0.2
+libvirt-python==11.3.0; platform_system == "Linux"
+# Proxmox VE REST API client (password + API token auth)
+proxmoxer==2.0.1
+# SV-012 — requests 2.32.3 is vulnerable to CVE-2024-47081 (.netrc credential
+# leak to the wrong host), fixed in 2.32.4. 2.33.0 additionally clears
+# CVE-2026-25645 (predictable temp filename in extract_zipped_paths()).
+requests==2.33.0
+# SV-012 — pin urllib3 explicitly to clear CVE-2025-50181 / CVE-2025-50182
+# (redirect/PoolManager handling, fixed in 1.26.20 and 2.5.0) and
+# CVE-2024-37891 (proxy-auth header leak on redirect, fixed in 1.26.19 /
+# 2.2.2). We stay on the 1.26.x line (>= 1.26.20) rather than jumping to 2.x:
+# kubernetes==28.1.0 is the pinned client here and the 2.x major has not been
+# validated against it (the kubernetes 28 -> 35 bump is a separately tracked
+# task). 1.26.20 clears all three CVEs without that risk.
+# KNOWN-UNFIXED while capped <2.0.0: PYSEC-2026-141 + CVE-2025-50181 /
+# CVE-2025-66418 / CVE-2025-66471 / CVE-2026-21441 (all fixed only in the 2.x
+# line). pip-audit flags these until the kubernetes 28->35 bump lifts the cap.
+urllib3>=1.26.20,<2.0.0
+# oVirt / RHV engine SDK
+ovirt-engine-sdk-python==4.6.3
+# Hyper-V remote (Linux in-cluster worker): WinRM for PowerShell control +
+# SMB for pulling the VHD(X) from the host admin share. Only the remote
+# (auth_mode != "local") Hyper-V converter path imports these; the local
+# Windows-worker path uses powershell.exe + a filesystem copy instead.
+pypsrp==0.8.1
+smbprotocol==1.12.0
+
+# Kubernetes & OpenShift (for future implementation)
+kubernetes==28.1.0
+pyyaml==6.0.1
+
+# File operations & conversions (for future implementation)
+# KNOWN-UNFIXED: CVE-2026-44405 (rsakey.py still permits SHA-1) has no
+# released fix — the patch is an unmerged-into-release commit; "through 4.0.0"
+# is affected. pip-audit flags this until paramiko publishes a fixed release
+# (tracked with the 3.4 -> 5.x bump).
+paramiko==3.4.0
+
+# Async task orchestration (migrations parallèles + durables)
+celery[redis]==5.3.6
+redis==5.0.1
+flower==2.0.1
+
+# Machine Learning (Analyzer)
+# NOTE: joblib artifacts are NOT portable across sklearn minor versions.
+#       Regenerate compatibility_model.joblib after bumping scikit-learn.
+scikit-learn==1.5.2
+joblib==1.4.2
+numpy==1.26.4
+pandas==2.2.1
+
+# Reports — PDF export (US5). ReportLab is pure-Python, no system-package
+# requirement, so it slots into the existing OpenShift image without
+# adding apt layers. BSD-style license.
+# 4.4.0 introduced safe defaults for trustedSchemes / trustedHosts,
+# closing the SSRF surface that 4.2.x exposed during remote-resource
+# fetching in Platypus/canvas rendering. Pin to <5 to absorb patches
+# without taking a future major.
+reportlab>=4.4.0,<5.0.0

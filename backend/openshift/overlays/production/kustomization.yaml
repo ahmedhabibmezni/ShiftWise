@@ -1,0 +1,69 @@
+# Production overlay — ShiftWise backend
+#
+# This overlay patches the cluster defaults so production runs with
+# TLS verification ENABLED against the Kubernetes API (constitution
+# Security Requirements §3, US4 FR-010).
+#
+# Apply with:
+#
+#     oc apply -k backend/openshift/overlays/production/
+#
+# Prerequisites — the operator MUST have created the credential-vault
+# Secret out-of-band BEFORE applying this overlay:
+#
+#     FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+#     oc -n shiftwise create secret generic shiftwise-credential-key \
+#       --from-literal=SHIFTWISE_FERNET_KEY="$FERNET_KEY"
+#
+# The base Deployments (backend / celery-worker) and the db-init Job declare
+# an `envFrom: secretRef` referencing that Secret (B-1); this overlay does
+# NOT modify that reference.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shiftwise
+
+# Canonical base/overlays layout (B-3) — the base lives in a sibling
+# directory, NOT in an ancestor of this overlay. kustomize v5 rejects a
+# base that is an ancestor directory ("cycle detected"), which is why the
+# previous `- ../` (pointing at openshift/, the parent) never built.
+resources:
+  - ../../base
+
+# Patch the backend Deployment to flip KUBERNETES_VERIFY_SSL from the
+# dev-time False to the production-mandatory True. The base overlay
+# leaves it False because OpenShift CI uses self-signed certs.
+patches:
+  # B-3 — les Deployments de base s'appellent `backend` et `celery-worker`
+  # (pas de namePrefix dans la kustomization de base). Cibler les anciens noms
+  # `shiftwise-backend` / `shiftwise-worker` faisait échouer `oc apply -k`
+  # (no matches for Id) — donc KUBERNETES_VERIFY_SSL=True n'était jamais
+  # appliqué en production.
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KUBERNETES_VERIFY_SSL
+          value: "True"
+  - target:
+      kind: Deployment
+      name: celery-worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KUBERNETES_VERIFY_SSL
+          value: "True"
+
+# Image tags — production promotion is MANUAL (constitution Governance §4):
+# bump these to the validated `vX.Y.Z` via PR to `main`, then sync the
+# production Argo CD Application by hand. The single `shiftwise-backend` image
+# backs backend / flower / db-init / worker; `shiftwise-frontend` backs the SPA.
+images:
+  - name: docker.io/dida1609/shiftwise-backend
+    newTag: latest
+  - name: docker.io/dida1609/shiftwise-frontend
+    newTag: latest

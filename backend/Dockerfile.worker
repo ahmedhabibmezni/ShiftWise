@@ -1,0 +1,133 @@
+# Image conteneur ShiftWise — Worker (pipeline de migration).
+#
+# Sert :
+#   - le worker Celery (orchestration migrations / conversions)
+#   - les Jobs populator (qemu-img convert qcow2 -> raw vers le PVC tenant)
+#   - les Jobs adapter (libguestfs / virt-customize : fix réseau, console
+#     série, relabel SELinux du guest OS)
+#
+# Découpage API / worker (G12) :
+#   Cette image PART de l'image API (`shiftwise-backend-api`) et y ajoute
+#   UNIQUEMENT la couche guest-tooling lourde dont l'API n'a aucun usage :
+#     - qemu-utils        : binaire `qemu-img` (convert qcow2/vmdk/vhd -> raw),
+#                           utilisé par le populator du migrator (~3 MB)
+#     - libguestfs-tools  : `virt-customize` / `virt-inspector`, utilisés par
+#                           le stage Adapter pour muter le qcow2 en place
+#     - linux-image-amd64 : noyau requis par l'appliance qemu interne de
+#                           libguestfs (sans lui, guestfs_launch échoue avec
+#                           "appliance failed to start")
+#   Total : ~300 MB. En les isolant ici, l'image API/Flower (publique, exposée
+#   via Route) ne porte plus ni noyau ni outils de manipulation de disque.
+#
+# Image de base = image API (G12) :
+#   L'ARG API_IMAGE doit pointer sur l'image API DÉJÀ construite, par tag
+#   immuable ou digest. Conséquences :
+#     - les couches base / wheels / code app sont héritées telles quelles —
+#       AUCUNE divergence de code possible entre API et worker ;
+#     - le pipeline CI construit l'image API en premier, puis cette image-ci
+#       avec `--build-arg API_IMAGE=<image API qui vient d'être taguée>`.
+#   Build local (après avoir construit l'image API) :
+#       docker build -t quay.io/shiftwise/backend-api:latest -f Dockerfile .
+#       docker build -t quay.io/shiftwise/backend-worker:latest \
+#         --build-arg API_IMAGE=quay.io/shiftwise/backend-api:latest \
+#         -f Dockerfile.worker .
+#   En production / CI, passer un digest résolu plutôt qu'un tag mutable :
+#       --build-arg API_IMAGE=quay.io/shiftwise/backend-api@sha256:<DIGEST>
+#   Le digest n'est pas codé en dur ici : il dépend du registre et doit être
+#   résolu sur une image réellement poussée — pas inventé.
+ARG API_IMAGE=docker.io/dida1609/shiftwise-backend-api:latest
+# image de référence : l'image API ShiftWise (à figer par @sha256:<DIGEST>)
+
+FROM ${API_IMAGE} AS worker
+
+# apt nécessite root ; l'image API se termine sur USER 1001 — on repasse root
+# pour la couche d'install, puis on rebascule sur 1001 à la fin.
+USER 0
+
+# Guest-tooling — la seule différence vs l'image API (cf. G12 ci-dessus).
+# `recommends` désactivé : libguestfs-tools tire sinon des paquets X / doc
+# inutiles dans un conteneur.
+#
+# `libguestfs-tools` embarque virt-customize (Linux guests) ET virt-v2v +
+# virt-v2v-in-place (Windows guests). Le code Python sélectionne le bon
+# outil selon `VirtualMachine.os_type` ; cette image les couvre tous les
+# deux dès maintenant.
+#
+# Windows guest support — ajout du paquet virtio-win :
+#   Le stage Adapter pour os_type=WINDOWS appelle `virt-v2v-in-place`, qui
+#   injecte les drivers virtio Red Hat (NIC, balloon, viostor) requis par
+#   le bus virtio de KubeVirt. Ces drivers vivent dans le paquet
+#   `virtio-win`, indisponible dans les dépôts Debian principaux.
+#
+#   Pour activer la migration Windows :
+#     1. Télécharger l'ISO virtio-win signé Red Hat :
+#          curl -L -o /tmp/virtio-win.iso \
+#            https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+#     2. Ajouter dans cette image :
+#          RUN mkdir -p /usr/share/virtio-win \
+#              && curl -L -o /usr/share/virtio-win/virtio-win.iso <URL>
+#        (ou `apt-get install virtio-win` si un dépôt Red Hat est configuré).
+#     3. Le script Adapter exporte VIRTIO_WIN=/usr/share/virtio-win — pas
+#        de changement de code requis côté Python.
+#
+#   Tant que virtio-win n'est PAS ajouté, le pipeline Linux fonctionne ;
+#   une migration Windows échoue côté pod avec un message explicite
+#   "virtio-win drivers not found at /usr/share/virtio-win". Le contenu
+#   ML de l'analyzer marque déjà un VM Windows COMPATIBLE/PARTIAL en
+#   fonction des règles — au cluster admin de décider d'activer le
+#   support après avoir audité la licence virtio-win.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        qemu-utils \
+        libguestfs-tools linux-image-amd64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Windows guest support — virtio-win (OPT-IN, license-gated).
+#
+#   Le code Adapter (os_type=WINDOWS → virt-v2v-in-place) est déjà câblé et
+#   testé ; il manque uniquement l'ISO virtio-win dans l'image. L'activation
+#   est laissée à l'admin cluster APRÈS audit de la licence virtio-win (cf.
+#   note ci-dessus) — c'est pourquoi c'est un build-arg DÉSACTIVÉ par défaut :
+#
+#       docker build -f Dockerfile.worker \
+#         --build-arg API_IMAGE=<image API> \
+#         --build-arg INSTALL_VIRTIO_WIN=true \
+#         -t <worker image> .
+#
+#   Par défaut (false) : le pipeline Linux est intact et inchangé ; une
+#   migration Windows échoue côté pod avec le message explicite
+#   "virtio-win drivers not found at /usr/share/virtio-win" émis par le
+#   script Adapter. L'ISO (~700 MB) n'est téléchargée que sur opt-in.
+#
+#   L'URL pointe par défaut sur le canal stable signé Red Hat ; surchargeable
+#   via --build-arg VIRTIO_WIN_ISO_URL=... pour un miroir interne / un digest.
+ARG INSTALL_VIRTIO_WIN=false
+ARG VIRTIO_WIN_ISO_URL=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+RUN if [ "$INSTALL_VIRTIO_WIN" = "true" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends curl ca-certificates \
+        && mkdir -p /usr/share/virtio-win \
+        && curl -fSL -o /usr/share/virtio-win/virtio-win.iso "$VIRTIO_WIN_ISO_URL" \
+        && chmod 0644 /usr/share/virtio-win/virtio-win.iso \
+        && rm -rf /var/lib/apt/lists/* \
+        && echo ">>> virtio-win ISO installed at /usr/share/virtio-win (Windows guests enabled)"; \
+    else \
+        echo ">>> virtio-win NOT installed (INSTALL_VIRTIO_WIN=false) — Linux pipeline only"; \
+    fi
+
+# Les fichiers ajoutés par apt appartiennent à root:root. Tout le HOME doit
+# rester accessible au GID 0 pour l'UID arbitraire assigné par le SCC
+# OpenShift — on réapplique donc le même chmod que l'image API. /usr (où apt
+# installe les binaires) est déjà lisible par `other`, pas de chmod requis là.
+RUN chown -R 1001:0 /home/app \
+    && chmod -R g=u,o+rX /home/app
+
+USER 1001
+
+# Pas de HEALTHCHECK ici : le worker n'expose pas de port HTTP. Le manifest
+# celery-worker définit une liveness/readiness `celery inspect ping`.
+
+# Commande par défaut = worker Celery. Overridable par le Deployment (les Jobs
+# populator/adapter passent leur propre commande qemu-img / virt-customize).
+CMD ["celery", "-A", "app.core.celery_app", "worker", \
+     "--loglevel=info", "--queues=migrations,conversions", \
+     "--concurrency=4", "--prefetch-multiplier=1", "--max-tasks-per-child=50"]

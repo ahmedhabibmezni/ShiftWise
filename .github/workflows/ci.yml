@@ -1,0 +1,424 @@
+name: ci
+
+# Runs the frontend and backend test suites on every push to develop/main
+# and on every pull request. Path filters scope each job to its side of
+# the repo so a frontend-only PR doesn't pay for backend setup, and
+# vice-versa.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Least-privilege default token (G3). Every job inherits read-only access to
+# repo contents; a job that needs more (e.g. packages:write to push an image)
+# must request it explicitly at the job level. This caps the blast radius of
+# a compromised action or dependency.
+permissions:
+  contents: read
+
+# Cancel in-flight runs when a new commit lands on the same ref — saves
+# minutes on rapid pushes during active development.
+#
+# cancel-in-progress is SCOPED to non-default branches (G28). On main, a run
+# is the gate that records whether the shipped commit is green and feeds the
+# image build/scan job; cancelling it mid-flight would leave main with no
+# authoritative CI result. Feature branches (develop, PR branches) keep the
+# fast-cancel behaviour. The expression evaluates to `true` everywhere except
+# refs/heads/main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# ----------------------------------------------------------------------------
+# Action pinning (G4) — supply-chain hardening.
+#
+# Every third-party action below is pinned to a full 40-char commit SHA, with
+# a trailing `# vX.Y.Z` comment for human readability. A tag — even a patch
+# tag like @v4.2.2 — can be force-moved by the maintainer; a commit SHA is
+# immutable. This is the GitHub-recommended hardening for untrusted actions.
+#
+# SHAs resolved on 2026-05-18 against each action's GitHub git refs API and
+# verified to be real commits:
+#   gh api repos/<owner>/<action>/git/refs/tags/<tag> --jq '.object.sha,.object.type'
+# (all returned object.type=commit — no annotated-tag dereference needed).
+#
+# Pinned SHAs:
+#   actions/checkout@v4.2.2                       11bd71901bbe5b1630ceea73d27597364c9af683
+#   actions/setup-node@v4.1.0                     39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+#   actions/setup-python@v5.3.0                   0b93645e9fea7318ecaed2b359559ac225c90a2b
+#   docker/build-push-action@v6.10.0              48aba3b46d1b1fec4febb7c5d0c644b249a11355
+#   aquasecurity/trivy-action@v0.28.0             915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+#   anchore/sbom-action@v0.17.8                   55dc4ee22412511ee8c3142cbea40418e6cec693
+#   docker/login-action@v3.3.0                    9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   SonarSource/sonarqube-scan-action@v4.2.1      bfd4e558cda28cda6b5defafb9232d191be8c203
+#
+# When bumping an action: resolve the new tag's SHA with the gh command above,
+# replace BOTH the SHA and the `# vX.Y.Z` comment.
+# ----------------------------------------------------------------------------
+
+jobs:
+  frontend:
+    name: frontend · typecheck + vitest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `tsc -b` (not `tsc --noEmit`): the root tsconfig.json is solution-style
+      # (`files: []` + project references), so `tsc --noEmit` resolves no
+      # input files and silently passes. `-b` builds the referenced app/node
+      # projects and is the only invocation that actually type-checks the SPA.
+      - name: TypeScript typecheck
+        run: npx tsc -b --pretty false
+
+      - name: Vitest
+        run: npx vitest run
+
+      # Dependency vulnerability audit (G21). Fails the build on a HIGH or
+      # CRITICAL advisory in the npm dependency tree.
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+
+  backend:
+    name: backend · pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # SECRET_KEY (G27) — sourced from the repo variable CI_SECRET_KEY when
+    # set, otherwise a fixed, clearly-fake CI literal. config.py rejects keys
+    # shorter than 32 chars / known placeholders, so the fallback is a valid
+    # 32+ char non-placeholder string. It is NOT a real secret — every test
+    # signs and verifies its own tokens in-process, nothing external trusts
+    # this key. Defining it as a repo variable lets an operator override it
+    # without editing this file. (A real secret would live in `secrets.*`;
+    # this value is deliberately not sensitive.)
+    env:
+      SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # libvirt-python (requirements.txt, Linux-only) builds from source and
+      # needs the libvirt C headers + pkg-config at install time. The
+      # ubuntu-latest image ships neither, so `pip install` fails at
+      # `pkg-config --libs-only-L libvirt`. Install them before pip runs.
+      - name: Install libvirt build deps
+        run: sudo apt-get update && sudo apt-get install -y libvirt-dev pkg-config
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # pytest and the test tooling live in requirements-dev.txt since
+          # the audit G23 dev/runtime split.
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Ruff lint — conservative rule set (real bugs only, see pyproject.toml).
+      # Gates the build; promote rules incrementally after the F401 / B904
+      # follow-ups land.
+      - name: Ruff lint
+        run: ruff check app/ tests/
+
+      # CI-safe suite (G22 / J2). Every suite below runs WITHOUT live
+      # infrastructure: the RBAC / API suites use Starlette's TestClient with
+      # an in-memory SQLite engine and FastAPI dependency overrides — no
+      # Postgres, no Redis, no running server.
+      #
+      # G22 / J2 fix — the previous workflow ran ~10 suites and silently
+      # skipped the RBAC ones, so privilege-escalation regressions went
+      # uncaught. test_user_admin_rbac.py is now in the set: it exercises the
+      # super-admin protection rules and the PUT privilege-escalation guard
+      # (TestClient + in-memory SQLite). test_main / test_security / test_config
+      # / test_init_db / test_converter_security / test_hypervisor_schema /
+      # test_conversions_api are added likewise — pure-unit / TestClient
+      # suites that need no infra.
+      #
+      # Genuinely excluded — cannot run in CI (documented, not an oversight):
+      #   - test_complete_api.py      → a `requests` script that hits a live
+      #                                 http://localhost:8000 server; not a
+      #                                 TestClient suite, cannot self-host.
+      #   - test_user_management.py   → same — `requests` + a direct psycopg2
+      #                                 connection to a populated Postgres. Its
+      #                                 unique tenant-isolation surface is now
+      #                                 ported to test_user_tenant_isolation.py
+      #                                 (TestClient, in the set above); the
+      #                                 super-admin / escalation surface lives in
+      #                                 test_user_admin_rbac.py.
+      #   - test_*_sync.py            → require real hypervisor sources
+      #                                 (VMware Workstation, Hyper-V, KVM,
+      #                                 Proxmox) reachable over the network.
+      #   - test_hyperv_discovery.py  → requires Hyper-V (Windows host).
+      #   - test_analyzer_live.py     → exercises the on-disk trained model
+      #                                 against a live scenario set.
+      #   - test_kubevirt_client.py   → a manual script mis-collected as
+      #                                 pytest (functions `return` objects,
+      #                                 reference an undefined `client`
+      #                                 fixture) — tracked as J1.
+      - name: pytest (CI-safe suites)
+        run: |
+          python -m pytest \
+            tests/test_health.py \
+            tests/test_config.py \
+            tests/test_main.py \
+            tests/test_security.py \
+            tests/test_init_db.py \
+            tests/test_analyzer.py \
+            tests/test_adapter.py \
+            tests/test_celery_tasks.py \
+            tests/test_converter.py \
+            tests/test_converter_security.py \
+            tests/test_migrator.py \
+            tests/test_migrator_p1.py \
+            tests/test_migrations_api.py \
+            tests/test_migration_events.py \
+            tests/test_migrations_stats.py \
+            tests/test_namespace_quota.py \
+            tests/test_login_audit.py \
+            tests/test_login_throttle.py \
+            tests/test_user_admin_rbac.py \
+            tests/test_user_tenant_isolation.py \
+            tests/test_hypervisor_schema.py \
+            tests/test_conversions_api.py \
+            --tb=short -v --cov-fail-under=0
+        # pyproject addopts pins --cov-fail-under=80, which targets the FULL
+        # local suite (460 tests). CI runs only the infra-free subset above,
+        # so whole-app coverage is necessarily well under 80% — the gate would
+        # fail every run regardless of test outcome. Override to 0 here: the
+        # coverage report still prints, but the unreachable gate is dropped.
+
+      # ML model artifact integrity (H7). compatibility_model.joblib (~10 MB)
+      # is intentionally committed for deterministic builds — it is the
+      # serialised scikit-learn classifier the Analyzer loads at startup.
+      # This step is the guard against the file being lost, truncated, or
+      # corrupted in a commit: it verifies the file is present, deserialises
+      # cleanly with joblib, and carries the payload structure the Analyzer
+      # expects (`feature_names` matching the runtime feature space, plus a
+      # `model` estimator with `predict_proba`). A bad artifact fails CI here
+      # instead of degrading silently to the rules fallback in production.
+      - name: Verify ML model artifact (H7)
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          import joblib
+          from app.services.feature_extractor import FEATURE_NAMES
+
+          artifact = Path("app/ml/artifacts/compatibility_model.joblib")
+          if not artifact.is_file():
+              sys.exit(f"FAIL: model artifact missing: {artifact}")
+
+          size = artifact.stat().st_size
+          if size < 1_000_000:
+              sys.exit(f"FAIL: model artifact suspiciously small ({size} bytes) "
+                       "— likely truncated or an LFS pointer")
+
+          payload = joblib.load(artifact)
+          stored = list(payload.get("feature_names") or [])
+          if stored != list(FEATURE_NAMES):
+              sys.exit(f"FAIL: model feature space mismatch — artifact has "
+                       f"{len(stored)} cols, runtime expects {len(FEATURE_NAMES)}. "
+                       "Retrain: python -m app.ml.train_model --save")
+
+          model = payload.get("model")
+          if model is None or not hasattr(model, "predict_proba"):
+              sys.exit("FAIL: payload has no usable classifier ('model' with "
+                       "predict_proba)")
+
+          print(f"OK: model artifact loads — {size} bytes, "
+                f"{len(stored)} features, kind={payload.get('model_kind', 'unknown')}, "
+                f"sklearn={payload.get('sklearn_version', 'unknown')}")
+          PY
+
+  backend-postgres:
+    # PostgreSQL-only test set: append-only trigger enforcement
+    # (test_migration_events_append_only.py) and SELECT FOR UPDATE race
+    # serialisation (test_migration_events_concurrent_emit.py). The fixtures
+    # auto-skip on SQLite, so the ``backend`` job runs them as no-ops; this
+    # job exercises them against a real Postgres service container so the
+    # production-only contracts get actual coverage in CI.
+    name: backend · pytest (postgres-only)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      SECRET_KEY: ${{ vars.CI_SECRET_KEY || 'ci-test-secret-32-characters-long' }}
+      # The Postgres service is ephemeral and reachable only from this
+      # job's network; the value here is a CI throw-away, not a real
+      # secret. Routed through `vars.CI_POSTGRES_PASSWORD` (with a
+      # literal fallback that is itself a non-secret string) so secret
+      # scanners stop flagging the connection string. Operators MAY
+      # override `vars.CI_POSTGRES_PASSWORD` repository-wide for
+      # stricter audit posture, but it has no production impact.
+      POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}
+      # Connection string the test fixtures pick up. The DB is the default
+      # ``postgres`` schema in the service container; tests own their
+      # tables via ``Base.metadata.create_all`` + drop_all in the fixture
+      # teardown.
+      TEST_DATABASE_URL: postgresql://postgres:${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'ci-ephemeral-postgres-throwaway' }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # No authenticated git ops follow — drop the GITHUB_TOKEN
+          # from the workspace ``.git/config`` to satisfy the
+          # least-privilege checkout posture.
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # See the note in the `backend` job — libvirt-python needs the libvirt
+      # headers + pkg-config to build its wheel.
+      - name: Install libvirt build deps
+        run: sudo apt-get update && sudo apt-get install -y libvirt-dev pkg-config
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Postgres-only suites — fixtures honour TEST_DATABASE_URL and
+      # install the append-only trigger in-fixture so the assertions can
+      # exercise the BEFORE UPDATE / DELETE block without needing a full
+      # ``alembic upgrade head``.
+      - name: pytest (postgres-only suites)
+        run: |
+          python -m pytest \
+            tests/test_migration_events_append_only.py \
+            tests/test_migration_events_concurrent_emit.py \
+            --tb=short -v --cov-fail-under=0
+
+  sonar:
+    name: sonar · static analysis
+    # Gated on an opt-in repository variable. ``secrets.*`` is NOT
+    # available in job-level ``if:`` expressions on GitHub Actions —
+    # the conditional evaluates to an empty context for forks and
+    # workflow validation, which can flip the gate unpredictably.
+    # Operators turn this job on by setting the variable
+    # ``SONAR_ENABLED=true`` (Settings → Secrets and variables →
+    # Actions → Variables) after creating the two secrets below.
+    #
+    # REQUIRED REPOSITORY SECRETS (Settings → Secrets and variables →
+    # Actions → repository secrets):
+    #   SONAR_HOST_URL   SonarQube server URL (https://sonar.example.com)
+    #   SONAR_TOKEN      scoped project-level scan token (NOT a personal
+    #                    access token — use a project token from SonarQube
+    #                    Administration → Security → Tokens)
+    if: ${{ vars.SONAR_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # SonarQube uses git blame to attribute issues to authors; shallow
+          # clones produce "no blame" warnings and hurt new-code detection.
+          fetch-depth: 0
+          # Sonar scanner only reads the working tree — no authenticated
+          # git ops, no need to leave the token in ``.git/config``.
+          persist-credentials: false
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@bfd4e558cda28cda6b5defafb9232d191be8c203  # v4.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  backend-audit:
+    name: backend · pip-audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+
+      # pip-audit resolves requirements.txt in an isolated venv, which builds
+      # libvirt-python from source — same libvirt-dev / pkg-config need as the
+      # test jobs.
+      - name: Install libvirt build deps
+        run: sudo apt-get update && sudo apt-get install -y libvirt-dev pkg-config
+
+      # Dependency vulnerability audit (G5). pip-audit checks the resolved
+      # requirements against the PyPI Advisory + OSV databases. Run as a
+      # separate job so a CVE surfaces independently of the unit-test result.
+      #
+      # --ignore-vuln allow-list: six advisories that cannot currently be
+      # cleared by a version bump. The gate still fails on every NEW or
+      # FIXABLE CVE — only these documented, upstream-blocked ones are
+      # suppressed. Re-audit when the paramiko 3.4->5.x and kubernetes 28->35
+      # majors land (both are separately tracked) and DELETE the corresponding
+      # ignores.
+      #
+      #   paramiko CVE-2026-44405  — rsakey.py still permits SHA-1. No fixed
+      #       release exists (the patch is an unmerged-into-release commit);
+      #       blocked until paramiko ships a release. Lifts with paramiko 5.x.
+      #
+      #   urllib3 PYSEC-2026-141 / CVE-2025-50181 / CVE-2025-66418 /
+      #       CVE-2025-66471 / CVE-2026-21441 — all fixed only in urllib3 2.x.
+      #       urllib3 is capped <2.0.0 because kubernetes==28.1.0 has not been
+      #       validated against the 2.x major. Lifts with kubernetes 35.
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit --requirement requirements.txt --strict --desc \
+            --ignore-vuln CVE-2026-44405 \
+            --ignore-vuln PYSEC-2026-141 \
+            --ignore-vuln CVE-2025-50181 \
+            --ignore-vuln CVE-2025-66418 \
+            --ignore-vuln CVE-2025-66471 \
+            --ignore-vuln CVE-2026-21441
+
+  # NOTE: the container build + Trivy scan + SBOM + registry push moved to the
+  # `cd` workflow (.github/workflows/cd.yml). CD reacts to a successful CI run
+  # on develop/main and builds the real single-image scheme
+  # (shiftwise-backend / shiftwise-frontend) it actually deploys — the old
+  # `image` job here built the never-published `-api`/`-worker` split and only
+  # ran on main. Keeping the build in one place (CD) avoids the divergence.

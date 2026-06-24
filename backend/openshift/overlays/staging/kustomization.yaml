@@ -1,0 +1,73 @@
+# Staging overlay — ShiftWise backend
+#
+# Applied by the release.yml GitHub Actions workflow on every tag push
+# after the quality gates and image push succeed (US5). Staging uses the
+# permissive dev-style defaults: KUBERNETES_VERIFY_SSL stays False
+# because the staging cluster carries self-signed certs.
+#
+# The credential-vault Secret is created out-of-band by the operator
+# before the first deploy (see credential-key-secret.yaml in this
+# directory for the template). The base Deployments / db-init Job
+# already reference the Secret via `envFrom` (B-1), so applying this
+# overlay is enough once the Secret exists.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shiftwise-staging
+
+# Canonical base/overlays layout (B-3) — base is a sibling directory, not
+# an ancestor (kustomize v5 rejects an ancestor base with "cycle detected").
+resources:
+  - ../../base
+# NOTE: credential-key-secret.yaml is INTENTIONALLY NOT in this resources
+# list. It is a template only — applying it would create a Secret with an
+# empty SHIFTWISE_FERNET_KEY, which crashes the backend at boot because
+# the Pydantic settings validator rejects empty keys. The operator MUST
+# create the Secret out-of-band (see credential-key-secret.yaml header).
+
+# Tag the staging Deployments with the environment label so observability
+# tooling can filter by it. `labels` (not the deprecated `commonLabels`) with
+# includeSelectors:false — mutating the Deployment selector would conflict with
+# the immutable `spec.selector` on the second apply / sync.
+labels:
+  - pairs:
+      app.shiftwise.io/environment: staging
+    includeSelectors: false
+
+# Staging gets its OWN Route host. The base Routes hardcode the production host
+# (shiftwise.apps.migration.nextstep-it.com); without this override, staging
+# would create Routes claiming the SAME host as production and the OpenShift
+# router would reject them (HostAlreadyClaimed). Frontend + backend keep a
+# SHARED host (path-based dispatch /api → backend, / → frontend) so the
+# host-only refresh cookie still works — the staging ConfigMap's
+# BACKEND_CORS_ORIGINS is set to this same host.
+patches:
+  - target:
+      kind: Route
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/host
+        value: shiftwise-staging.apps.migration.nextstep-it.com
+  - target:
+      kind: Route
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/host
+        value: shiftwise-staging.apps.migration.nextstep-it.com
+
+# Image tags — bumped by CI (`kustomize edit set image`) after the release
+# workflow pushes the freshly built `vX.Y.Z` images, then committed to the
+# `develop` branch that the staging Argo CD Application tracks. Argo reconciles
+# the change. The single `shiftwise-backend` image backs backend / flower /
+# db-init / worker (one newTag retags them all); `shiftwise-frontend` backs the
+# SPA. Starts at `latest` so the first sync works before any release tag.
+images:
+  - name: docker.io/dida1609/shiftwise-backend
+    newTag: latest
+  - name: docker.io/dida1609/shiftwise-frontend
+    newTag: latest
+
+# Keep the dev-time KUBERNETES_VERIFY_SSL=False here (self-signed certs).
+# The production overlay flips it to True.

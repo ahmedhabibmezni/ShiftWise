@@ -1,0 +1,130 @@
+# Celery workers — drain the migrations and conversions queues.
+#
+# 3 replicas × concurrency=4 = 12 in-flight tasks. The transit-pvc (RWX, NFS) is
+# mounted so workers can stage hypervisor pulls onto the same volume the
+# in-cluster qemu-img/virt-v2v Jobs read from.
+#
+# Secrets (DB + JWT) come from the existing `shiftwise-secrets` Secret.
+#
+# Image split (G12) — the worker uses `shiftwise-backend-worker`, NOT the slim
+# `shiftwise-backend-api` image. The worker (and the populator/adapter Jobs it
+# spawns at runtime) needs qemu-img + libguestfs-tools + a kernel; the API and
+# Flower pods do not. `Dockerfile.worker` builds FROM the API image and adds
+# only that guest-tooling layer, so the application code stays identical.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: shiftwise
+  labels: {app: celery-worker, component: orchestration}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: celery-worker}
+  template:
+    metadata:
+      labels: {app: celery-worker, component: orchestration}
+    spec:
+      serviceAccountName: shiftwise-worker   # needs RBAC to create K8s Jobs
+      # Anti-affinity (HA) — spread worker replicas across nodes (soft) so a node
+      # drain during an OpenShift upgrade never idles the whole migration queue.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: celery-worker}
+      # securityContext pod-level (G8) — exécution non-root, profil seccomp.
+      # NB : ce pod Celery ne fait qu'orchestrer ; il ne demande PAS
+      # `privileged`. Les pods adapter/populator (libguestfs/virt-customize),
+      # qui eux exigent privileged, sont des Jobs K8s distincts créés au
+      # runtime par le code worker — ils ne sont pas couverts par ce contexte.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          # Image unique ShiftWise — `shiftwise-backend` (cf. note dans
+          # backend-deployment.yaml). Elle inclut qemu-img + libguestfs-tools
+          # + kernel, requis par le pipeline de migration que ce worker pilote.
+          # imagePullPolicy explicite (G14). `:latest` mutable — migrer vers
+          # un tag immuable.
+          image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - celery
+            - -A
+            - app.core.celery_app
+            - worker
+            - --loglevel=info
+            - --queues=migrations,conversions
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --max-tasks-per-child=50
+          envFrom:
+            - secretRef: {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+            # B-1 — clé du vault Fernet (SHIFTWISE_FERNET_KEY, champ Settings
+            # requis sans défaut). Le worker chiffre/déchiffre les credentials
+            # hyperviseur au runtime ; sans cet envFrom le pod crashe au boot.
+            - secretRef: {name: shiftwise-credential-key}
+          env:
+            # CELERY_BROKER_URL / CELERY_RESULT_BACKEND viennent du Secret
+            # (ils embarquent le mot de passe Redis — durcissement G20).
+            - {name: CONVERTER_TRANSIT_ROOT, value: "/mnt/shiftwise-transit"}
+            # Le migrator découvre automatiquement le NFS au runtime à
+            # partir du PV qui backe transit-pvc (cf. transit_discovery.py).
+            # Pour override d'urgence, set MIGRATOR_NFS_SERVER + MIGRATOR_NFS_PATH
+            # via `oc set env` ou décommenter ci-dessous (les DEUX, sinon
+            # warning + fallback auto-discovery).
+            # - {name: MIGRATOR_NFS_SERVER, valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_SERVER}}}
+            # - {name: MIGRATOR_NFS_PATH,   valueFrom: {configMapKeyRef: {name: shiftwise-config, key: NFS_PATH}}}
+          volumeMounts:
+            - {name: transit, mountPath: /mnt/shiftwise-transit}
+            - {name: tmp,     mountPath: /tmp}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits:   {cpu: 1000m, memory: 1Gi}
+          # securityContext conteneur (G8). Le worker n'écrit que sur le
+          # volume transit (RWX) et /tmp (emptyDir) — rootfs en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.core.celery_app
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          # readinessProbe (G19) — le worker ne reçoit du trafic d'aucun
+          # Service, mais la probe gate les rollouts : un worker qui n'a pas
+          # encore enregistré sa file (broker Redis injoignable) n'est pas
+          # compté Ready, donc `oc rollout status` ne valide pas un déploiement
+          # cassé. Même commande que la liveness (Celery ping), cadence plus
+          # serrée.
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.core.celery_app
+                - inspect
+                - ping
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 10
+      volumes:
+        - name: transit
+          persistentVolumeClaim: {claimName: transit-pvc}
+        - name: tmp
+          emptyDir: {}

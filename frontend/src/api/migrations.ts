@@ -1,0 +1,237 @@
+import { api } from "@/lib/axios";
+import type { Paginated } from "@/api/types";
+
+export const MIGRATION_STATUSES = [
+  "pending",
+  "validating",
+  "preparing",
+  "transferring",
+  "configuring",
+  "starting",
+  "verifying",
+  "completed",
+  "failed",
+  "cancelled",
+  "rollback",
+  "rolled_back",
+] as const;
+
+export const MIGRATION_STRATEGIES = [
+  "direct",
+  "conversion",
+  "hybrid",
+  "cold",
+  "warm",
+  "auto",
+] as const;
+
+export type MigrationStatus = (typeof MIGRATION_STATUSES)[number];
+export type MigrationStrategy = (typeof MIGRATION_STRATEGIES)[number];
+
+/** Title-cases a strategy enum value for display (the API stores them lowercase). */
+export function formatStrategy(strategy: MigrationStrategy): string {
+  return strategy.charAt(0).toUpperCase() + strategy.slice(1);
+}
+
+/**
+ * Statuses where the worker is actively progressing the migration.
+ * Mirrors `Migration.is_active` on the backend model.
+ */
+export const ACTIVE_MIGRATION_STATUSES: ReadonlySet<MigrationStatus> = new Set([
+  "pending",
+  "validating",
+  "preparing",
+  "transferring",
+  "configuring",
+  "starting",
+  "verifying",
+]);
+
+export type Migration = {
+  id: number;
+  vm_id: number;
+  status: MigrationStatus;
+  strategy: MigrationStrategy;
+  target_namespace: string;
+  target_storage_class: string;
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_percentage: number;
+  current_step: string | null;
+  current_step_number: number;
+  total_steps: number;
+  success: boolean | null;
+  error_message: string | null;
+  error_code: string | null;
+  migration_config: Record<string, unknown> | null;
+  source_size_gb: number | null;
+  transferred_gb: number;
+  transfer_rate_mbps: number | null;
+  target_vm_name: string | null;
+  target_node: string | null;
+  requires_conversion: boolean;
+  conversion_format: string | null;
+  conversion_started_at: string | null;
+  conversion_completed_at: string | null;
+  pre_migration_checks: Record<string, unknown> | null;
+  post_migration_checks: Record<string, unknown> | null;
+  can_rollback: boolean;
+  tags: Record<string, unknown> | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+  is_completed: boolean;
+  duration_seconds: number;
+  estimated_time_remaining_seconds: number;
+};
+
+export type MigrationListResponse = Paginated<Migration>;
+
+export type ListMigrationsParams = {
+  skip?: number;
+  limit?: number;
+  status?: MigrationStatus;
+  strategy?: MigrationStrategy;
+  vm_id?: number;
+};
+
+export async function listMigrations(
+  params: ListMigrationsParams = {},
+): Promise<MigrationListResponse> {
+  const res = await api.get<MigrationListResponse>("/migrations", { params });
+  return res.data;
+}
+
+export async function getMigration(id: number): Promise<Migration> {
+  const res = await api.get<Migration>(`/migrations/${id}`);
+  return res.data;
+}
+
+export type CreateMigrationPayload = {
+  vm_id: number;
+  strategy: MigrationStrategy;
+  target_storage_class?: string;
+  scheduled_at?: string | null;
+  notes?: string | null;
+};
+
+export async function createMigration(
+  payload: CreateMigrationPayload,
+): Promise<Migration> {
+  const res = await api.post<Migration>("/migrations", payload);
+  return res.data;
+}
+
+export async function startMigration(id: number): Promise<Migration> {
+  const res = await api.post<Migration>(`/migrations/${id}/start`);
+  return res.data;
+}
+
+export async function cancelMigration(
+  id: number,
+  reason?: string,
+): Promise<Migration> {
+  const res = await api.post<Migration>(`/migrations/${id}/cancel`, {
+    reason: reason ?? null,
+  });
+  return res.data;
+}
+
+export async function deleteMigration(id: number): Promise<void> {
+  await api.delete(`/migrations/${id}`);
+}
+
+/* ------------------------------------------------------------------ *
+ * Audit log — US3 / US1
+ * The four canonical event categories from the Q1 clarification.
+ * ------------------------------------------------------------------ */
+
+export const MIGRATION_EVENT_TYPES = [
+  "state_transition",
+  "stage_event",
+  "classified_error",
+  "heartbeat",
+] as const;
+
+export type MigrationEventType = (typeof MIGRATION_EVENT_TYPES)[number];
+
+export type MigrationEventResponse = {
+  id: number;
+  migration_id: number;
+  tenant_id: string;
+  sequence_id: number;
+  event_type: MigrationEventType;
+  from_status: string | null;
+  to_status: string | null;
+  actor_id: number | null;
+  actor_type: string;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type MigrationEventListResponse = {
+  items: MigrationEventResponse[];
+  total: number;
+  next_since_sequence_id: number | null;
+  has_more: boolean;
+};
+
+export type FetchMigrationEventsParams = {
+  sinceSequenceId?: number;
+  eventType?: MigrationEventType;
+  limit?: number;
+  signal?: AbortSignal;
+};
+
+/**
+ * Fetch the migration Reports PDF as a binary blob and trigger a
+ * browser download. Uses the same RBAC as `GET /migrations/stats/summary`.
+ *
+ * The filename is derived from the server-supplied `Content-Disposition`
+ * header; we fall back to a stamped default if the browser cannot parse
+ * the header.
+ */
+export async function downloadReportsPdf(): Promise<void> {
+  const res = await api.get("/reports/export/pdf", {
+    responseType: "blob",
+  });
+  const blob = res.data as Blob;
+  const disposition = res.headers["content-disposition"] as string | undefined;
+  const matched = disposition?.match(/filename="?([^";]+)"?/i);
+  const filename = matched?.[1] ?? `shiftwise-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Fetch a page of audit events for a migration. The caller passes the
+ * previous response's `next_since_sequence_id` as `sinceSequenceId` to
+ * fetch only new events (delta polling).
+ */
+export async function fetchMigrationEvents(
+  migrationId: number,
+  params: FetchMigrationEventsParams = {},
+): Promise<MigrationEventListResponse> {
+  const res = await api.get<MigrationEventListResponse>(
+    `/migrations/${migrationId}/events`,
+    {
+      params: {
+        since_sequence_id: params.sinceSequenceId ?? 0,
+        event_type: params.eventType,
+        limit: params.limit ?? 200,
+      },
+      signal: params.signal,
+    },
+  );
+  return res.data;
+}

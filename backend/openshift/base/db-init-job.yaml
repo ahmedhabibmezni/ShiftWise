@@ -1,0 +1,90 @@
+# Job d'initialisation BDD — exécute alembic upgrade head + seed des rôles
+# système. Idempotent : peut être relancé sans dommage.
+#
+# Pour créer un superuser au premier déploiement, ajoute les vars
+# BOOTSTRAP_SUPERUSER_* au Secret avant d'appliquer ce Job.
+#
+# Lancer :
+#   oc apply -f db-init-job.yaml
+#   oc wait --for=condition=complete job/db-init -n shiftwise --timeout=120s
+#   oc logs job/db-init -n shiftwise
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: shiftwise
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400        # auto-cleanup après 24h
+  template:
+    metadata:
+      labels: {app: db-init, component: bootstrap}
+    spec:
+      restartPolicy: OnFailure
+      # securityContext pod-level (G16) — exécution non-root, profil seccomp.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: wait-for-postgres
+          # Image épinglée par digest (G14 / G26) — cohérent avec
+          # postgresql-deployment.yaml : même tag, même digest, l'init
+          # container ne fait que `pg_isready` en boucle.
+          # postgres:16.14-alpine — digest résolu le 2026-05-18 (cf.
+          # postgresql-deployment.yaml pour la commande de résolution).
+          image: postgres:16.14-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgresql -p 5432 -U "$DATABASE_USER"; do
+                echo "waiting for postgres..."; sleep 2
+              done
+          env:
+            - {name: DATABASE_USER, valueFrom: {secretKeyRef: {name: shiftwise-secrets, key: DATABASE_USER}}}
+          # securityContext conteneur (G16) — pg_isready en boucle, n'écrit
+          # rien sous / : rootfs en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: bootstrap
+          # Image unique ShiftWise — `shiftwise-backend` (cf. note dans
+          # backend-deployment.yaml). bootstrap.py ne fait qu'alembic upgrade +
+          # seed des rôles, mais partage l'image unique réellement publiée.
+          # TODO (G14/G26) : `:latest` est mutable. À épingler sur un tag
+          #   immuable `v<semver>` une fois le push registre activé dans le
+          #   workflow CI. Récupérer le digest après push avec :
+          #     docker buildx imagetools inspect docker.io/dida1609/shiftwise-backend:v<semver>
+          #   puis remplacer par  ...:v<semver>@sha256:<digest>
+          image: docker.io/dida1609/shiftwise-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: [python, bootstrap.py]
+          envFrom:
+            - secretRef:    {name: shiftwise-secrets}
+            - configMapRef: {name: shiftwise-config}
+            # B-1 — bootstrap.py importe app.core.config, qui instancie
+            # Settings() au niveau module. SHIFTWISE_FERNET_KEY étant requis
+            # sans défaut, le Job db-init crashe au boot sans cet envFrom.
+            - secretRef:    {name: shiftwise-credential-key}
+          env:
+            - {name: DATABASE_HOST, value: postgresql}
+          # securityContext conteneur (G16). alembic + seed n'écrivent rien
+          # sous / ; /tmp fourni par un emptyDir — rootfs en lecture seule.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
