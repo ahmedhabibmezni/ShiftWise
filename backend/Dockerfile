@@ -96,7 +96,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 #   - ca-certificates, curl : healthchecks + appels HTTPS sortants
 #   PAS de qemu-utils / libguestfs-tools / linux-image-amd64 ici — ce sont des
 #   dépendances du pipeline de migration, ajoutées par Dockerfile.worker.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade` patches the pinned base image's OS packages with the
+# latest Debian security updates (e.g. libssl3t64 CVE-2026-45447 heap-UAF in
+# PKCS7_verify, libcap2 CVE-2026-4878 TOCTOU priv-esc) — the digest pin keeps
+# the build reproducible while the upgrade keeps it free of fixable OS CVEs the
+# CD Trivy gate (HIGH/CRITICAL, ignore-unfixed) would otherwise block on.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
         libpq5 libvirt0 libxml2 libcurl4 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 

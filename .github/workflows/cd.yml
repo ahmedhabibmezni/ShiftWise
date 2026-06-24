@@ -154,6 +154,8 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          # Documented allow-list (urllib3 2.x deferral) — see .trivyignore.
+          trivyignores: .trivyignore
 
       - name: Scan frontend image (Trivy)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -163,6 +165,8 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          # Documented allow-list (urllib3 2.x deferral) — see .trivyignore.
+          trivyignores: .trivyignore
 
       # SBOM (CycloneDX) per image — the supply-chain inventory. Uploaded as a
       # build artifact (90-day retention) so a CVE disclosed later can be matched
