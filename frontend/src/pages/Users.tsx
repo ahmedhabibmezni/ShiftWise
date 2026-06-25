@@ -297,7 +297,7 @@ function UsersTable({
   }
 
   return (
-    <Table className="px-2">
+    <Table className="px-2" aria-label="Users">
       <THead>
         <TR>
           <TH>Username</TH>

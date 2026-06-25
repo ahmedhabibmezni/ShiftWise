@@ -31,7 +31,7 @@ export function PerTenantPanel({
       title="Outcomes by Tenant"
       bodyClassName="px-0"
     >
-      <Table className="px-2" data-testid="per-tenant-table">
+      <Table className="px-2" data-testid="per-tenant-table" aria-label="Migrations by tenant">
         <THead>
           <TR>
             <TH>Tenant</TH>

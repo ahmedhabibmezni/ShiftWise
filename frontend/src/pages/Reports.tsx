@@ -329,7 +329,7 @@ function HistoryTable({
   }
 
   return (
-    <Table className="px-2">
+    <Table className="px-2" aria-label="Recent migrations">
       <THead>
         <TR>
           <TH>#</TH>

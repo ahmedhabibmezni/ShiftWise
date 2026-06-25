@@ -416,7 +416,7 @@ function HypervisorsCard({
           No hypervisors registered yet.
         </div>
       ) : (
-        <Table className="mt-4">
+        <Table className="mt-4" aria-label="Hypervisors">
           <THead>
             <TR>
               <TH>Source</TH>
