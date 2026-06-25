@@ -106,3 +106,4 @@ docs/
 # Converter worker scratch zone (large staged qcow2 disks — never commit)
 backend/.shiftwise-scratch/
 .shiftwise-scratch/
+.gstack/
