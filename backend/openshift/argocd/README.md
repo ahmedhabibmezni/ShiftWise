@@ -6,12 +6,17 @@ API — which is the point: `api.migration.nextstep-it.com:6443` is on a private
 on-prem network behind a slow VPN, unreachable from GitHub-hosted runners.
 
 ```
-push vX.Y.Z ─► release.yml ─► build+push images ─► kustomize edit set image
-                                                          │ (commit to develop)
-                                                          ▼
-                                              Argo CD (in-cluster) ── sync ──► staging
-                                              (production: manual promotion via PR to main)
+push develop ─► ci.yml ─► cd.yml ─► build+scan+push images ─► kustomize edit set image
+push main    ─► ci.yml ─► cd.yml ─►                              │ (commit to same branch)
+                                                                 ▼
+                                              Argo CD (in-cluster, auto-sync) ──► develop → shiftwise-staging
+                                                                                  main    → shiftwise (production)
 ```
+
+> **State (2026-06-24): live.** Both Applications have automated sync enabled and
+> are reconciling from git. `release.yml` (`v*` tags) still mints immutable
+> `vX.Y.Z` images for archival / pinned rollback, but the day-to-day deploy path
+> is the push-based `cd.yml` above (see `../CICD-RUNBOOK.md`).
 
 ## One-time setup
 
@@ -76,25 +81,26 @@ oc apply -f application-staging.yaml
 oc apply -f application-production.yaml
 ```
 
-Staging auto-syncs from `develop`. Production stays OutOfSync until promoted.
+Staging auto-syncs from `develop`; production auto-syncs from `main`.
 
 ## Day-2
 
 | Action | How |
 | ------ | --- |
-| Deploy to staging | Push a `vX.Y.Z` tag → release.yml bumps the staging overlay tag on `develop` → Argo auto-syncs. |
-| Promote to production | PR to `main` bumping `overlays/production` image tags → merge → `argocd app sync shiftwise-production` (or click Sync). |
+| Deploy to staging | Push/merge to `develop` → CI → CD bumps `overlays/staging` → Argo auto-syncs `shiftwise-staging`. |
+| Promote to production | PR `develop` → `main`, merge → CI → CD bumps `overlays/production` → Argo auto-syncs `shiftwise`. |
 | Inspect / diff | `argocd app get shiftwise-production` · `argocd app diff shiftwise-production`. |
-| Rollback | `argocd app rollback shiftwise-production <history-id>`, or revert the git commit. |
+| Rollback | `git revert` the `chore(deploy):` bump commit (→ CI → CD reapplies the previous `sha-`), or `argocd app rollback shiftwise-production <history-id>`. |
 
 ## Notes / known gaps
 
 - The runtime Job image refs (`CONVERTER_CONTAINER_IMAGE`, `ADAPTER_IMAGE`,
-  `MIGRATOR_POPULATOR_IMAGE` in the `shiftwise-config` ConfigMap) are plain
-  config strings, **not** kustomize image fields, so `kustomize edit set image`
-  does **not** retag them — they track whatever the ConfigMap says (currently
-  `:latest`). For fully-pinned releases, bump those three values in the overlay
-  too (a `configMapGenerator` patch or a JSON6902 patch on the ConfigMap).
+  `MIGRATOR_POPULATOR_IMAGE` in the `shiftwise-config` ConfigMap) point at the
+  `shiftwise-backend-worker` image (built by `cd.yml` alongside the API/frontend
+  images). They are plain config strings, **not** kustomize image fields, so
+  `kustomize edit set image` does **not** retag them — they track whatever the
+  ConfigMap says. For fully-pinned releases, bump those three values in the
+  overlay too (a `configMapGenerator` patch or a JSON6902 patch on the ConfigMap).
 - `db-init` is a `Job` (immutable spec). Re-syncing an unchanged Job is a no-op,
   but a changed Job spec needs `Replace=true` or a manual delete — Argo flags it
   as SyncFailed otherwise. Keep db-init idempotent (it is) and delete it before

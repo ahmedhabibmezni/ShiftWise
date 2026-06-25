@@ -13,6 +13,9 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 ### ✨ Added
 
+- **Live production deployment** — ShiftWise is deployed and reachable on the OpenShift cluster at `https://shiftwise.apps.migration.nextstep-it.com` (shared host: `/` → frontend, `/api` → backend). Admin login verified end-to-end; `GET /health` `healthy`. Access requires the on-prem VPN plus a hosts entry (or VPN DNS) resolving `*.apps.migration.nextstep-it.com` → the bastion router `10.9.21.150`.
+- **GitOps CI/CD pipeline (activated)** — a `git push` now builds, scans, and ships the whole stack to the cluster with no cluster credentials in CI. `cd.yml` (gated on a green `ci.yml`) builds the single backend image **and** the fat worker image, Trivy-scans them (fails the deploy on a fixable HIGH/CRITICAL CVE), emits a CycloneDX SBOM per image, pushes immutable `sha-<commit>` tags to Docker Hub, then bumps the matching kustomize overlay (`develop` → staging, `main` → production) and commits. Argo CD (in-cluster, automated sync enabled on both Applications) reconciles the change. `release.yml` mints immutable `vX.Y.Z` images on a tag. See `backend/openshift/CICD-RUNBOOK.md`.
+- **Migration tooling worker image** — `cd.yml` builds `shiftwise-backend-worker:sha-<commit>` from `backend/Dockerfile.worker` (`FROM` the API image + `qemu-utils`, `libguestfs-tools`, `linux-image-amd64`). The converter / adapter / populator Kubernetes Jobs point at it (`CONVERTER_CONTAINER_IMAGE` / `ADAPTER_IMAGE` / `MIGRATOR_POPULATOR_IMAGE`) with `imagePullPolicy: Always` so each deploy picks up the rolling tag.
 - **Discovery Service** — real VM discovery connectors: VMware Workstation (`vmrun` + VMX scan), vSphere/ESXi (`pyVmomi` `SmartConnect`), Hyper-V (PowerShell over SSH), libvirt/KVM (paramiko SSH + `virsh`), Proxmox VE (REST API), oVirt/RHV (engine SDK), and physical Linux (P2V) over SSH.
 - **Physical server (P2V) source** — migrate a bare-metal Linux host (no hypervisor, no disk image) to OpenShift Virtualization. New `HypervisorType.PHYSICAL` (migration `d1f8274d5e22`); SSH discovery collecting host facts + an `lsblk` block-device plan; a `PhysicalPuller` converter connector that captures each device as a `dd | gzip` raw stream over SSH; an adapter branch that regenerates the guest initramfs with virtio drivers (a bare-metal initramfs has none and would panic on KubeVirt's virtio bus).
 - **Real vSphere/ESXi connector** — replaced the previous fake-data vSphere stub with a `pyVmomi` `SmartConnect` implementation working against standalone ESXi (discovery + test-connection + disk conversion; `VMWARE_ESXi` routed through the same connector).
@@ -39,6 +42,8 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 - Brute-force protection on `/auth/login` — sliding-window throttle, per email and per source IP.
 - **Cluster credential encryption** — uploaded kubeconfig contents and custom bearer tokens (feature 002) are Fernet-encrypted at rest via the existing credential vault; read schemas are secret-free (`has_credentials: bool`). Custom `api_url` and kubeconfig `cluster.server` URLs are SSRF-validated, and every config change is recorded in the append-only `cluster_config_events` audit table.
+- **Scan-on-deploy** — Trivy gates `cd.yml`, failing the deploy on a fixable HIGH/CRITICAL CVE *before* the image is pushed (`ignore-unfixed: true`, mirroring the pip-audit policy). A CycloneDX SBOM is retained per image. Base-image CVEs were cleared (`apt-get upgrade` in the backend runtime stage, `apk upgrade` in the frontend image); a documented `.trivyignore` defers only build-tooling / unpatchable-upstream advisories (urllib3 pinned `<2.0` by `kubernetes==28.1.0`, `wheel`, `jaraco.context`).
+- **Least-privilege API ServiceAccount in-cluster** — added the bounded `shiftwise-api-cluster` ClusterRole/binding for the `shiftwise-api` SA: read on `namespaces` / `nodes` / `storageclasses` and manage on KubeVirt `virtualmachines` (+ read `virtualmachineinstances`). No `*` verbs; no access to Secrets, ConfigMaps, RBAC objects, or Deployments.
 
 ### 🐛 Fixed
 
@@ -50,6 +55,8 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 - **Adapter `guestfs_launch failed`** — the libguestfs appliance could not start on the nodes; the fixup now forces the TCG software-emulation backend, requires a privileged pod, and makes the staged qcow2 writable for the arbitrary OpenShift UID.
 - **Fresh-database initialization failed on PostgreSQL** — boolean columns (`roles.is_system_role`/`is_active`, `users.is_active`/`is_verified`/`is_superuser`) carried an integer `server_default` (`text("0"|"1")`), rendering `BOOLEAN DEFAULT 0` — accepted by SQLite but rejected by PostgreSQL (`DatatypeMismatch`). This broke `Base.metadata.create_all()` and therefore `bootstrap.py` / the `db-init` Job on a brand-new database. Now uses dialect-correct `false()` / `true()`; covered by a PostgreSQL-dialect DDL guard test.
 - **Infrastructure page (feature 002 UI)** — the cluster health badge rendered no reason (a `degraded` / `unreachable` / `auth_failed` verdict gave no diagnostic), and the scope editor had no error state (a 403/5xx rendered a blank panel) and used a bare text loader. Now shows `health_reason` with a tooltip, an error callout on load failure, and a skeleton loader — consistent with the rest of the SPA.
+- **In-cluster connection test returned HTTP 403** — the Infrastructure "Test connection" probe (`list_namespace()` + `list_node()`) and the KubeVirt VM-dashboard endpoints failed for the `incluster` platform-default scope because the `shiftwise-api` SA only had a namespaced Role. Granting the `shiftwise-api-cluster` ClusterRole clears the 403 (the worker SA already had its own ClusterRole, so migrations themselves were unaffected).
+- **Deployed-stack manifest fixes** — the HostNetwork OpenShift Router was blocked by the default-deny `NetworkPolicy` (Route returned 503 on new pods): added the `policy-group.network.openshift.io/host-network` namespace selector to the backend/frontend ingress allow rules. Also: Flower crash-looped without the `shiftwise-credential-key` `envFrom` (added); Redis hit `CreateContainerConfigError` on missing `REDIS_*`/`CELERY_*` secret keys; and the production overlay was right-sized (HPA `minReplicas:1`/`maxReplicas:2`, frontend 1 replica, lower CPU requests) to fit the cluster's reserved capacity.
 
 ### 🧪 Dev / Demo
 
@@ -57,10 +64,9 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 ### 🚧 In Development
 
-- **Frontend SPA** — remaining integration and polish work.
-- **Reporting** — dedicated migration-events audit-log table and PDF export.
-- **Windows guest support** — `virt-v2v --in-place` path in the Adapter for Windows guests.
-- **CI/CD pipeline** — GitHub Actions (lint, pytest, SonarQube, container image build/push).
+- **Frontend SPA** — remaining integration and polish work against the live backend.
+- **Windows guest support** — `virt-v2v --in-place` path in the Adapter for Windows guests (code wired + unit-tested; the worker image ships virtio-win behind an opt-in, license-gated `INSTALL_VIRTIO_WIN` build arg — a live Windows-source run is pending).
+- **First production migration** — the deployed in-cluster worker can only migrate sources the cluster can route to; the nested-lab hypervisors (`172.16.100.x` / `192.168.20.x`) are laptop-only and remain on the local stack + dev SFTP bridge. A live run from the deployed app awaits a cluster-reachable vCenter.
 
 ---
 
