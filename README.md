@@ -395,7 +395,7 @@ curl http://localhost:8000/health
 | **Live Deployment** | ✅ Running | `https://shiftwise.apps.migration.nextstep-it.com` (VPN-only; shared host `/` frontend + `/api` backend) |
 | **Reporting** | ✅ Complete | Append-only `migration_events` audit log, migration-timeline drawer, per-tenant/hypervisor stats, PDF + CSV export |
 | **Test Suite** | ✅ Complete | ~85% coverage across the backend test suite |
-| **Frontend** | 🚧 In Progress | React 19 SPA — core pages built (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, infrastructure); remaining work is integration polish against the live backend |
+| **Frontend** | 🚧 In Progress | React 19 SPA — core pages built (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, infrastructure); accessibility hardened (table header `scope` + names, focus-trapped drawers, labelled icon buttons, global focus rings + reduced-motion); remaining work is integration polish against the live backend |
 
 ---
 
