@@ -64,6 +64,6 @@ patches:
 # SPA. Starts at `latest` so the first sync works before any release tag.
 images:
 - name: docker.io/dida1609/shiftwise-backend
-  newTag: sha-ae0aa36
+  newTag: sha-f99ca20
 - name: docker.io/dida1609/shiftwise-frontend
-  newTag: sha-ae0aa36
+  newTag: sha-f99ca20
