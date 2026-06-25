@@ -65,7 +65,7 @@ Work completed on the development branch since v1.0.0 — not yet part of a tagg
 
 ### 🚧 In Development
 
-- **Frontend SPA** — accessibility hardening (table semantics, focus-trapped drawers, type-enforced icon-button labels) and the offline-verifiable UI surface are in place; remaining work is integration polish against the live backend.
+- **Frontend SPA** — all pages built and **live-verified against a running backend** (real auth + data, 0 console errors, no overflow at 375px/1440px, focus-trapped drawers); accessibility hardened (table semantics, focus management, type-enforced icon-button labels). Only cluster-execution flows (running a migration end-to-end, the Infrastructure connection test) await live cluster access.
 - **Windows guest support** — `virt-v2v --in-place` path in the Adapter for Windows guests (code wired + unit-tested; the worker image ships virtio-win behind an opt-in, license-gated `INSTALL_VIRTIO_WIN` build arg — a live Windows-source run is pending).
 - **First production migration** — the deployed in-cluster worker can only migrate sources the cluster can route to; the nested-lab hypervisors (`172.16.100.x` / `192.168.20.x`) are laptop-only and remain on the local stack + dev SFTP bridge. A live run from the deployed app awaits a cluster-reachable vCenter.
 
