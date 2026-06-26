@@ -390,10 +390,12 @@ curl http://localhost:8000/health
 | **Adapter** | ✅ Complete | Guest-OS fixup (multi-stack DHCP, serial console, SELinux relabel, P2V virtio-initramfs) via libguestfs |
 | **Migrator** | ✅ Complete | PVC populate (NFS-direct qemu-img Job) + KubeVirt VM create/start/verify |
 | **Celery Orchestration** | ✅ Complete | Redis-backed asynchronous migration pipeline |
-| **OpenShift Deployment** | ✅ Complete | One-command deploy (`backend/openshift/deploy.sh`) |
+| **OpenShift Deployment** | ✅ Complete | One-command deploy (`backend/openshift/deploy.sh`) + GitOps overlays (Argo CD) |
+| **CI/CD Pipeline** | ✅ Complete | GitHub Actions → Trivy scan → SBOM → immutable `sha-` images → kustomize overlay bump → Argo CD auto-sync (pull-based, no cluster creds in CI) |
+| **Live Deployment** | ✅ Running | `https://shiftwise.apps.migration.nextstep-it.com` (VPN-only; shared host `/` frontend + `/api` backend) |
+| **Reporting** | ✅ Complete | Append-only `migration_events` audit log, migration-timeline drawer, per-tenant/hypervisor stats, PDF + CSV export |
 | **Test Suite** | ✅ Complete | ~85% coverage across the backend test suite |
-| **Frontend** | 🚧 In Progress | React 19 SPA — core pages built (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, infrastructure) |
-| **Reporting** | 🚧 In Progress | Stats endpoints + migration-history page with CSV export; dedicated audit-log table pending |
+| **Frontend** | 🚧 In Progress | React 19 SPA — all pages built and live-verified against a running backend (login, dashboard, hypervisors, VMs, migrations, reports, users, roles, settings, infrastructure): real auth/data, 0 console errors, no overflow at 375px/1440px; accessibility hardened (table header `scope` + names, focus-trapped drawers, labelled icon buttons, global focus rings + reduced-motion). Only cluster-execution flows (running a migration end-to-end, the Infrastructure connection test) await live cluster access |
 
 ---
 
@@ -481,6 +483,24 @@ Superusers bypass all permission checks. Every non-superuser request is scoped t
 
 📖 Full infrastructure documentation: [`infrastructure/README.md`](infrastructure/README.md)
 
+### Live Deployment & CI/CD
+
+ShiftWise runs on the cluster at **`https://shiftwise.apps.migration.nextstep-it.com`** (reachable over the on-prem VPN; a single shared host routes `/` → frontend and `/api` → backend).
+
+Delivery is **pull-based GitOps** — no cluster credentials ever live in CI:
+
+```
+push (develop|main) ─► CI (ruff, pytest, frontend typecheck/vitest)
+        └─success─► CD: build backend + worker images ─► Trivy scan (fail HIGH/CRITICAL)
+                    ─► SBOM ─► push immutable sha-<commit> ─► kustomize overlay bump ─► commit
+                                                                        │ (egress only)
+                                                                        ▼
+                                              Argo CD (in-cluster) ── auto-sync ──► namespace
+                                                  develop → shiftwise-staging · main → shiftwise (prod)
+```
+
+A single backend image serves API / worker / Flower; a fat **worker image** (`Dockerfile.worker` + `qemu-utils` + `libguestfs-tools` + `linux-image-amd64`) backs the converter / adapter / populator Jobs. Full runbook: [`backend/openshift/CICD-RUNBOOK.md`](backend/openshift/CICD-RUNBOOK.md).
+
 ---
 
 ## 🔒 Security
@@ -494,6 +514,8 @@ Superusers bypass all permission checks. Every non-superuser request is scoped t
 - **CORS:** Explicit origin / method / header allowlists (no wildcards), `allow_credentials=True`
 - **Kubernetes Auth:** Supports `kubeconfig`, `incluster` ServiceAccount, and `custom` token modes
 - **Cluster Connection Config:** Per-tenant cluster connectivity is DB-backed; uploaded kubeconfigs and custom bearer tokens are Fernet-encrypted at rest (read schemas are secret-free), SSRF-guarded on custom `api_url`/`cluster.server`, and changes are recorded in an append-only `cluster_config_events` audit table
+- **Supply chain:** every CI/CD image is Trivy-scanned (deploy fails on a fixable HIGH/CRITICAL CVE) with a CycloneDX SBOM per image; deploys are immutable `sha-<commit>` digests pinned in git, GitHub Actions are SHA-pinned, and CI holds default `contents: read`
+- **In-cluster RBAC:** the worker and API ServiceAccounts have bounded ClusterRoles (explicit resource kinds + verbs, no `*`); neither can read Secrets, ConfigMaps, or RBAC objects
 
 📖 Security policy: [`SECURITY.md`](SECURITY.md)
 

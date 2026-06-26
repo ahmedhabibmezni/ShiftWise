@@ -18,7 +18,7 @@ namespace: shiftwise-staging
 # Canonical base/overlays layout (B-3) — base is a sibling directory, not
 # an ancestor (kustomize v5 rejects an ancestor base with "cycle detected").
 resources:
-  - ../../base
+- ../../base
 # NOTE: credential-key-secret.yaml is INTENTIONALLY NOT in this resources
 # list. It is a template only — applying it would create a Secret with an
 # empty SHIFTWISE_FERNET_KEY, which crashes the backend at boot because
@@ -30,9 +30,8 @@ resources:
 # includeSelectors:false — mutating the Deployment selector would conflict with
 # the immutable `spec.selector` on the second apply / sync.
 labels:
-  - pairs:
-      app.shiftwise.io/environment: staging
-    includeSelectors: false
+- pairs:
+    app.shiftwise.io/environment: staging
 
 # Staging gets its OWN Route host. The base Routes hardcode the production host
 # (shiftwise.apps.migration.nextstep-it.com); without this override, staging
@@ -42,20 +41,20 @@ labels:
 # host-only refresh cookie still works — the staging ConfigMap's
 # BACKEND_CORS_ORIGINS is set to this same host.
 patches:
-  - target:
-      kind: Route
-      name: backend
-    patch: |-
-      - op: replace
-        path: /spec/host
-        value: shiftwise-staging.apps.migration.nextstep-it.com
-  - target:
-      kind: Route
-      name: frontend
-    patch: |-
-      - op: replace
-        path: /spec/host
-        value: shiftwise-staging.apps.migration.nextstep-it.com
+- patch: |-
+    - op: replace
+      path: /spec/host
+      value: shiftwise-staging.apps.migration.nextstep-it.com
+  target:
+    kind: Route
+    name: backend
+- patch: |-
+    - op: replace
+      path: /spec/host
+      value: shiftwise-staging.apps.migration.nextstep-it.com
+  target:
+    kind: Route
+    name: frontend
 
 # Image tags — bumped by CI (`kustomize edit set image`) after the release
 # workflow pushes the freshly built `vX.Y.Z` images, then committed to the
@@ -64,10 +63,7 @@ patches:
 # db-init / worker (one newTag retags them all); `shiftwise-frontend` backs the
 # SPA. Starts at `latest` so the first sync works before any release tag.
 images:
-  - name: docker.io/dida1609/shiftwise-backend
-    newTag: latest
-  - name: docker.io/dida1609/shiftwise-frontend
-    newTag: latest
-
-# Keep the dev-time KUBERNETES_VERIFY_SSL=False here (self-signed certs).
-# The production overlay flips it to True.
+- name: docker.io/dida1609/shiftwise-backend
+  newTag: sha-9f22848
+- name: docker.io/dida1609/shiftwise-frontend
+  newTag: sha-9f22848

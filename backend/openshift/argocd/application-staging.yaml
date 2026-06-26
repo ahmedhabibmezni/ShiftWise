@@ -54,3 +54,16 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/replicas
+    # The migrator's `ensure_populator_scc` appends a per-tenant populator SA
+    # (`system:serviceaccount:shiftwise-<tenant>:shiftwise-populator`) to the
+    # SCC `users` list at runtime, on every migration into a fresh tenant
+    # namespace. With selfHeal on (this App), Argo would otherwise REVERT that
+    # addition — stripping the tenant SA mid-migration and breaking the
+    # populator pod's SCC admission. Ignore `users`/`groups` so the autoscaler
+    # of tenants and GitOps coexist (mirrors the production App).
+    - group: security.openshift.io
+      kind: SecurityContextConstraints
+      name: shiftwise-populator
+      jsonPointers:
+        - /users
+        - /groups

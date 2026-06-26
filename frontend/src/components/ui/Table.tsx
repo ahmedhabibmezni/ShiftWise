@@ -53,9 +53,10 @@ export function TR({
 }
 
 type ThProps = ThHTMLAttributes<HTMLTableCellElement> & { numeric?: boolean };
-export function TH({ numeric, className, children, ...rest }: ThProps) {
+export function TH({ numeric, className, children, scope = "col", ...rest }: ThProps) {
   return (
     <th
+      scope={scope}
       className={cn(
         "px-3 py-3 uppercase text-[10px] font-bold tracking-[0.04em] text-[var(--text-muted)]",
         "border-b border-[var(--hairline)]",

@@ -281,6 +281,16 @@ jobs:
           git --no-pager diff -- "backend/openshift/overlays/${{ steps.target.outputs.overlay }}/kustomization.yaml"
 
       - name: Commit and push overlay bump
+        env:
+          # Admin-owned fine-grained PAT (contents:write). Branch protection on
+          # main/develop requires PR + CI, which would reject this automated
+          # bump; the default GITHUB_TOKEN (github-actions[bot]) cannot be a
+          # ruleset bypass actor on a personal repo. Pushing with an admin PAT
+          # makes the push actor a repository admin, who IS in the ruleset
+          # bypass list — so the bump lands directly while human pushes stay
+          # gated. If the secret is unset (e.g. branches not yet protected),
+          # fall back to the GITHUB_TOKEN remote.
+          CD_PUSH_TOKEN: ${{ secrets.CD_PUSH_TOKEN }}
         run: |
           set -euo pipefail
           OVERLAY_FILE="backend/openshift/overlays/${{ steps.target.outputs.overlay }}/kustomization.yaml"
@@ -294,9 +304,12 @@ jobs:
           # The `chore(deploy):` prefix is load-bearing — the CD `if:` excludes
           # it so this commit's own CI run does not re-trigger a deploy.
           git commit -m "chore(deploy): ${{ steps.target.outputs.env }} image sha-${{ steps.tag.outputs.short }}"
-          # If the branch is protected and rejects direct pushes, switch to a
-          # PR-based bump (see CICD-RUNBOOK.md).
-          git push origin "${{ steps.target.outputs.branch }}"
+          if [ -n "${CD_PUSH_TOKEN:-}" ]; then
+            git push "https://x-access-token:${CD_PUSH_TOKEN}@github.com/${{ github.repository }}.git" \
+              "HEAD:${{ steps.target.outputs.branch }}"
+          else
+            git push origin "${{ steps.target.outputs.branch }}"
+          fi
 
       - name: Summary
         run: |

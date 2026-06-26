@@ -7,6 +7,12 @@ This is the single source of truth tying together `ci.yml`, `cd.yml`,
 live in [`argocd/README.md`](argocd/README.md) and
 [`buildconfigs/README.md`](buildconfigs/README.md).
 
+> **Status (2026-06-24): LIVE.** The pipeline is activated end-to-end — `cd.yml`
+> is on `main`, Argo CD runs in-cluster with automated sync on both Applications,
+> and production is serving at `https://shiftwise.apps.migration.nextstep-it.com`
+> (VPN-only; shared host `/` → frontend, `/api` → backend). CD now builds the
+> migration **worker image** in addition to the backend/frontend images.
+
 ---
 
 ## 1. Architecture — why pull-based GitOps
@@ -24,10 +30,10 @@ never runs `oc apply`. Instead:
 ```
  push develop ─► ci.yml (tests) ─success─► cd.yml ─┐
  push main    ─► ci.yml (tests) ─success─► cd.yml ─┤
-                                                   ├─ build (single-image scheme)
+                                                   ├─ build backend + worker + frontend
                                                    ├─ Trivy scan  (fail HIGH/CRITICAL)
                                                    ├─ SBOM (CycloneDX, per image)
-                                                   ├─ push  shiftwise-{backend,frontend}:sha-XXXXXXX
+                                                   ├─ push  shiftwise-{backend,backend-worker,frontend}:sha-XXXXXXX
                                                    ├─ kustomize set image → overlays/{staging|production}
                                                    └─ commit "chore(deploy): …" → {develop|main}
                                                          │
@@ -37,13 +43,17 @@ never runs `oc apply`. Instead:
                                                   main    → shiftwise (production)
 ```
 
-**Image scheme (single image, per CLAUDE.md).** One `docker.io/dida1609/shiftwise-backend`
-image backs backend / celery-worker / flower / db-init; `shiftwise-frontend` is
-the SPA. The historical `-api` / `-worker` split was never published — do not
-reintroduce it. Images are tagged with the immutable `sha-<7charSHA>` of the
-commit they were built from (plus a rolling `<branch>` tag for humans). Overlays
-are pinned to the `sha-` tag, so every deploy is deterministic and rollback is a
-git revert.
+**Image scheme.** `docker.io/dida1609/shiftwise-backend` backs backend /
+celery-worker / flower / db-init; `shiftwise-frontend` is the SPA. A third image,
+`shiftwise-backend-worker` (built from `backend/Dockerfile.worker` — `FROM` the
+backend image + `qemu-utils` + `libguestfs-tools` + `linux-image-amd64`), backs
+the converter / adapter / populator **Kubernetes Jobs** that need the migration
+tooling. The migration Job image refs (`CONVERTER_CONTAINER_IMAGE`,
+`ADAPTER_IMAGE`, `MIGRATOR_POPULATOR_IMAGE`) point at it with
+`imagePullPolicy: Always`. Images are tagged with the immutable `sha-<7charSHA>`
+of the commit they were built from (plus a rolling `<branch>` tag for humans).
+Overlays are pinned to the `sha-` tag, so every deploy is deterministic and
+rollback is a git revert.
 
 ---
 
@@ -63,11 +73,11 @@ git revert.
 deploy. Without this guard, sha-tagged images would loop forever (each bump is a
 new commit → new sha → new image → new bump).
 
-> ### ⚠️ One-time bootstrap: `cd.yml` must reach the default branch first
+> ### ✅ One-time bootstrap (done): `cd.yml` reached the default branch
 > GitHub only fires a `workflow_run` from the workflow file present on the
-> repository's **default branch** (`main`). Until `cd.yml` is merged to `main`,
-> **no CD runs for any branch — including develop.** Merge `cd.yml` to `main`
-> once to activate the whole pipeline.
+> repository's **default branch** (`main`). `cd.yml` is now on `main`, so CD is
+> active for both `develop` (→ staging) and `main` (→ production). If you ever
+> re-init the repo or rename the default branch, re-merge `cd.yml` to it.
 
 ---
 
@@ -250,3 +260,8 @@ delete (mirrors `deploy.sh`). Keep it idempotent (it is).
 | HPA `<unknown>` targets | metrics-server / cluster monitoring not exposing pod CPU; the Deployment must declare CPU `requests` (it does). |
 | CD loops, re-deploying itself | The `chore(deploy):` guard was altered — CD must exclude its own bump commits. |
 | Argo shows replicas OutOfSync | Confirm `ignoreDifferences` on `/spec/replicas` is present in the Application (HPA owns it). |
+| Route returns 503 on a fresh rollout | The HostNetwork OpenShift Router is blocked by the default-deny `NetworkPolicy`. The backend/frontend ingress allow rules must carry the `policy-group.network.openshift.io/host-network` namespace selector (`network-policy.yaml`). |
+| Infrastructure "Test connection" → HTTP 403 (incluster) | The `shiftwise-api` SA lacks the cluster-scoped grant. Apply the `shiftwise-api-cluster` ClusterRole/binding (`backend-deployment.yaml`). RBAC is server-side per request — no pod restart needed. |
+| Flower `CrashLoopBackOff` at boot | Missing `shiftwise-credential-key` `envFrom` — Flower imports `Settings()` which requires `SHIFTWISE_FERNET_KEY`. |
+| Postgres/Redis `Pending` (Insufficient cpu) | Nodes near reserved capacity — the production overlay right-sizes CPU requests + caps HPA (`minReplicas:1`/`maxReplicas:2`, frontend 1). |
+| Migration Job `ErrImagePull` on `-worker` | The worker image tag in the Job image refs doesn't exist — confirm CD pushed `shiftwise-backend-worker:sha-<commit>` and the ConfigMap/overlay points at a real tag. |

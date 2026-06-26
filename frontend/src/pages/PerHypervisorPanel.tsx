@@ -32,7 +32,7 @@ export function PerHypervisorPanel({
           hint="Migrations will appear here grouped by their source hypervisor."
         />
       ) : (
-        <Table className="px-2" data-testid="per-hypervisor-table">
+        <Table className="px-2" data-testid="per-hypervisor-table" aria-label="Migrations by hypervisor">
           <THead>
             <TR>
               <TH>Hypervisor</TH>

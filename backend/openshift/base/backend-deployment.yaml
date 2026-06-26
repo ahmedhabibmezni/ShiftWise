@@ -49,6 +49,62 @@ roleRef:
   name: api-reader
   apiGroup: rbac.authorization.k8s.io
 ---
+# Cluster-scoped grant for the API (in-cluster mode).
+#
+# In `incluster` mode the API authenticates to the kube-apiserver with the
+# `shiftwise-api` SA token. Two API surfaces need cluster-wide reach the
+# namespaced `api-reader` Role above cannot give:
+#
+#   1. Infrastructure connection-test probe (services/cluster/resolver.py):
+#      list_namespace() + list_node() — without these the "Test connection"
+#      button on the platform-default scope returns HTTP 403.
+#   2. KubeVirt management endpoints (api/v1/kubevirt.py): list/get/create/
+#      start/stop/delete VirtualMachines, list VMIs, list StorageClasses —
+#      the VM dashboard and per-VM controls. start/stop use
+#      replace_namespaced_custom_object (update verb), create/delete map to
+#      the matching verbs.
+#
+# Scope is bounded: explicit resource kinds + verbs, no `*`. The API never
+# writes Secrets, ConfigMaps, Deployments, RBAC objects, or Nodes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shiftwise-api-cluster
+rules:
+  # Connection-test probe + namespace info.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # Connection-test probe node count (read-only).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # StorageClass lookup (dashboard + namespace info).
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+  # KubeVirt VM management surfaced by api/v1/kubevirt.py.
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachines/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # VirtualMachineInstance read-only (status + listing).
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances", "virtualmachineinstances/status"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shiftwise-api-cluster
+subjects:
+  - kind: ServiceAccount
+    name: shiftwise-api
+    namespace: shiftwise
+roleRef:
+  kind: ClusterRole
+  name: shiftwise-api-cluster
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -390,7 +390,7 @@ function VmTable({
   }
 
   return (
-    <Table className="px-2">
+    <Table className="px-2" aria-label="Virtual machines">
       <THead>
         <TR>
           <TH>Name</TH>

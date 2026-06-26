@@ -514,7 +514,7 @@ function MigrationTable({
   }
 
   return (
-    <Table className="px-2">
+    <Table className="px-2" aria-label="Migrations">
       <THead>
         <TR>
           <TH>#</TH>
