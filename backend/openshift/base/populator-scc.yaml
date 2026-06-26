@@ -8,6 +8,12 @@
 # allowedVolumeTypes — toutes les autres restrictions sont conservées.
 #
 # Pourquoi besoin de NFS direct ?
+# NB champ (G-scc): le champ canonique du SCC est `volumes` (type
+# `[]FSType`). `allowedVolumeTypes` N'EST PAS un champ du SCC — l'API typée
+# le supprimait silencieusement, laissant `volumes` se défaulter à TOUS les
+# types (SCC plus permissif que l'intention « restricted-v2 + nfs »). On
+# déclare donc `volumes:` directement.
+#
 # Le populator copie un QCOW2 du PVC de transit (namespace shiftwise) vers
 # un PVC tenant (namespace shiftwise-{tenant_id}). Les PVC sont
 # namespace-scoped — pas franchissables. Le NFS direct atteint la même
@@ -81,7 +87,7 @@ seccompProfiles:
   - runtime/default
 supplementalGroups:
   type: RunAsAny
-allowedVolumeTypes:
+volumes:
   - configMap
   - csi
   - downwardAPI

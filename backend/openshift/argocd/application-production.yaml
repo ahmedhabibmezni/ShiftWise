@@ -49,3 +49,17 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/replicas
+    # The migrator's `ensure_populator_scc` appends a per-tenant populator SA
+    # (`system:serviceaccount:shiftwise-<tenant>:shiftwise-populator`) to the
+    # SCC `users` list at runtime, on every migration into a fresh tenant
+    # namespace. That is by design — git can never enumerate the live tenants —
+    # so the SCC `users`/`groups` will always carry entries git does not know
+    # about. Ignore them so this runtime mutation does not show as perpetual
+    # drift (and, on a selfHeal App, is not reverted out from under a running
+    # migration).
+    - group: security.openshift.io
+      kind: SecurityContextConstraints
+      name: shiftwise-populator
+      jsonPointers:
+        - /users
+        - /groups
