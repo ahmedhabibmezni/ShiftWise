@@ -391,7 +391,7 @@ curl http://localhost:8000/health
 | **Migrator** | ✅ Complete | PVC populate (NFS-direct qemu-img Job) + KubeVirt VM create/start/verify |
 | **Celery Orchestration** | ✅ Complete | Redis-backed asynchronous migration pipeline |
 | **OpenShift Deployment** | ✅ Complete | One-command deploy (`backend/openshift/deploy.sh`) + GitOps overlays (Argo CD) |
-| **CI/CD Pipeline** | ✅ Complete | GitHub Actions → Trivy scan → SBOM → immutable `sha-` images → kustomize overlay bump → Argo CD auto-sync (pull-based, no cluster creds in CI) |
+| **CI/CD Pipeline** | ✅ Complete | GitHub Actions → Trivy scan → SBOM → immutable `sha-` images → kustomize overlay bump → Argo CD auto-sync (pull-based, no cluster creds in CI). **Merge gating** active (ruleset: PR + 4 CI checks on `main`/`develop`); the automated bump pushes via a deploy-key bypass |
 | **Live Deployment** | ✅ Running | `https://shiftwise.apps.migration.nextstep-it.com` (VPN-only; shared host `/` frontend + `/api` backend) |
 | **Reporting** | ✅ Complete | Append-only `migration_events` audit log, migration-timeline drawer, per-tenant/hypervisor stats, PDF + CSV export |
 | **Test Suite** | ✅ Complete | ~85% coverage across the backend test suite |
@@ -501,6 +501,8 @@ push (develop|main) ─► CI (ruff, pytest, frontend typecheck/vitest)
 
 A single backend image serves API / worker / Flower; a fat **worker image** (`Dockerfile.worker` + `qemu-utils` + `libguestfs-tools` + `linux-image-amd64`) backs the converter / adapter / populator Jobs. Full runbook: [`backend/openshift/CICD-RUNBOOK.md`](backend/openshift/CICD-RUNBOOK.md).
 
+**Merge gating.** `main` and `develop` are protected by a repository ruleset: a pull request and the four always-on CI checks (backend pytest ×2, frontend typecheck/vitest, pip-audit) are required to merge, and force-push / deletion are blocked. The automated CD overlay bump pushes over SSH with a read-write **deploy key** (a ruleset bypass actor) — neither a `GITHUB_TOKEN` nor a fine-grained PAT can bypass a ruleset on a personal repo. Repository admins also retain a bypass for emergency operator pushes.
+
 ---
 
 ## 🔒 Security
@@ -516,6 +518,8 @@ A single backend image serves API / worker / Flower; a fat **worker image** (`Do
 - **Cluster Connection Config:** Per-tenant cluster connectivity is DB-backed; uploaded kubeconfigs and custom bearer tokens are Fernet-encrypted at rest (read schemas are secret-free), SSRF-guarded on custom `api_url`/`cluster.server`, and changes are recorded in an append-only `cluster_config_events` audit table
 - **Supply chain:** every CI/CD image is Trivy-scanned (deploy fails on a fixable HIGH/CRITICAL CVE) with a CycloneDX SBOM per image; deploys are immutable `sha-<commit>` digests pinned in git, GitHub Actions are SHA-pinned, and CI holds default `contents: read`
 - **In-cluster RBAC:** the worker and API ServiceAccounts have bounded ClusterRoles (explicit resource kinds + verbs, no `*`); neither can read Secrets, ConfigMaps, or RBAC objects
+- **etcd encryption at rest:** the cluster encrypts `Secret` objects in etcd (`aescbc`); a copy of the datastore does not yield plaintext secrets
+- **Merge gating:** `main`/`develop` require a PR + passing CI to merge (force-push and deletion blocked); the CD automation bypasses via a repo-scoped deploy key
 
 📖 Security policy: [`SECURITY.md`](SECURITY.md)
 
