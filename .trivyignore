@@ -1,21 +1,13 @@
 # Trivy vulnerability allow-list for the CD image scan (cd.yml).
 #
-# Parity with the pip-audit allow-list in .github/workflows/ci.yml: the gate
-# still fails on every NEW or FIXABLE CVE — only these documented advisories,
-# which cannot be cleared without a separately-tracked major dependency bump,
-# are suppressed. Re-audit and DELETE the corresponding lines when that bump
-# lands.
+# Parity with pip-audit in .github/workflows/ci.yml: the gate still fails on
+# every NEW or FIXABLE CVE — only the documented advisories below, which cannot
+# be cleared by a runtime dependency pin, are suppressed.
 #
-# urllib3 — all fixed only in the urllib3 2.x line. urllib3 is capped <2.0.0
-# (backend/requirements.txt) because kubernetes==28.1.0 has not been validated
-# against the 2.x major; forcing it risks the in-cluster KubeVirt client that
-# drives every migration. Lifts with the kubernetes 28->35 bump (tracked).
-# Mirrors the same CVE set already accepted by pip-audit in ci.yml.
-CVE-2025-50181
-CVE-2025-66418
-CVE-2025-66471
-CVE-2026-21441
-CVE-2026-44431
+# The former urllib3 block (CVE-2025-50181 / CVE-2025-66418 / CVE-2025-66471 /
+# CVE-2026-21441 / CVE-2026-44431) was REMOVED: the kubernetes 28->31 bump lifted
+# the old urllib3 <2.0.0 cap, so urllib3 is now 2.x where all five are fixed
+# (verified clean by pip-audit). No urllib3 exceptions remain.
 #
 # wheel / jaraco.context — build/packaging tooling pre-installed in the base
 # python image (and not removable by a requirements pin under pip
