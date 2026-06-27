@@ -92,6 +92,35 @@ Staging auto-syncs from `develop`; production auto-syncs from `main`.
 | Inspect / diff | `argocd app get shiftwise-production` · `argocd app diff shiftwise-production`. |
 | Rollback | `git revert` the `chore(deploy):` bump commit (→ CI → CD reapplies the previous `sha-`), or `argocd app rollback shiftwise-production <history-id>`. |
 
+## `ignoreDifferences`
+
+Both Applications carry two `ignoreDifferences` entries:
+
+- **`Deployment /spec/replicas`** — the HPA owns replica count at runtime; without
+  this Argo (on selfHeal) would revert the autoscaled count.
+- **`SecurityContextConstraints shiftwise-populator` `/users` + `/groups`** — the
+  migrator's `ensure_populator_scc` appends a per-tenant populator SA
+  (`system:serviceaccount:shiftwise-<tenant>:shiftwise-populator`) to the SCC at
+  runtime on every migration into a fresh tenant namespace. Git can't enumerate
+  live tenants, so without this the SCC shows perpetual drift — and on the
+  selfHeal staging App, Argo would strip the tenant SA mid-migration.
+
+> **SCC field note:** `populator-scc.yaml` declares `volumes:` (the canonical SCC
+> field). It previously used `allowedVolumeTypes:`, which is **not** a valid SCC
+> field — the typed API silently dropped it and `volumes` defaulted to *all*
+> types, making the SCC far more permissive than intended *and* a permanent Argo
+> diff. Fixed 2026-06-27.
+
+## Staging is mothballed (2026-06-27)
+
+The 3-node cluster cannot comfortably run the full prod **and** staging stacks
+(CPU-bound). Staging is therefore **dormant**: its Argo App has **automated sync
+disabled** and all `shiftwise-staging` Deployments are scaled to 0. The App shows
+`OutOfSync` (live ≠ git) but `Healthy` (nothing running to be unhealthy) — this is
+intentional. To revive staging: re-enable `syncPolicy.automated` on
+`application-staging.yaml` (and free cluster CPU / right-size the staging overlay
+first), then `oc apply` it.
+
 ## Notes / known gaps
 
 - The runtime Job image refs (`CONVERTER_CONTAINER_IMAGE`, `ADAPTER_IMAGE`,

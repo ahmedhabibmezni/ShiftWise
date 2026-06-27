@@ -90,11 +90,31 @@ new commit → new sha → new image → new bump).
 | `DOCKER_USERNAME` | cd.yml, release.yml | Docker Hub push account (`dida1609` or a robot). |
 | `DOCKER_PASSWORD` | cd.yml, release.yml | Docker Hub **access token** (not the account password). |
 | `CI_FERNET_KEY` | release.yml quality-gate | A valid Fernet key so `Settings()` boots in the coverage gate. |
+| `CD_PUSH_DEPLOY_KEY` | cd.yml | Private half of a **read-write deploy key**. CD pushes the `chore(deploy):` overlay bump over SSH with this key so the push bypasses branch protection (see below). |
 
-**Branch protection.** Because `main` → production is now automatic, the
-production gate **is** `main`'s branch protection. Require PR review + passing CI
-on `main`. If `main` (or `develop`) is protected against direct pushes, the CD
-overlay-bump push is rejected — switch that branch's bump to a PR (see §7).
+**Branch protection (merge gating — ACTIVE since 2026-06-27).** A repository
+**ruleset** (`merge-gating`) protects `main` *and* `develop`:
+
+- **Require a pull request** before merging.
+- **Require status checks**: `backend · pytest`, `backend · pytest (postgres-only)`,
+  `frontend · typecheck + vitest`, `backend · pip-audit` (the always-on CI jobs;
+  `sonar · static analysis` is intentionally excluded — it is opt-in/advisory).
+- **Block force-push and branch deletion.**
+- **Bypass actors:** repository **admins** (so an operator keeps emergency
+  direct-push, matching the prod App's `selfHeal:false` stance) and the CD
+  **deploy key**.
+
+**Why a deploy key (not a PAT/`GITHUB_TOKEN`) for the CD bump.** The automated
+overlay bump pushes directly to a protected branch, which the ruleset would
+reject (`GH013`). On a **personal** repo the default `GITHUB_TOKEN`
+(`github-actions[bot]`) cannot be a bypass actor, and a **fine-grained PAT does
+not receive role-based ruleset bypass** (the push authenticates but the rule
+still rejects it). A **deploy key** *is* a first-class ruleset bypass actor, so
+`cd.yml` pushes the bump over SSH (`git@github.com:…`) using `CD_PUSH_DEPLOY_KEY`.
+Human pushes stay gated behind PR + CI; the CD bump lands directly. The matching
+public key is registered as a read-write **Deploy key** on the repo
+(Settings → Deploy keys) and added to the ruleset bypass list (`actor_type:
+DeployKey`).
 
 ---
 
@@ -218,7 +238,7 @@ footgun, which never re-pulled a moved tag).
 | Deploy to staging | Push/merge to `develop` (automatic). |
 | Promote to production | PR `develop` → `main`, merge (automatic). |
 | Roll back | `git revert` the `chore(deploy):` bump commit on the branch → CI → CD reapplies the previous `sha-` digest. Or `argocd app rollback shiftwise-production <history-id>`. The old image still exists in Docker Hub (immutable tag). |
-| Protected branch rejects CD push | Change the bump to a PR: have CD open a PR instead of pushing (use `peter-evans/create-pull-request`), then auto-merge. Document per branch. |
+| Protected branch rejects CD push (`GH013`) | **Solved**: CD pushes the bump over SSH with the `CD_PUSH_DEPLOY_KEY` deploy key, which is a ruleset bypass actor (see §3). If it regresses, confirm the deploy key still exists (Settings → Deploy keys, read-write) and is in the ruleset bypass list, and that `CD_PUSH_DEPLOY_KEY` holds its private half. |
 | Pin a named release | Bump the overlay image tag to a `release.yml`-minted `vX.Y.Z` via PR to the target branch. |
 | Inspect / diff | `argocd app get shiftwise-production` · `argocd app diff shiftwise-production`. |
 
@@ -238,8 +258,10 @@ delete (mirrors `deploy.sh`). Keep it idempotent (it is).
 - **Immutable digests:** `sha-` tags + git-pinned overlays = reproducible,
   auditable deploys. No `:latest` in the deploy path.
 - **Pinned actions:** every GitHub Action is pinned to a 40-char commit SHA.
-- **Least-privilege CI:** default `contents: read`; only the CD deploy job gets
-  `contents: write` (to push the bump). No cluster creds in CI at all.
+- **Least-privilege CI:** default `contents: read`; the CD deploy job pushes the
+  overlay bump with a repo-scoped **deploy key** (`CD_PUSH_DEPLOY_KEY`) rather
+  than a broad PAT — the key can only write to this one repo. No cluster creds in
+  CI at all.
 - **Network segmentation:** `network-policy.yaml` default-denies ingress and
   re-allows only the legitimate flows.
 - **Follow-up (not yet wired):** image **signing** with cosign keyless
@@ -262,6 +284,8 @@ delete (mirrors `deploy.sh`). Keep it idempotent (it is).
 | Argo shows replicas OutOfSync | Confirm `ignoreDifferences` on `/spec/replicas` is present in the Application (HPA owns it). |
 | Route returns 503 on a fresh rollout | The HostNetwork OpenShift Router is blocked by the default-deny `NetworkPolicy`. The backend/frontend ingress allow rules must carry the `policy-group.network.openshift.io/host-network` namespace selector (`network-policy.yaml`). |
 | Infrastructure "Test connection" → HTTP 403 (incluster) | The `shiftwise-api` SA lacks the cluster-scoped grant. Apply the `shiftwise-api-cluster` ClusterRole/binding (`backend-deployment.yaml`). RBAC is server-side per request — no pod restart needed. |
+| CD push rejected `GH013: repository rule violations` | The bump push isn't bypassing the `merge-gating` ruleset. CD must push over SSH with the `CD_PUSH_DEPLOY_KEY` deploy key (a bypass actor). A `GITHUB_TOKEN` or fine-grained PAT will **not** bypass on a personal repo. Verify the deploy key + bypass entry (§3). |
+| CD changes don't take effect on the next run | `workflow_run`-triggered workflows run the workflow file from the **default branch** (`main`), not the triggering branch. A `cd.yml` change must reach `main` before CD uses it — editing it only on `develop` has no effect on CD. |
 | Flower `CrashLoopBackOff` at boot | Missing `shiftwise-credential-key` `envFrom` — Flower imports `Settings()` which requires `SHIFTWISE_FERNET_KEY`. |
 | Postgres/Redis `Pending` (Insufficient cpu) | Nodes near reserved capacity — the production overlay right-sizes CPU requests + caps HPA (`minReplicas:1`/`maxReplicas:2`, frontend 1). |
 | Migration Job `ErrImagePull` on `-worker` | The worker image tag in the Job image refs doesn't exist — confirm CD pushed `shiftwise-backend-worker:sha-<commit>` and the ConfigMap/overlay points at a real tag. |

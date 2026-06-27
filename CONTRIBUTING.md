@@ -91,6 +91,14 @@ npm run dev
 
 5. **Push** and open a Pull Request.
 
+> **Branch protection (merge gating).** `main` and `develop` are protected by a
+> repository ruleset: changes must go through a **pull request**, and the four
+> CI checks (`backend · pytest`, `backend · pytest (postgres-only)`,
+> `frontend · typecheck + vitest`, `backend · pip-audit`) must pass before merge.
+> Force-push and branch deletion are blocked. Direct pushes are reserved for
+> repository admins (emergency override) and the CD deploy key (automated
+> `chore(deploy):` overlay bumps).
+
 ---
 
 ## 📏 Coding Standards

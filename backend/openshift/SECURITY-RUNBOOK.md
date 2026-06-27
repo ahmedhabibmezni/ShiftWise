@@ -16,6 +16,13 @@ close that gap.
 
 ## 1. Enable etcd encryption-at-rest (primary G7 fix)
 
+> **STATUS: ENABLED (2026-06-27).** `aescbc` encryption is active on the live
+> cluster. All three operators report `Encrypted: EncryptionCompleted`
+> (kube-apiserver, openshift-apiserver, authentication/OAuth). The steps below
+> are retained as the procedure / for cluster rebuilds. Verify current state
+> with `oc get apiserver cluster -o jsonpath='{.spec.encryption.type}'` (→
+> `aescbc`) and the per-operator `Encrypted` conditions in step 3.
+
 By default OpenShift stores `Secret` objects in etcd in plaintext (base64).
 Encrypting etcd at rest means a copy of the etcd database — a disk image, a
 backup, a stolen volume — does not yield the secrets.
