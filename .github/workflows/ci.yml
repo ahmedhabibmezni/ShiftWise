@@ -390,31 +390,17 @@ jobs:
       # requirements against the PyPI Advisory + OSV databases. Run as a
       # separate job so a CVE surfaces independently of the unit-test result.
       #
-      # --ignore-vuln allow-list: six advisories that cannot currently be
-      # cleared by a version bump. The gate still fails on every NEW or
-      # FIXABLE CVE — only these documented, upstream-blocked ones are
-      # suppressed. Re-audit when the paramiko 3.4->5.x and kubernetes 28->35
-      # majors land (both are separately tracked) and DELETE the corresponding
-      # ignores.
-      #
-      #   paramiko CVE-2026-44405  — rsakey.py still permits SHA-1. No fixed
-      #       release exists (the patch is an unmerged-into-release commit);
-      #       blocked until paramiko ships a release. Lifts with paramiko 5.x.
-      #
+      # No --ignore-vuln allow-list: the six previously-suppressed advisories
+      # were all cleared by the paramiko 3.4->5.0 and kubernetes 28->31 (urllib3
+      # 1.26->2.x) bumps —
+      #   paramiko CVE-2026-44405 (rsakey.py SHA-1) → fixed in paramiko 5.0;
       #   urllib3 PYSEC-2026-141 / CVE-2025-50181 / CVE-2025-66418 /
-      #       CVE-2025-66471 / CVE-2026-21441 — all fixed only in urllib3 2.x.
-      #       urllib3 is capped <2.0.0 because kubernetes==28.1.0 has not been
-      #       validated against the 2.x major. Lifts with kubernetes 35.
+      #     CVE-2025-66471 / CVE-2026-21441 → fixed in urllib3 2.x.
+      # The gate is now strict with no exceptions; any NEW or FIXABLE CVE fails CI.
       - name: pip-audit
         run: |
           python -m pip install --upgrade pip pip-audit
-          pip-audit --requirement requirements.txt --strict --desc \
-            --ignore-vuln CVE-2026-44405 \
-            --ignore-vuln PYSEC-2026-141 \
-            --ignore-vuln CVE-2025-50181 \
-            --ignore-vuln CVE-2025-66418 \
-            --ignore-vuln CVE-2025-66471 \
-            --ignore-vuln CVE-2026-21441
+          pip-audit --requirement requirements.txt --strict --desc
 
   # NOTE: the container build + Trivy scan + SBOM + registry push moved to the
   # `cd` workflow (.github/workflows/cd.yml). CD reacts to a successful CI run

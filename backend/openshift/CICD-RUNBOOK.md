@@ -62,8 +62,9 @@ rollback is a git revert.
 | Workflow | Trigger | Does |
 | -------- | ------- | ---- |
 | `ci.yml` | push / PR to develop, main | Quality gate: ruff, pytest (CI-safe + postgres-only), pip-audit, frontend typecheck/vitest/audit, ML artifact integrity. No deploy. |
-| `cd.yml` | `ci` **completed successfully** on develop or main | Build → Trivy → SBOM → push `sha-` images → bump the matching overlay → commit. Argo does the rest. |
+| `cd.yml` | `ci` **completed successfully** on develop or main | Build → Trivy → SBOM → push `sha-` images → bump the matching overlay → commit. Argo does the rest. The worker image is built with `INSTALL_VIRTIO_WIN=false` (Linux pipeline). |
 | `release.yml` | push tag `v*` | Mints immutable, human-named `vX.Y.Z` images for archival / rollback targets. **Does not deploy.** |
+| `worker-windows.yml` | **manual** (`workflow_dispatch`) | Opt-in, license-gated. Builds the worker image with `INSTALL_VIRTIO_WIN=true` (bakes the virtio-win ISO for Windows guest migration) `FROM` a chosen API tag, pushes it as `shiftwise-backend-worker:windows-<tag>`. Separate tag — **never** overwrites the Linux worker. No deploy, no overlay bump. See §9. |
 
 **CD is gated on CI** via `workflow_run`: CD cannot run unless CI concluded
 `success` on that exact commit. A red suite can never ship.
@@ -271,7 +272,45 @@ delete (mirrors `deploy.sh`). Keep it idempotent (it is).
 
 ---
 
-## 9. Troubleshooting
+## 9. Windows guest worker (opt-in, license-gated)
+
+The default worker image is **Linux-only** (`cd.yml` builds it with
+`INSTALL_VIRTIO_WIN=false`). Windows guest migration additionally needs the Red
+Hat **virtio-win** driver ISO baked into the worker image — `virt-v2v-in-place`
+reads it to inject the virtio NIC / balloon / viostor drivers KubeVirt's virtio
+bus requires. The adapter code path (`os_type=WINDOWS` → `virt-v2v-in-place`) is
+already wired and unit-tested; only the ISO is missing from the default image.
+
+The ISO (~700 MB) is **license-gated**: a cluster admin must audit the virtio-win
+license before shipping it. So it is **not** in the default build — it is produced
+on demand by the manual `worker-windows.yml` workflow, tagged distinctly so it can
+never overwrite the Linux worker the production overlay tracks.
+
+**Procedure (after the license sign-off):**
+
+1. Pick the API image tag to build FROM — an immutable `sha-<commit>` already
+   pushed by `cd.yml` (verify it exists on Docker Hub), or a branch tag (`main`).
+2. **Actions ▸ worker-windows ▸ Run workflow** — enter that tag as `source_tag`.
+   (Optionally override `virtio_win_iso_url` to an internal mirror / pinned build.)
+3. It builds `shiftwise-backend-worker:windows-<source_tag>` with
+   `INSTALL_VIRTIO_WIN=true`, scans (Trivy, informational) + SBOMs it, and pushes.
+   No overlay bump, no deploy.
+4. For a Windows migration, point the three migration-Job image refs at the new
+   tag (same fat image backs all three stages):
+   `ADAPTER_IMAGE` / `MIGRATOR_POPULATOR_IMAGE` / `CONVERTER_CONTAINER_IMAGE`
+   `= docker.io/dida1609/shiftwise-backend-worker:windows-<source_tag>` (in the
+   `shiftwise-config` ConfigMap — these are plain config strings, not kustomize
+   image fields). Restart the worker so it re-reads the ConfigMap.
+
+> The Windows tag is opt-in per migration, never rolled out cluster-wide — a
+> Linux migration keeps using the default `sha-`/branch-tagged Linux worker.
+> Without the ISO, a Windows migration fails in-pod with the explicit
+> `virtio-win drivers not found at /usr/share/virtio-win` message from the
+> adapter script — never silently.
+
+---
+
+## 10. Troubleshooting
 
 | Symptom | Cause / fix |
 | ------- | ----------- |

@@ -1,0 +1,122 @@
+name: worker-windows
+
+# Manually-triggered build of the WINDOWS-ENABLED migration worker image.
+#
+# The default CD pipeline (cd.yml) builds the worker image with virtio-win OFF
+# (`INSTALL_VIRTIO_WIN=false`) — the Linux migration pipeline. Windows guest
+# migration additionally needs the Red Hat virtio-win driver ISO baked into the
+# image so `virt-v2v-in-place` can inject virtio NIC/balloon/viostor drivers.
+#
+# That ISO (~700 MB) is license-gated: a cluster admin must audit the virtio-win
+# license before shipping it. This workflow is therefore OPT-IN (workflow_dispatch
+# only) and produces a SEPARATELY-TAGGED image (`...-worker:windows-<sha>`), so it
+# can NEVER overwrite the default Linux worker the production overlay tracks.
+#
+# Usage (after the license sign-off):
+#   Actions ▸ worker-windows ▸ Run workflow ▸ pick the API image tag to build FROM
+#   (e.g. `sha-fb28c56`, or a branch like `main`). Then point the migration Job
+#   image settings at the produced tag for a Windows migration:
+#       ADAPTER_IMAGE / MIGRATOR_POPULATOR_IMAGE / CONVERTER_CONTAINER_IMAGE
+#         = docker.io/dida1609/shiftwise-backend-worker:windows-<sha>
+#   (same fat image backs all three Job stages — see CLAUDE.md).
+#
+# It never bumps an overlay and never deploys — pure image build/push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: >-
+          API image tag to build FROM (must already be pushed by cd.yml),
+          e.g. "sha-fb28c56" or a branch tag like "main".
+        required: true
+        default: main
+      virtio_win_iso_url:
+        description: >-
+          Override the virtio-win ISO URL (default = Red Hat stable channel).
+          Use an internal mirror or a pinned build for reproducibility.
+        required: false
+        default: ""
+
+# No contents:write — this workflow never pushes a git commit. It only logs in
+# to the registry and pushes an image (least privilege, mirrors cd.yml G3).
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-windows-${{ github.event.inputs.source_tag }}
+  cancel-in-progress: false
+
+# Action pinning (G4) — full 40-char SHAs, reused from cd.yml's verified set.
+#   actions/checkout@v4.2.2            11bd71901bbe5b1630ceea73d27597364c9af683
+#   docker/login-action@v3.3.0         9780b0c442fbb1117ed29e0efdff1e18412f7567
+#   docker/setup-buildx-action@v3.7.1  c47758b77c9736f4b2ef4073d4d51994fabfe349
+#   aquasecurity/trivy-action@v0.36.0  ed142fd0673e97e23eac54620cfb913e5ce36c25
+#   anchore/sbom-action@v0.17.8        55dc4ee22412511ee8c3142cbea40418e6cec693
+
+env:
+  IMAGE_REPO: docker.io/dida1609
+
+jobs:
+  build:
+    name: build & push windows-enabled worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v3.7.1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & push worker image (virtio-win ENABLED)
+        run: |
+          set -euo pipefail
+          SRC="${{ github.event.inputs.source_tag }}"
+          ISO_URL="${{ github.event.inputs.virtio_win_iso_url }}"
+          API_IMAGE="${IMAGE_REPO}/shiftwise-backend:${SRC}"
+
+          # Tag distinctly: windows-<source_tag>. NEVER the plain branch/sha tags
+          # the production overlay tracks — a Windows worker must be opted into
+          # explicitly per migration, not rolled out cluster-wide.
+          WIN_TAG="${IMAGE_REPO}/shiftwise-backend-worker:windows-${SRC}"
+
+          ISO_ARG=()
+          if [ -n "$ISO_URL" ]; then
+            ISO_ARG=(--build-arg "VIRTIO_WIN_ISO_URL=${ISO_URL}")
+          fi
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --build-arg "API_IMAGE=${API_IMAGE}" \
+            --build-arg INSTALL_VIRTIO_WIN=true \
+            "${ISO_ARG[@]}" \
+            --tag "${WIN_TAG}" \
+            --file backend/Dockerfile.worker \
+            backend
+
+          echo "WIN_TAG=${WIN_TAG}" >> "$GITHUB_ENV"
+          echo "Built windows-enabled worker: ${WIN_TAG}"
+
+      - name: Scan worker image (Trivy, informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ env.WIN_TAG }}
+          format: table
+          exit-code: "0"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore
+
+      - name: SBOM — windows worker
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
+        with:
+          image: ${{ env.WIN_TAG }}
+          output-file: sbom-worker-windows-${{ github.event.inputs.source_tag }}.cyclonedx.json
+          artifact-name: sbom-worker-windows-${{ github.event.inputs.source_tag }}.cyclonedx.json
