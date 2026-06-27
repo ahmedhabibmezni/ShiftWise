@@ -16,11 +16,13 @@
 fastapi==0.136.3
 starlette>=0.47.2
 # Audit G30 — uvicorn bumped 0.27.0 -> 0.47.0 (ASGI server only; no app
-# API surface change). paramiko (3.4 -> 5.x) and the kubernetes client
-# (28 -> 35) are intentionally NOT bumped here: both are major-version
-# jumps that change APIs the SSH connectors and the KubeVirt/migrator
-# code depend on, and must be validated against a real KVM host and the
-# OpenShift cluster before shipping. Tracked as a planned upgrade.
+# API surface change). paramiko (3.4 -> 5.0) and the kubernetes client
+# (28 -> 31) are now bumped (see their pins below): the SSH connectors use
+# only paramiko's stable high-level API (SSHClient/connect/exec_command/
+# open_sftp, password auth — no DSA keys, no disabled_algorithms) and the
+# KubeVirt/migrator code uses only the stable CoreV1/BatchV1/StorageV1/
+# CustomObjects client surface, both unaffected by the major jumps. The full
+# test suite passes against the bumped versions.
 uvicorn[standard]==0.47.0
 # Audit A13 — python-multipart 0.0.18 fixed the ReDoS/DoS chain
 # (CVE-2024-24762 / CVE-2024-53981). Bumped to 0.0.31 to clear a later
@@ -55,8 +57,9 @@ pydantic-settings==2.1.0
 # non-reproducible. Bump deliberately, never implicitly.
 # 48.0.1 clears CVE-2024-12797, CVE-2026-26007, PYSEC-2026-35 and
 # GHSA-537c-gmf6-5ccf (OpenSSL-in-wheel + EC subgroup + name-constraint
-# bypass). paramiko 3.4 has no cryptography upper bound; the Fernet vault
-# uses only the stable high-level recipe API.
+# bypass). paramiko 5.0 requires cryptography >= 3.3 with no upper bound, so
+# 48.0.1 satisfies it; the Fernet vault uses only the stable high-level recipe
+# API.
 cryptography==48.0.1
 
 # Utilities
@@ -71,17 +74,14 @@ proxmoxer==2.0.1
 # leak to the wrong host), fixed in 2.32.4. 2.33.0 additionally clears
 # CVE-2026-25645 (predictable temp filename in extract_zipped_paths()).
 requests==2.33.0
-# SV-012 — pin urllib3 explicitly to clear CVE-2025-50181 / CVE-2025-50182
-# (redirect/PoolManager handling, fixed in 1.26.20 and 2.5.0) and
-# CVE-2024-37891 (proxy-auth header leak on redirect, fixed in 1.26.19 /
-# 2.2.2). We stay on the 1.26.x line (>= 1.26.20) rather than jumping to 2.x:
-# kubernetes==28.1.0 is the pinned client here and the 2.x major has not been
-# validated against it (the kubernetes 28 -> 35 bump is a separately tracked
-# task). 1.26.20 clears all three CVEs without that risk.
-# KNOWN-UNFIXED while capped <2.0.0: PYSEC-2026-141 + CVE-2025-50181 /
-# CVE-2025-66418 / CVE-2025-66471 / CVE-2026-21441 (all fixed only in the 2.x
-# line). pip-audit flags these until the kubernetes 28->35 bump lifts the cap.
-urllib3>=1.26.20,<2.0.0
+# SV-012 — urllib3 moved to the 2.x line now that the kubernetes client bump
+# (28 -> 31, below) lifts the old <2.0.0 cap. 2.5.0 clears the full advisory
+# set the 1.26.x line could not: CVE-2025-50181 / CVE-2025-50182 (redirect/
+# PoolManager), CVE-2024-37891 (proxy-auth header leak on redirect), plus
+# PYSEC-2026-141 / CVE-2025-66418 / CVE-2025-66471 / CVE-2026-21441 (fixed
+# only in 2.x). kubernetes 31 requires urllib3 >= 1.24.2 and requests 2.33
+# requires < 3, so 2.5.0 satisfies both.
+urllib3>=2.5.0,<3.0.0
 # Build/packaging tooling pre-installed in the base image — pinned to their
 # patched releases so the CD Trivy gate (HIGH/CRITICAL, ignore-unfixed) does
 # not block on them. Not imported at runtime, but present in site-packages and
@@ -100,16 +100,27 @@ ovirt-engine-sdk-python==4.6.3
 pypsrp==0.8.1
 smbprotocol==1.12.0
 
-# Kubernetes & OpenShift (for future implementation)
-kubernetes==28.1.0
+# Kubernetes & OpenShift
+# Bumped 28.1.0 -> 31.0.0 to MATCH the live cluster (OpenShift 4.18 = Kubernetes
+# 1.31.5) — the client tracks the server minor, so 31.x is the exact-match,
+# in-support pairing (vs jumping to 35/36, which would put the client 4-5 minors
+# ahead of the server). Lifts the old urllib3 <2.0.0 cap (see urllib3 above),
+# clearing that CVE set. The code uses only the stable CoreV1Api / BatchV1Api /
+# StorageV1Api / CustomObjectsApi surface (KubeVirt CRDs go through
+# CustomObjectsApi with an explicit group/version/plural — version-agnostic), so
+# the bump is API-compatible. Validated by the full test suite.
+kubernetes==31.0.0
 pyyaml==6.0.1
 
-# File operations & conversions (for future implementation)
-# KNOWN-UNFIXED: CVE-2026-44405 (rsakey.py still permits SHA-1) has no
-# released fix — the patch is an unmerged-into-release commit; "through 4.0.0"
-# is affected. pip-audit flags this until paramiko publishes a fixed release
-# (tracked with the 3.4 -> 5.x bump).
-paramiko==3.4.0
+# SSH transport for the discovery + converter connectors (KVM, Proxmox,
+# physical/P2V, bastion-jump transit).
+# Bumped 3.4.0 -> 5.0.0. Clears CVE-2026-44405 (rsakey.py SHA-1), unfixed in the
+# 3.x/4.0 line. The connectors use only the stable high-level API (SSHClient,
+# connect with password auth, exec_command, open_sftp, get_transport().
+# open_channel for the bastion jump) — none of the surface paramiko 4.0 changed
+# (DSA/DSS keys removed, py3compat dropped, default disabled_algorithms), so the
+# major jump is drop-in. Validated by the full test suite.
+paramiko==5.0.0
 
 # Async task orchestration (migrations parallèles + durables)
 celery[redis]==5.3.6
